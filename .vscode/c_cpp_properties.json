@@ -1,0 +1,32 @@
+{
+  "env": {
+    "defaultIncludePath": [
+      "${workspaceFolder}/common/include/**",
+      "${workspaceFolder}/overlay/libs/libtesla/include/**"
+    ],
+    "defaultDefines": [
+      "__aarch64__"
+    ],
+
+    "hacIncludePaths": [
+      "${env:DEVKITPRO}/devkitA64/aarch64-none-elf/include/**",
+      "${env:DEVKITPRO}/libnx/include/**",
+      "${env:DEVKITPRO}/portlibs/switch/include/**"
+    ],
+    "hacDefines": ["__SWITCH__", "__BSD_VISIBLE"],
+    "hacCompilerPath": "${env:DEVKITPRO}/devkitA64/bin/aarch64-none-elf-g++"
+  },
+
+  "configurations": [
+    {
+      "name": "Switch",
+      "includePath": ["${env:defaultIncludePath}", "${env:hacIncludePaths}"],
+      "defines": ["${env:defaultDefines}", "${env:hacDefines}"],
+      "compilerPath": "${env:hacCompilerPath}",
+      "cStandard": "c11",
+      "cppStandard": "c++17",
+      "intelliSenseMode": "linux-gcc-arm64"
+    }
+  ],
+  "version": 4
+}

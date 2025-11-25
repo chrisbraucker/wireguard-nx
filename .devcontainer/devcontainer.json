@@ -1,0 +1,32 @@
+{
+  "name": "Switch Homebrew (libnx) Dev",
+  "build": {
+    "dockerfile": "dev.Dockerfile",
+    "context": ".",
+    "options": ["-t", "devkita64:dev"]
+  },
+  "remoteUser": "devcontainer",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-vscode.cpptools",
+        "ms-vscode.cmake-tools",
+        "ms-vscode.cpptools-extension-pack",
+        "streetsidesoftware.code-spell-checker"
+      ],
+      "settings": {
+        "C_Cpp.default.compilerPath": "/opt/devkitpro/devkitA64/bin/aarch64-none-elf-gcc",
+        "C_Cpp.default.intelliSenseMode": "linux-gcc-arm64",
+        "C_Cpp.default.includePath": [
+          "/opt/devkitpro/libnx/include",
+          "${workspaceFolder}/include"
+        ]
+      }
+    }
+  },
+  "runArgs": ["--cap-drop=ALL"],
+  "overrideCommand": true,
+  "remoteEnv": {
+    "PATH": "/opt/devkitpro/devkitA64/bin:${containerEnv:PATH}"
+  }
+}
