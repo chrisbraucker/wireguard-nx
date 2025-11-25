@@ -24,6 +24,9 @@
       }
     }
   },
+  "mounts":[
+    "source=${localEnv:HOME}/.ssh/,target=/home/devcontainer/.ssh/,type=bind"
+  ],
   "runArgs": ["--cap-drop=ALL"],
   "overrideCommand": true,
   "remoteEnv": {
