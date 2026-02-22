@@ -24,6 +24,7 @@
       }
     }
   },
+  "forwardPorts": [28771],
   "mounts":[
     "source=${localEnv:HOME}/.ssh/,target=/home/devcontainer/.ssh/,type=bind"
   ],
