@@ -9,25 +9,39 @@ endif
 TOPDIR ?= $(CURDIR)
 include $(DEVKITPRO)/libnx/switch_rules
 
-TARGET		:=	hb-manager
+TARGET		:=	wireguard-nx
 BUILD		:=	build
 OUTDIR		:=	out
 SOURCES		:=	src
 DATA		:=	data
 INCLUDES	:=	../common/include
-APP_TITLE	:=	HB-Manager
-APP_AUTHOR	:=	chrisbraucker
-APP_VERSION	:=	0.0.1-dev
+
+APP_TITLE	:=	WireGuard-NX
+ICON		:=	icon.png
+
+#---------------------------------------------------------------------------------
+# version control constants
+#---------------------------------------------------------------------------------
+APP_VERSION		:= 0.0.1-dev
+BUILD_ID		:= $(shell git describe --always --dirty 2>/dev/null || echo "unknown")
+
+#---------------------------------------------------------------------------------
+# options for code generation
+#---------------------------------------------------------------------------------
+DEFINES	:=	-DDISABLE_IPC \
+	-DTARGET="\"$(TARGET)\"" \
+	-DAPP_TITLE="\"$(APP_TITLE)"\" \
+	-DVERSION="\"$(APP_VERSION)\"" \
+	-DBUILD_ID="\"$(BUILD_ID)\""
 
 ARCH	:=	-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 
-CFLAGS	:=	-g -Wall -Wextra -Werror -O2 -ffunction-sections \
+CFLAGS	:=	-g -Wall -Werror -O2 -ffunction-sections \
 			$(ARCH) $(DEFINES)
 
-CFLAGS	+=	$(INCLUDE) -D__SWITCH__ \
-			-DAPP_TITLE="\"$(APP_TITLE)\""
+CFLAGS	+=	$(INCLUDE) -D__SWITCH__
 
-CXXFLAGS	:= $(CFLAGS) -std=c++1z
+CXXFLAGS	:= $(CFLAGS) -std=c++26
 
 ASFLAGS	:=	-g $(ARCH)
 LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
@@ -149,8 +163,6 @@ DEPENDS	:=	$(OFILES:.o=.d)
 # main targets
 #---------------------------------------------------------------------------------
 ifeq ($(strip $(APP_JSON)),)
-
-$(info  = $(NROFLAGS))
 
 all	:	$(OUTPUT).nro
 
