@@ -13,15 +13,7 @@
         "ms-vscode.cmake-tools",
         "ms-vscode.cpptools-extension-pack",
         "streetsidesoftware.code-spell-checker"
-      ],
-      "settings": {
-        "C_Cpp.default.compilerPath": "/opt/devkitpro/devkitA64/bin/aarch64-none-elf-gcc",
-        "C_Cpp.default.intelliSenseMode": "linux-gcc-arm64",
-        "C_Cpp.default.includePath": [
-          "/opt/devkitpro/libnx/include",
-          "${workspaceFolder}/include"
-        ]
-      }
+      ]
     }
   },
   "forwardPorts": [28771],

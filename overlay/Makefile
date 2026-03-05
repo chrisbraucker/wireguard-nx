@@ -8,6 +8,7 @@ endif
 
 TOPDIR ?= $(CURDIR)
 include $(DEVKITPRO)/libnx/switch_rules
+include ${TOPDIR}/lib/libultrahand/ultrahand.mk
 
 #---------------------------------------------------------------------------------
 # TARGET is the name of the output
@@ -17,36 +18,40 @@ include $(DEVKITPRO)/libnx/switch_rules
 # INCLUDES is a list of directories containing header files
 # EXEFS_SRC is the optional input directory containing data copied into exefs, if anything this normally should only contain "main.npdm".
 #---------------------------------------------------------------------------------
-TARGET		:=	hb-overlay
+TARGET		:=	wireguard-nx
 BUILD		:=	build
 OUTDIR		:=	out
 RESOURCES	:=	res
-SOURCES		:=	src
+SOURCES		+=	src
 DATA		:=	data
-INCLUDES	:=	../common/include libs/libtesla/include
-EXEFS_SRC	:=	exefs_src
+INCLUDES	+=	../common/include
 
-APP_TITLE	:=	hb-overlay
+APP_TITLE	:=	WireGuard-NX
 NO_ICON		:=	1
 
 #---------------------------------------------------------------------------------
 # version control constants
 #---------------------------------------------------------------------------------
 APP_VERSION		:= 0.0.1-dev
+BUILD_ID		:= $(shell git describe --always --dirty 2>/dev/null || echo "unknown")
 
 #---------------------------------------------------------------------------------
 # options for code generation
 #---------------------------------------------------------------------------------
-DEFINES	:=	-DDISABLE_IPC -DTARGET="\"$(TARGET)\"" -DTARGET_VERSION="\"$(TARGET_VERSION)\""
+DEFINES	:=	-DDISABLE_IPC \
+	-DTARGET="\"$(TARGET)\"" \
+	-DAPP_TITLE="\"$(APP_TITLE)"\" \
+	-DVERSION="\"$(APP_VERSION)\"" \
+	-DBUILD_ID="\"$(BUILD_ID)\""
 
 ARCH	:=	-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIC
 
-CFLAGS	:=	-g -Wall -Wextra -Werror -O2 -ffunction-sections \
+CFLAGS	:=	-g -Wall -Werror -O2 -ffunction-sections \
 			$(ARCH) $(DEFINES)
 
 CFLAGS	+=	$(INCLUDE) -D__SWITCH__
 
-CXXFLAGS	:= $(CFLAGS) -fno-exceptions -std=gnu++20
+CXXFLAGS	:= $(CFLAGS) -fno-exceptions -std=gnu++26
 
 ASFLAGS	:=	-g $(ARCH)
 LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
@@ -57,7 +62,7 @@ LIBS	:= -lnx
 # list of directories containing libraries, this must be the top level containing
 # include and lib
 #---------------------------------------------------------------------------------
-LIBDIRS	:= $(PORTLIBS) $(LIBNX) $(TOPDIR)/lib/tesla
+LIBDIRS	:= $(PORTLIBS) $(LIBNX)
 
 #---------------------------------------------------------------------------------
 # no real need to edit anything past this point unless you need to add additional

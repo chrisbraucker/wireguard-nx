@@ -1,11 +1,19 @@
 {
   "env": {
     "defaultIncludePath": [
-      "${workspaceFolder}/common/include/**",
-      "${workspaceFolder}/overlay/libs/libtesla/include/**"
+      "${workspaceFolder}/common/include/**"
+    ],
+    "overlayIncludePath": [
+      "${workspaceFolder}/overlay/lib/libultrahand/libtesla/include/**",
+      "${workspaceFolder}/overlay/lib/libultrahand/libultra/include/**",
+      "${workspaceFolder}/overlay/lib/libultrahand/common/**"
     ],
     "defaultDefines": [
-      "__aarch64__"
+      "__aarch64__",
+      "APP_TITLE=\"\"",
+      "VERSION=\"\"",
+      "BUILD_ID=\"\"",
+      "APP_TITLE=\"\""
     ],
 
     "hacIncludePaths": [
@@ -20,11 +28,11 @@
   "configurations": [
     {
       "name": "Switch",
-      "includePath": ["${env:defaultIncludePath}", "${env:hacIncludePaths}"],
+      "includePath": ["${env:defaultIncludePath}", "${env:overlayIncludePath}", "${env:hacIncludePaths}"],
       "defines": ["${env:defaultDefines}", "${env:hacDefines}"],
       "compilerPath": "${env:hacCompilerPath}",
       "cStandard": "c11",
-      "cppStandard": "c++17",
+      "cppStandard": "c++26",
       "intelliSenseMode": "linux-gcc-arm64"
     }
   ],
