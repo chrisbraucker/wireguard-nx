@@ -8,12 +8,16 @@
       "${workspaceFolder}/overlay/lib/libultrahand/libultra/include/**",
       "${workspaceFolder}/overlay/lib/libultrahand/common/**"
     ],
+    "sysmoduleIncludePath": [
+      "${workspaceFolder}/sysmodule/lib/Atmosphere-libs/libstratosphere/include/**",
+      "${workspaceFolder}/sysmodule/lib/Atmosphere-libs/libvapours/include/**"
+    ],
     "defaultDefines": [
       "__aarch64__",
       "APP_TITLE=\"\"",
       "VERSION=\"\"",
       "BUILD_ID=\"\"",
-      "APP_TITLE=\"\""
+      "ATMOSPHERE_IS_STRATOSPHERE"
     ],
 
     "hacIncludePaths": [
@@ -28,7 +32,7 @@
   "configurations": [
     {
       "name": "Switch",
-      "includePath": ["${env:defaultIncludePath}", "${env:overlayIncludePath}", "${env:hacIncludePaths}"],
+      "includePath": ["${env:defaultIncludePath}", "${env:overlayIncludePath}", "${env:sysmoduleIncludePath}", "${env:hacIncludePaths}"],
       "defines": ["${env:defaultDefines}", "${env:hacDefines}"],
       "compilerPath": "${env:hacCompilerPath}",
       "cStandard": "c11",

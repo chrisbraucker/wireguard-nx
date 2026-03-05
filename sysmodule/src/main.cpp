@@ -1,8 +1,11 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string>
+#include <stratosphere.hpp>
+#include <switch.h>
 
-int main(int argc, char* argv[])
-{
-    return 0;
+#define INNER_HEAP_SIZE 0x80000
+
+namespace ams {
+    void Main()
+    {
+        return;
+    }
 }
