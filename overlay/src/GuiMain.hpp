@@ -1,17 +1,20 @@
 #pragma once
 
+#include <cstdint>
+#include <string>
+#include <vector>
+
 #include <tesla.hpp>
 
-#define WGNX_PROGRAM_ID 0x000000000000EAD0
-
 struct WireGuardPeer {
+    std::int32_t index;
     tsl::elm::ListItem *listItem;
     std::string name;
     std::string address;
     std::string endpoint;
     std::int32_t lastHandshake;
-    std::int32_t rxBytes;
-    std::int32_t txBytes;
+    std::uint64_t rxBytes;
+    std::uint64_t txBytes;
     bool isActive;
     bool isAutoStartEnabled;
 };
@@ -33,9 +36,8 @@ public:
 private:
     bool smIsRunning();
     bool getPeers(std::vector<WireGuardPeer>& peers);
-    bool isActive(WireGuardPeer& peer);
-    bool updatePeer(WireGuardPeer& peer);
+    bool refreshPeers();
 };
 
-std::string formatBytes(std::int32_t bytes);
+std::string formatBytes(std::uint64_t bytes);
 std::string moment(std::int32_t seconds);

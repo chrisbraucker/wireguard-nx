@@ -1,5 +1,10 @@
 #include "GuiMain.hpp"
 
+#include "wgnx/client.hpp"
+
+#include <algorithm>
+#include <array>
+
 #define VERSION_WITH_BUILD VERSION "-" BUILD_ID
 
 constexpr const char* const descriptions[2][2] = {
@@ -20,33 +25,26 @@ GuiMain::GuiMain() {
     if (!this->getPeers(this->m_peers))
         return;
 
-    std::sort(m_peers.begin(), m_peers.end(), [](const WireGuardPeer& a, const WireGuardPeer& b) {
-        return a.name < b.name;
-    });
-
     for (auto& peer : this->m_peers) {
         peer.listItem = new tsl::elm::ListItem(peer.name);
         peer.listItem->setClickListener([this, &peer](u64 keys) {
             if (keys & KEY_Y) {
-                // Toggle auto-start
-                if (!peer.isAutoStartEnabled && std::any_of(m_peers.begin(), m_peers.end(), [](const WireGuardPeer& p) { return p.isAutoStartEnabled; })) {
-                    // Only allow one auto-start peer at a time
+                const std::int32_t next_index = peer.isAutoStartEnabled ? -1 : peer.index;
+                if (R_FAILED(wgnx::client::SetAutoStartPeer(next_index)))
                     return true;
-                }
-                peer.isAutoStartEnabled = !peer.isAutoStartEnabled;
-                peer.listItem->setValue(descriptions[peer.isActive][peer.isAutoStartEnabled], !peer.isActive);
-                this->updatePeer(peer);
+
+                this->refreshPeers();
+                if (m_peerInfoDrawer != nullptr)
+                    m_peerInfoDrawer->invalidate();
                 return true;
             } else if (keys & KEY_A) {
-                // Toggle active state
-                if (!peer.isActive && std::any_of(m_peers.begin(), m_peers.end(), [](const WireGuardPeer& p) { return p.isActive; })) {
-                    // Only allow one active peer at a time
+                const std::int32_t next_index = peer.isActive ? -1 : peer.index;
+                if (R_FAILED(wgnx::client::SetActivePeer(next_index)))
                     return true;
-                }
-                peer.isActive = !peer.isActive;
-                peer.listItem->setValue(descriptions[peer.isActive][peer.isAutoStartEnabled], !peer.isActive);
-                this->updatePeer(peer);
-                m_peerInfoDrawer->invalidate();
+
+                this->refreshPeers();
+                if (m_peerInfoDrawer != nullptr)
+                    m_peerInfoDrawer->invalidate();
                 return true;
             }
             return false;
@@ -92,7 +90,13 @@ tsl::elm::Element* GuiMain::createUI() {
             peerList->addItem(peer.listItem);
         }
         peerList->addItem(new tsl::elm::CategoryHeader("Connection Info", true));
-        m_activePeer = &m_peers[0];
+        m_activePeer = nullptr;
+        for (auto& peer : this->m_peers) {
+            if (peer.isActive) {
+                m_activePeer = &peer;
+                break;
+            }
+        }
         m_peerInfoDrawer = new tsl::elm::CustomDrawer([this](tsl::gfx::Renderer *renderer, s32 x, s32 y, s32 w, s32 h) {
             if (this->m_activePeer == nullptr) {
                 renderer->drawString("No active peer", false, x + 15, y + 10, 15, tsl::infoTextColor);
@@ -119,14 +123,9 @@ void GuiMain::update() {
     if (counter++ % 60 != 0) // Update every 60 frames (~1 second)
         return;
 
-    m_activePeer = nullptr;
-    for (auto& peer : this->m_peers) {
-        updatePeer(peer);
-        peer.listItem->setValue(descriptions[peer.isActive][peer.isAutoStartEnabled], !peer.isActive);
-        if (peer.isActive)
-            m_activePeer = &peer;
-    }
-    m_peerInfoDrawer->invalidate();
+    this->refreshPeers();
+    if (m_peerInfoDrawer != nullptr)
+        m_peerInfoDrawer->invalidate();
 }
 
 bool GuiMain::handleInput(u64 keysDown, u64 keysHeld, const HidTouchState &touchPos, HidAnalogStickState leftJoyStick, HidAnalogStickState rightJoyStick) {
@@ -146,63 +145,65 @@ bool GuiMain::handleInput(u64 keysDown, u64 keysHeld, const HidTouchState &touch
 }
 
 bool GuiMain::smIsRunning() {
-    // TODO: remove
-    return true;
-    u64 pid = 0;
-    return R_SUCCEEDED(pmdmntGetProcessId(&pid, WGNX_PROGRAM_ID)) && pid > 0;
+    return wgnx::client::IsServiceRunning();
 }
 
-// TODO: un-dummy
-// Returns the list of currently configured peers accessible to the sysmodule
 bool GuiMain::getPeers(std::vector<WireGuardPeer>& peers) {
-    WireGuardPeer peer;
-    peer = {
-        .name = "Test",
-        .address = "192.168.1.1/24",
-        .endpoint = "example.com:51820",
-        .lastHandshake = 0,
-        .rxBytes = 0,
-        .txBytes = 0,
-        .isActive = false,
-        .isAutoStartEnabled = false,
-    };
-    peers.push_back(peer);
-    peer = {
-        .name = "Example",
-        .address = "192.168.1.2/26",
-        .endpoint = "vpn.test.com:51821",
-        .lastHandshake = 0,
-        .rxBytes = 0,
-        .txBytes = 0,
-        .isActive = false,
-        .isAutoStartEnabled = false,
-    };
-    peers.push_back(peer);
-    return true;
-}
+    std::array<wgnx::PeerInfo, wgnx::MaxPeers> remote_peers{};
+    std::uint32_t count = 0;
+    if (R_FAILED(wgnx::client::ListPeers(remote_peers.data(), remote_peers.size(), &count)))
+        return false;
 
-// TODO: un-dummy
-bool GuiMain::isActive(WireGuardPeer& peer) {
-    return true;
-}
-
-// TODO: un-dummy
-// Update the peer's state from the sysmodule.
-// returns whether the update was successful.
-bool GuiMain::updatePeer(WireGuardPeer& peer) {
-    if (peer.isActive) {
-        peer.lastHandshake = rand() % 3600;
-        peer.rxBytes += rand() % 10000;
-        peer.txBytes += rand() % 10000;
-    } else {
-        peer.lastHandshake = 0;
-        peer.rxBytes = 0;
-        peer.txBytes = 0;
+    peers.clear();
+    for (std::uint32_t i = 0; i < count && i < remote_peers.size(); ++i) {
+        const auto& remote = remote_peers[i];
+        peers.push_back({
+            .index = static_cast<std::int32_t>(i),
+            .listItem = nullptr,
+            .name = remote.name,
+            .address = remote.address,
+            .endpoint = remote.endpoint,
+            .lastHandshake = remote.last_handshake_seconds,
+            .rxBytes = remote.rx_bytes,
+            .txBytes = remote.tx_bytes,
+            .isActive = (remote.flags & wgnx::PeerFlag_Active) != 0,
+            .isAutoStartEnabled = (remote.flags & wgnx::PeerFlag_AutoStart) != 0,
+        });
     }
+
     return true;
 }
 
-std::string formatBytes(std::int32_t bytes) {
+bool GuiMain::refreshPeers() {
+    std::vector<WireGuardPeer> remote_peers;
+    if (!this->getPeers(remote_peers))
+        return false;
+
+    m_activePeer = nullptr;
+    for (auto& peer : this->m_peers) {
+        const auto remote_peer = std::find_if(remote_peers.begin(), remote_peers.end(), [&peer](const WireGuardPeer& candidate) {
+            return candidate.index == peer.index;
+        });
+        if (remote_peer == remote_peers.end())
+            continue;
+
+        peer.address = remote_peer->address;
+        peer.endpoint = remote_peer->endpoint;
+        peer.lastHandshake = remote_peer->lastHandshake;
+        peer.rxBytes = remote_peer->rxBytes;
+        peer.txBytes = remote_peer->txBytes;
+        peer.isActive = remote_peer->isActive;
+        peer.isAutoStartEnabled = remote_peer->isAutoStartEnabled;
+
+        peer.listItem->setValue(descriptions[peer.isActive][peer.isAutoStartEnabled], !peer.isActive);
+        if (peer.isActive)
+            m_activePeer = &peer;
+    }
+
+    return true;
+}
+
+std::string formatBytes(std::uint64_t bytes) {
     const char* suffixes[] = {"B", "K", "M", "G"};
     int suffixIndex = 0;
     double count = static_cast<double>(bytes);
