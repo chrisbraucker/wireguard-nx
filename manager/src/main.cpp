@@ -13,8 +13,11 @@
 #include <arpa/inet.h>
 #include <sys/errno.h>
 #include <unistd.h>
+#include <array>
 
 #include <switch.h>
+
+#include "wgnx/client.hpp"
 
 int main(int argc, char **argv)
 {
@@ -61,6 +64,31 @@ int main(int argc, char **argv)
     u32 ip;
     nifmGetCurrentIpAddress(&ip);
     printf("Current IP: %u.%u.%u.%u\n", ip & 0xFF, (ip >> 8) & 0xFF, (ip >> 16) & 0xFF, (ip >> 24) & 0xFF);
+
+    if (wgnx::client::IsServiceRunning()) {
+        u32 api_version = 0;
+        if (R_SUCCEEDED(wgnx::client::GetApiVersion(&api_version))) {
+            printf("WireGuard IPC API: v%u\n", api_version);
+        }
+
+        wgnx::DaemonStatus status{};
+        if (R_SUCCEEDED(wgnx::client::GetDaemonStatus(&status))) {
+            printf("WireGuard peers: %u | active=%d | autostart=%d\n",
+                status.peer_count, status.active_peer_index, status.auto_start_peer_index);
+        }
+
+        std::array<wgnx::PeerInfo, wgnx::MaxPeers> peers{};
+        u32 peer_count = 0;
+        if (R_SUCCEEDED(wgnx::client::ListPeers(peers.data(), peers.size(), &peer_count))) {
+            for (u32 i = 0; i < peer_count && i < peers.size(); ++i) {
+                const auto& peer = peers[i];
+                printf("[%u] %s | %s | %s | flags=0x%02X\n",
+                    i, peer.name, peer.address, peer.endpoint, peer.flags);
+            }
+        }
+    } else {
+        printf("WireGuard IPC service '%s' is not running.\n", wgnx::ServiceName);
+    }
 
     u32 hosversion = hosversionGet();
     bool is_atmos = hosversionIsAtmosphere();
