@@ -3,9 +3,11 @@
 
 #define INNER_HEAP_SIZE 0x80000
 
+#include "ipc_service.hpp"
+
 namespace ams {
     void Main()
     {
-        return;
+        wgnx::sysmodule::RunIpcServer();
     }
 }
