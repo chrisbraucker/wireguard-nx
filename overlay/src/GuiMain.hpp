@@ -2,7 +2,7 @@
 
 #include <tesla.hpp>
 
-#define WGNX_PROGRAM_ID 0x420000000000EAD0
+#define WGNX_PROGRAM_ID 0x000000000000EAD0
 
 struct WireGuardPeer {
     tsl::elm::ListItem *listItem;
