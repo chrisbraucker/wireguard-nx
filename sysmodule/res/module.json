@@ -1,8 +1,8 @@
 {
-	"name": "hb:sys",
-	"program_id": "0x000000000000EAD0",
-	"program_id_range_min": "0x000000000000EAD0",
-	"program_id_range_max": "0x000000000000EAD0",
+	"name": "wgnx:ctl",
+	"program_id": "0x010000000000EAD0",
+	"program_id_range_min": "0x010000000000EAD0",
+	"program_id_range_max": "0x010000000000EAD0",
 	"main_thread_stack_size": "0x00004000",
 	"main_thread_priority": 49,
 	"default_cpu_id": 3,
@@ -25,44 +25,16 @@
 		"*"
 	],
 	"service_host": [
-		"hb:sys",
-		"wgnx:ctl"
+		"*"
 	],
 	"kernel_capabilities": [
 		{
 			"type": "kernel_flags",
 			"value": {
 				"highest_thread_priority": 63,
-				"lowest_thread_priority": 24,
+				"lowest_thread_priority": 4,
 				"lowest_cpu_id": 3,
 				"highest_cpu_id": 3
-			}
-		},
-		{
-			"type": "map",
-			"value": {
-				"address": "0x60006000",
-				"size": "0x1000",
-				"is_ro": false,
-				"is_io": true
-			}
-		},
-		{
-			"type": "map",
-			"value": {
-				"address": "0x57000000",
-				"size": "0x1000000",
-				"is_ro": false,
-				"is_io": true
-			}
-		},
-		{
-			"type": "map",
-			"value": {
-				"address": "0x6000C000",
-				"size": "0x1000",
-				"is_ro": false,
-				"is_io": true
 			}
 		},
 		{
@@ -131,7 +103,7 @@
 		},
 		{
 			"type": "min_kernel_version",
-			"value": "0x0060"
+			"value": "0x0030"
 		}
 	]
 }

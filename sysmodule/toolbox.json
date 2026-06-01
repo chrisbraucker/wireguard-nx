@@ -1,0 +1,5 @@
+{
+	"name"  : "WireGuard-NX",
+	"tid"   : "010000000000EAD0",
+	"requires_reboot": true
+}

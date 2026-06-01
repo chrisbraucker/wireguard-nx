@@ -17,7 +17,8 @@ DATA		:=	data
 INCLUDES	:=	../common/include
 
 APP_TITLE	:=	WireGuard-NX
-APP_TITLEID	:=	0x000000000000EAD1
+APP_AUTHOR	:=	chrisbraucker
+APP_TITLEID	:=	010000000000EAD1
 ICON		:=	icon.png
 
 #---------------------------------------------------------------------------------

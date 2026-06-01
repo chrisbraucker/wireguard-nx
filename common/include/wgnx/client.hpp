@@ -34,8 +34,19 @@ private:
 };
 
 inline bool IsServiceRunning() {
-    ScopedService service;
-    return R_SUCCEEDED(service.open());
+    Handle handle = INVALID_HANDLE;
+    const Result rc = smRegisterService(&handle, smEncodeName(ServiceName), false, 1);
+
+    // smGetService blocks until the service appears, which is not appropriate for
+    // UI/client liveness checks. Probe by attempting to register the same name:
+    // failure means another process is already hosting it.
+    if (R_FAILED(rc)) {
+        return true;
+    }
+
+    smUnregisterService(smEncodeName(ServiceName));
+    svcCloseHandle(handle);
+    return false;
 }
 
 inline Result GetApiVersion(std::uint32_t* out_version) {

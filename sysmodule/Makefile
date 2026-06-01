@@ -21,6 +21,8 @@ include $(TOPDIR)/lib/Atmosphere-libs/config/templates/stratosphere.mk
 TARGET		:=	wireguard-nx
 BUILD		:=	build
 OUTDIR		:=	out
+TITLE_ID	:=	010000000000EAD0
+DISTDIR		:=	$(OUTDIR)/atmosphere/contents/$(TITLE_ID)
 DATA		:=	data
 RESOURCES	:=	res
 SOURCES		+=	src
@@ -103,10 +105,17 @@ export BUILD_EXEFS_SRC := $(TOPDIR)/$(EXEFS_SRC)
 
 export APP_JSON := $(TOPDIR)/res/module.json
 
-.PHONY	: $(BUILD) clean clean-libs clean-build all libs
+.PHONY	: $(BUILD) clean clean-libs clean-build all libs dist
 
 #---------------------------------------------------------------------------------
 all	: $(BUILD)
+
+dist	: $(BUILD)
+	@[ -d $(DISTDIR)/flags ] || mkdir -p $(DISTDIR)/flags
+	@cp $(OUTDIR)/$(TARGET).nsp $(DISTDIR)/exefs.nsp
+	@cp $(TOPDIR)/toolbox.json $(DISTDIR)/
+	@: > $(DISTDIR)/flags/boot2.flag
+	@echo "prepared Atmosphere layout in $(DISTDIR)"
 
 libs	:
 	@$(foreach lib,$(LIBNAMES),$(MAKE) --no-print-directory -C $(TOPDIR)/lib/$(lib) && ) true

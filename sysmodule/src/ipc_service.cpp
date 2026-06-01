@@ -1,4 +1,5 @@
 #include "ipc_service.hpp"
+#include "logger.hpp"
 
 #include <algorithm>
 #include <array>
@@ -70,6 +71,7 @@ void InitializeState() {
     UpdatePeerFlags();
 
     g_state.initialized = true;
+    logger::Log("Initialized dummy peer state with %zu peers", g_state.peers.size());
 }
 
 bool IsValidPeerIndex(std::int32_t peer_index) {
@@ -131,7 +133,10 @@ ams::Result ControlService::ListPeers(ams::sf::Out<u32> out_count, const ams::sf
 ams::Result ControlService::SetActivePeer(const wgnx::PeerSelectionRequest &request) {
     InitializeState();
 
-    R_UNLESS(IsValidPeerIndex(request.peer_index), ams::fs::ResultInvalidArgument());
+    if (!IsValidPeerIndex(request.peer_index)) {
+        logger::Log("Rejected SetActivePeer(%d): invalid index", request.peer_index);
+        R_THROW(ams::fs::ResultInvalidArgument());
+    }
 
     if (g_state.active_peer_index >= 0 && g_state.active_peer_index != request.peer_index) {
         ResetPeerCounters(g_state.peers[static_cast<std::size_t>(g_state.active_peer_index)]);
@@ -139,24 +144,32 @@ ams::Result ControlService::SetActivePeer(const wgnx::PeerSelectionRequest &requ
 
     g_state.active_peer_index = request.peer_index;
     UpdatePeerFlags();
+    logger::Log("SetActivePeer(%d)", request.peer_index);
     R_SUCCEED();
 }
 
 ams::Result ControlService::SetAutoStartPeer(const wgnx::PeerSelectionRequest &request) {
     InitializeState();
 
-    R_UNLESS(IsValidPeerIndex(request.peer_index), ams::fs::ResultInvalidArgument());
+    if (!IsValidPeerIndex(request.peer_index)) {
+        logger::Log("Rejected SetAutoStartPeer(%d): invalid index", request.peer_index);
+        R_THROW(ams::fs::ResultInvalidArgument());
+    }
 
     g_state.auto_start_peer_index = request.peer_index;
     UpdatePeerFlags();
+    logger::Log("SetAutoStartPeer(%d)", request.peer_index);
     R_SUCCEED();
 }
 
 void RunIpcServer() {
     InitializeState();
+    logger::Log("Constructing IPC server");
 
     g_server_manager = ams::util::ConstructAt(g_server_manager_storage);
     R_ABORT_UNLESS(g_server_manager->RegisterObjectForServer(g_control_service_object.GetShared(), ams::sm::ServiceName::Encode(wgnx::ServiceName), 8));
+    logger::Log("Registered service '%s'", wgnx::ServiceName);
+    logger::Log("Entering server loop");
     g_server_manager->LoopProcess();
 }
 
