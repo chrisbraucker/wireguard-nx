@@ -113,7 +113,7 @@ all	: $(BUILD)
 dist	: $(BUILD)
 	@[ -d $(DISTDIR)/flags ] || mkdir -p $(DISTDIR)/flags
 	@cp $(OUTDIR)/$(TARGET).nsp $(DISTDIR)/exefs.nsp
-	@cp $(TOPDIR)/toolbox.json $(DISTDIR)/
+	@printf '{\n  "name": "WireGuard-NX",\n  "tid": "$(TITLE_ID)",\n  "requires_reboot": false\n}\n' > $(DISTDIR)/toolbox.json
 	@: > $(DISTDIR)/flags/boot2.flag
 	@echo "prepared Atmosphere layout in $(DISTDIR)"
 
