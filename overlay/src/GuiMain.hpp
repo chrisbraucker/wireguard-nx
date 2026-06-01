@@ -37,6 +37,7 @@ private:
     bool smIsRunning();
     bool getPeers(std::vector<WireGuardPeer>& peers);
     bool refreshPeers();
+    WireGuardPeer* findPeerByIndex(std::int32_t peerIndex);
 };
 
 std::string formatBytes(std::uint64_t bytes);

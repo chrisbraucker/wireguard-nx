@@ -26,10 +26,15 @@ GuiMain::GuiMain() {
         return;
 
     for (auto& peer : this->m_peers) {
+        const std::int32_t peer_index = peer.index;
         peer.listItem = new tsl::elm::ListItem(peer.name);
-        peer.listItem->setClickListener([this, &peer](u64 keys) {
+        peer.listItem->setClickListener([this, peer_index](u64 keys) {
+            WireGuardPeer* peer = this->findPeerByIndex(peer_index);
+            if (peer == nullptr)
+                return true;
+
             if (keys & KEY_Y) {
-                const std::int32_t next_index = peer.isAutoStartEnabled ? -1 : peer.index;
+                const std::int32_t next_index = peer->isAutoStartEnabled ? -1 : peer->index;
                 if (R_FAILED(wgnx::client::SetAutoStartPeer(next_index)))
                     return true;
 
@@ -38,7 +43,7 @@ GuiMain::GuiMain() {
                     m_peerInfoDrawer->invalidate();
                 return true;
             } else if (keys & KEY_A) {
-                const std::int32_t next_index = peer.isActive ? -1 : peer.index;
+                const std::int32_t next_index = peer->isActive ? -1 : peer->index;
                 if (R_FAILED(wgnx::client::SetActivePeer(next_index)))
                     return true;
 
@@ -201,6 +206,13 @@ bool GuiMain::refreshPeers() {
     }
 
     return true;
+}
+
+WireGuardPeer* GuiMain::findPeerByIndex(std::int32_t peerIndex) {
+    const auto it = std::find_if(m_peers.begin(), m_peers.end(), [peerIndex](const WireGuardPeer& peer) {
+        return peer.index == peerIndex;
+    });
+    return it != m_peers.end() ? std::addressof(*it) : nullptr;
 }
 
 std::string formatBytes(std::uint64_t bytes) {
