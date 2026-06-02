@@ -1,8 +1,10 @@
 #include "config_loader.hpp"
 
 #include <array>
+#include <cerrno>
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
 #include <string_view>
 
 #include <stratosphere/util/util_ini.hpp>
@@ -33,8 +35,16 @@ struct ConfigFileCandidate {
 struct ConnectionParseContext {
     wgnx::PeerConfigEntry *out;
     ConfigParseError *error;
+    bool saw_private_key{false};
     bool saw_address{false};
+    bool saw_listen_port{false};
+    bool saw_dns{false};
+    bool saw_mtu{false};
+    bool saw_public_key{false};
+    bool saw_preshared_key{false};
+    bool saw_allowed_ips{false};
     bool saw_endpoint{false};
+    bool saw_persistent_keepalive{false};
 };
 
 constinit std::array<char, MaxConfigBytes + 1> g_config_buffer = {};
@@ -78,37 +88,189 @@ bool CopyField(char (&dst)[Size], const char *value, ConfigParseError *error, st
     return true;
 }
 
+bool ParseUnsignedField(std::uint16_t *out, const char *value, ConfigParseError *error, std::size_t line, const char *field_name) {
+    if (out == nullptr) {
+        SetError(error, line, "numeric output pointer is null");
+        return false;
+    }
+    if (value == nullptr || value[0] == '\0') {
+        SetError(error, line, "numeric value is empty");
+        return false;
+    }
+
+    char *end = nullptr;
+    errno = 0;
+    const unsigned long parsed = std::strtoul(value, &end, 10);
+    if (errno != 0 || end == value || *end != '\0' || parsed > 0xFFFFul) {
+        char message[sizeof(ConfigParseError::message)] = {};
+        std::snprintf(message, sizeof(message), "%s must be an unsigned 16-bit integer", field_name);
+        SetError(error, line, message);
+        return false;
+    }
+
+    *out = static_cast<std::uint16_t>(parsed);
+    return true;
+}
+
 int HandleConnectionConfig(void *user_ctx, const char *section, const char *name, const char *value) {
     auto *ctx = static_cast<ConnectionParseContext *>(user_ctx);
     if (ctx == nullptr || ctx->out == nullptr) {
         return 0;
     }
 
-    if (std::strcmp(section, "Interface") == 0 && std::strcmp(name, "Address") == 0) {
-        if (ctx->saw_address) {
-            SetError(ctx->error, 0, "multiple Interface.Address values are not supported");
-            return 0;
+    if (std::strcmp(section, "Interface") == 0) {
+        if (std::strcmp(name, "PrivateKey") == 0) {
+            if (ctx->saw_private_key) {
+                SetError(ctx->error, 0, "multiple Interface.PrivateKey values are not supported");
+                return 0;
+            }
+
+            if (!CopyField(ctx->out->private_key, value, ctx->error, 0, "PrivateKey")) {
+                return 0;
+            }
+
+            ctx->out->field_flags |= wgnx::PeerConfigField_PrivateKey;
+            ctx->saw_private_key = true;
+            return 1;
         }
 
-        if (!CopyField(ctx->out->address, value, ctx->error, 0, "Address")) {
-            return 0;
+        if (std::strcmp(name, "Address") == 0) {
+            if (ctx->saw_address) {
+                SetError(ctx->error, 0, "multiple Interface.Address values are not supported");
+                return 0;
+            }
+
+            if (!CopyField(ctx->out->address, value, ctx->error, 0, "Address")) {
+                return 0;
+            }
+
+            ctx->saw_address = true;
+            return 1;
         }
 
-        ctx->saw_address = true;
+        if (std::strcmp(name, "ListenPort") == 0) {
+            if (ctx->saw_listen_port) {
+                SetError(ctx->error, 0, "multiple Interface.ListenPort values are not supported");
+                return 0;
+            }
+
+            if (!ParseUnsignedField(&ctx->out->listen_port, value, ctx->error, 0, "ListenPort")) {
+                return 0;
+            }
+
+            ctx->out->field_flags |= wgnx::PeerConfigField_ListenPort;
+            ctx->saw_listen_port = true;
+            return 1;
+        }
+
+        if (std::strcmp(name, "DNS") == 0) {
+            if (ctx->saw_dns) {
+                SetError(ctx->error, 0, "multiple Interface.DNS values are not supported");
+                return 0;
+            }
+
+            if (!CopyField(ctx->out->dns, value, ctx->error, 0, "DNS")) {
+                return 0;
+            }
+
+            ctx->out->field_flags |= wgnx::PeerConfigField_Dns;
+            ctx->saw_dns = true;
+            return 1;
+        }
+
+        if (std::strcmp(name, "MTU") == 0) {
+            if (ctx->saw_mtu) {
+                SetError(ctx->error, 0, "multiple Interface.MTU values are not supported");
+                return 0;
+            }
+
+            if (!ParseUnsignedField(&ctx->out->mtu, value, ctx->error, 0, "MTU")) {
+                return 0;
+            }
+
+            ctx->out->field_flags |= wgnx::PeerConfigField_Mtu;
+            ctx->saw_mtu = true;
+            return 1;
+        }
+
         return 1;
     }
 
-    if (std::strcmp(section, "Peer") == 0 && std::strcmp(name, "Endpoint") == 0) {
-        if (ctx->saw_endpoint) {
-            SetError(ctx->error, 0, "multiple Peer.Endpoint values are not supported");
-            return 0;
+    if (std::strcmp(section, "Peer") == 0) {
+        if (std::strcmp(name, "PublicKey") == 0) {
+            if (ctx->saw_public_key) {
+                SetError(ctx->error, 0, "multiple Peer.PublicKey values are not supported");
+                return 0;
+            }
+
+            if (!CopyField(ctx->out->public_key, value, ctx->error, 0, "PublicKey")) {
+                return 0;
+            }
+
+            ctx->out->field_flags |= wgnx::PeerConfigField_PublicKey;
+            ctx->saw_public_key = true;
+            return 1;
         }
 
-        if (!CopyField(ctx->out->endpoint, value, ctx->error, 0, "Endpoint")) {
-            return 0;
+        if (std::strcmp(name, "PresharedKey") == 0) {
+            if (ctx->saw_preshared_key) {
+                SetError(ctx->error, 0, "multiple Peer.PresharedKey values are not supported");
+                return 0;
+            }
+
+            if (!CopyField(ctx->out->preshared_key, value, ctx->error, 0, "PresharedKey")) {
+                return 0;
+            }
+
+            ctx->out->field_flags |= wgnx::PeerConfigField_PresharedKey;
+            ctx->saw_preshared_key = true;
+            return 1;
         }
 
-        ctx->saw_endpoint = true;
+        if (std::strcmp(name, "AllowedIPs") == 0) {
+            if (ctx->saw_allowed_ips) {
+                SetError(ctx->error, 0, "multiple Peer.AllowedIPs values are not supported");
+                return 0;
+            }
+
+            if (!CopyField(ctx->out->allowed_ips, value, ctx->error, 0, "AllowedIPs")) {
+                return 0;
+            }
+
+            ctx->out->field_flags |= wgnx::PeerConfigField_AllowedIps;
+            ctx->saw_allowed_ips = true;
+            return 1;
+        }
+
+        if (std::strcmp(name, "Endpoint") == 0) {
+            if (ctx->saw_endpoint) {
+                SetError(ctx->error, 0, "multiple Peer.Endpoint values are not supported");
+                return 0;
+            }
+
+            if (!CopyField(ctx->out->endpoint, value, ctx->error, 0, "Endpoint")) {
+                return 0;
+            }
+
+            ctx->saw_endpoint = true;
+            return 1;
+        }
+
+        if (std::strcmp(name, "PersistentKeepalive") == 0) {
+            if (ctx->saw_persistent_keepalive) {
+                SetError(ctx->error, 0, "multiple Peer.PersistentKeepalive values are not supported");
+                return 0;
+            }
+
+            if (!ParseUnsignedField(&ctx->out->persistent_keepalive, value, ctx->error, 0, "PersistentKeepalive")) {
+                return 0;
+            }
+
+            ctx->out->field_flags |= wgnx::PeerConfigField_PersistentKeepalive;
+            ctx->saw_persistent_keepalive = true;
+            return 1;
+        }
+
         return 1;
     }
 
@@ -270,6 +432,18 @@ bool LoadConnectionFile(wgnx::PeerConfigEntry *out, const ConfigFileCandidate &c
 
     if (!ctx.saw_address) {
         logger::Log("Config '%s' is missing Interface.Address", resolved_path.data());
+        return false;
+    }
+    if (!ctx.saw_private_key) {
+        logger::Log("Config '%s' is missing Interface.PrivateKey", resolved_path.data());
+        return false;
+    }
+    if (!ctx.saw_public_key) {
+        logger::Log("Config '%s' is missing Peer.PublicKey", resolved_path.data());
+        return false;
+    }
+    if (!ctx.saw_allowed_ips) {
+        logger::Log("Config '%s' is missing Peer.AllowedIPs", resolved_path.data());
         return false;
     }
     if (!ctx.saw_endpoint) {
