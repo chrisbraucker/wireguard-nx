@@ -5,6 +5,8 @@
 #include <cstring>
 #include <string_view>
 
+#include <stratosphere/util/util_ini.hpp>
+
 #include "fs_runtime.hpp"
 #include "logger.hpp"
 #include "wgnx/paths.hpp"
@@ -16,12 +18,167 @@ namespace {
 constexpr std::size_t MaxConfigBytes = 16 * 1024;
 constexpr std::size_t MaxAutoStartBytes = sizeof(wgnx::PeerInfo::name);
 constexpr std::size_t MaxConfigFiles = wgnx::MaxPeers;
-constexpr std::size_t MaxConfigPathBytes = sizeof(wgnx::ConfigPath) + 1 + ams::fs::EntryNameLengthMax + 1;
+constexpr std::size_t MaxResolvedPathBytes = ams::fs::MountNameLengthMax + ams::fs::EntryNameLengthMax + 4;
+
+struct ConfigParseError {
+    std::size_t line{0};
+    char message[96]{};
+};
 
 struct ConfigFileCandidate {
     char file_name[ams::fs::EntryNameLengthMax + 1];
     char peer_name[sizeof(wgnx::PeerInfo::name)];
 };
+
+struct ConnectionParseContext {
+    wgnx::PeerConfigEntry *out;
+    ConfigParseError *error;
+    bool saw_address{false};
+    bool saw_endpoint{false};
+};
+
+constinit std::array<char, MaxConfigBytes + 1> g_config_buffer = {};
+constinit std::array<ConfigFileCandidate, MaxConfigFiles> g_candidates = {};
+
+std::string_view Trim(std::string_view value) {
+    while (!value.empty() && (value.front() == ' ' || value.front() == '\t' || value.front() == '\r')) {
+        value.remove_prefix(1);
+    }
+    while (!value.empty() && (value.back() == ' ' || value.back() == '\t' || value.back() == '\r')) {
+        value.remove_suffix(1);
+    }
+    return value;
+}
+
+void SetError(ConfigParseError *error, std::size_t line, const char *message) {
+    if (error == nullptr) {
+        return;
+    }
+
+    error->line = line;
+    std::snprintf(error->message, sizeof(error->message), "%s", message);
+}
+
+template<std::size_t Size>
+bool CopyField(char (&dst)[Size], const char *value, ConfigParseError *error, std::size_t line, const char *field_name) {
+    if (value == nullptr) {
+        SetError(error, line, "value is null");
+        return false;
+    }
+
+    const std::size_t length = std::strlen(value);
+    if (length >= Size) {
+        char message[sizeof(ConfigParseError::message)] = {};
+        std::snprintf(message, sizeof(message), "%s is too long", field_name);
+        SetError(error, line, message);
+        return false;
+    }
+
+    std::memcpy(dst, value, length + 1);
+    return true;
+}
+
+int HandleConnectionConfig(void *user_ctx, const char *section, const char *name, const char *value) {
+    auto *ctx = static_cast<ConnectionParseContext *>(user_ctx);
+    if (ctx == nullptr || ctx->out == nullptr) {
+        return 0;
+    }
+
+    if (std::strcmp(section, "Interface") == 0 && std::strcmp(name, "Address") == 0) {
+        if (ctx->saw_address) {
+            SetError(ctx->error, 0, "multiple Interface.Address values are not supported");
+            return 0;
+        }
+
+        if (!CopyField(ctx->out->address, value, ctx->error, 0, "Address")) {
+            return 0;
+        }
+
+        ctx->saw_address = true;
+        return 1;
+    }
+
+    if (std::strcmp(section, "Peer") == 0 && std::strcmp(name, "Endpoint") == 0) {
+        if (ctx->saw_endpoint) {
+            SetError(ctx->error, 0, "multiple Peer.Endpoint values are not supported");
+            return 0;
+        }
+
+        if (!CopyField(ctx->out->endpoint, value, ctx->error, 0, "Endpoint")) {
+            return 0;
+        }
+
+        ctx->saw_endpoint = true;
+        return 1;
+    }
+
+    return 1;
+}
+
+bool ValidateSectionLayout(const char *text, ConfigParseError *error) {
+    if (text == nullptr) {
+        SetError(error, 0, "config text is null");
+        return false;
+    }
+
+    std::size_t interface_sections = 0;
+    std::size_t peer_sections = 0;
+    std::size_t line_number = 0;
+    std::string_view remaining(text);
+
+    while (true) {
+        const std::size_t line_end = remaining.find('\n');
+        std::string_view line = line_end == std::string_view::npos ? remaining : remaining.substr(0, line_end);
+        remaining = line_end == std::string_view::npos ? std::string_view{} : remaining.substr(line_end + 1);
+        ++line_number;
+
+        line = Trim(line);
+        if (line.empty() || line.front() == '#' || line.front() == ';') {
+            if (line_end == std::string_view::npos) {
+                break;
+            }
+            continue;
+        }
+
+        if (line.front() == '[') {
+            const std::size_t close = line.find(']');
+            if (close == std::string_view::npos) {
+                SetError(error, line_number, "section header is missing ']'");
+                return false;
+            }
+
+            const std::string_view section_name = Trim(line.substr(1, close - 1));
+            if (section_name == "Interface") {
+                ++interface_sections;
+                if (interface_sections > 1) {
+                    SetError(error, line_number, "multiple [Interface] sections are not supported");
+                    return false;
+                }
+            } else if (section_name == "Peer") {
+                ++peer_sections;
+                if (peer_sections > 1) {
+                    SetError(error, line_number, "multiple [Peer] sections are not supported");
+                    return false;
+                }
+            }
+        }
+
+        if (line_end == std::string_view::npos) {
+            break;
+        }
+    }
+
+    if (interface_sections == 0) {
+        SetError(error, 0, "missing [Interface] section");
+        return false;
+    }
+    if (peer_sections == 0) {
+        SetError(error, 0, "missing [Peer] section");
+        return false;
+    }
+
+    return true;
+}
 
 bool HasConfSuffix(const char *name) {
     if (name == nullptr) {
@@ -66,29 +223,62 @@ bool LoadConnectionFile(wgnx::PeerConfigEntry *out, const ConfigFileCandidate &c
         return false;
     }
 
-    std::array<char, MaxConfigBytes + 1> buffer{};
-    std::array<char, MaxConfigPathBytes> path{};
-    if (!BuildConfigPath(path.data(), path.size(), candidate.file_name)) {
+    *out = {};
+
+    std::array<char, MaxResolvedPathBytes> config_path = {};
+    if (!BuildConfigPath(config_path.data(), config_path.size(), candidate.file_name)) {
         logger::Log("Config path for '%s' is too long", candidate.file_name);
         return false;
     }
 
-    std::size_t size = 0;
-    const ams::Result rc = fs_runtime::ReadTextFile(path.data(), buffer.data(), buffer.size(), &size);
-    if (R_FAILED(rc)) {
-        logger::Log("Connection config '%s' could not be read: rc=0x%08x", path.data(), static_cast<u32>(rc.GetValue()));
+    std::array<char, MaxResolvedPathBytes> resolved_path = {};
+    const ams::Result resolve_rc = fs_runtime::ResolveSdPath(resolved_path.data(), resolved_path.size(), config_path.data());
+    if (R_FAILED(resolve_rc)) {
+        logger::Log("Connection config path '%s' is invalid: rc=0x%08x", config_path.data(), static_cast<u32>(resolve_rc.GetValue()));
         return false;
     }
 
-    wgnx::ConfigParseError error{};
-    const std::string_view text(buffer.data(), size);
-    if (!wgnx::config::ParseConnectionConfig(out, text, &error)) {
-        logger::Log("Config '%s' parse failed at line %zu: %s", path.data(), error.line, error.message);
+    std::size_t size = 0;
+    const ams::Result read_rc = fs_runtime::ReadTextFile(config_path.data(), g_config_buffer.data(), g_config_buffer.size(), &size);
+    if (R_FAILED(read_rc)) {
+        logger::Log("Connection config '%s' could not be read: rc=0x%08x", resolved_path.data(), static_cast<u32>(read_rc.GetValue()));
+        return false;
+    }
+
+    ConfigParseError error{};
+    if (!ValidateSectionLayout(g_config_buffer.data(), &error)) {
+        logger::Log("Config '%s' parse failed at line %zu: %s", resolved_path.data(), error.line, error.message);
+        return false;
+    }
+
+    ConnectionParseContext ctx = {
+        .out = out,
+        .error = &error,
+    };
+
+    const int parse_rc = ams::util::ini::ParseString(g_config_buffer.data(), std::addressof(ctx), HandleConnectionConfig);
+    if (parse_rc != 0) {
+        if (error.message[0] == '\0') {
+            SetError(&error, static_cast<std::size_t>(parse_rc), "invalid INI syntax");
+        } else if (error.line == 0) {
+            error.line = static_cast<std::size_t>(parse_rc);
+        }
+
+        logger::Log("Config '%s' parse failed at line %zu: %s", resolved_path.data(), error.line, error.message);
+        return false;
+    }
+
+    if (!ctx.saw_address) {
+        logger::Log("Config '%s' is missing Interface.Address", resolved_path.data());
+        return false;
+    }
+    if (!ctx.saw_endpoint) {
+        logger::Log("Config '%s' is missing Peer.Endpoint", resolved_path.data());
         return false;
     }
 
     std::snprintf(out->name, sizeof(out->name), "%s", candidate.peer_name);
-    logger::Log("Loaded connection '%s' from '%s'", out->name, path.data());
+    logger::Log("Loaded connection '%s' from '%s'", out->name, resolved_path.data());
     return true;
 }
 
@@ -100,17 +290,32 @@ bool LoadPeerConfig(wgnx::PeerConfigSet *out) {
     }
 
     *out = {};
-    R_ABORT_UNLESS(R_SUCCEEDED(fs_runtime::EnsureReady()));
+    const ams::Result ensure_rc = fs_runtime::EnsureReady();
+    if (R_FAILED(ensure_rc)) {
+        logger::Log("Filesystem runtime could not be initialized: rc=0x%08x", static_cast<u32>(ensure_rc.GetValue()));
+        return false;
+    }
+
+    std::array<char, MaxResolvedPathBytes> config_dir_path = {};
+    const ams::Result resolve_rc = fs_runtime::ResolveSdPath(config_dir_path.data(), config_dir_path.size(), wgnx::ConfigPath);
+    if (R_FAILED(resolve_rc)) {
+        logger::Log("Config directory path '%s' is invalid: rc=0x%08x", wgnx::ConfigPath, static_cast<u32>(resolve_rc.GetValue()));
+        return false;
+    }
 
     ams::fs::DirectoryHandle dir;
-    const ams::Result open_rc = ams::fs::OpenDirectory(std::addressof(dir), wgnx::ConfigPath, ams::fs::OpenDirectoryMode_All);
+    const ams::Result open_rc = ams::fs::OpenDirectory(std::addressof(dir), config_dir_path.data(), ams::fs::OpenDirectoryMode_All);
     if (R_FAILED(open_rc)) {
-        logger::Log("Config directory '%s' could not be opened: rc=0x%08x", wgnx::ConfigPath, static_cast<u32>(open_rc.GetValue()));
+        if (ams::fs::ResultPathNotFound::Includes(open_rc)) {
+            logger::Log("Config directory '%s' does not exist; no peers configured", wgnx::ConfigPath);
+            return true;
+        }
+
+        logger::Log("Config directory '%s' could not be opened: rc=0x%08x", config_dir_path.data(), static_cast<u32>(open_rc.GetValue()));
         return false;
     }
     ON_SCOPE_EXIT { ams::fs::CloseDirectory(dir); };
 
-    std::array<ConfigFileCandidate, MaxConfigFiles> candidates{};
     std::size_t candidate_count = 0;
     std::size_t skipped_count = 0;
 
@@ -132,13 +337,13 @@ bool LoadPeerConfig(wgnx::PeerConfigSet *out) {
         if (!HasConfSuffix(entry.name)) {
             continue;
         }
-        if (candidate_count >= candidates.size()) {
+        if (candidate_count >= g_candidates.size()) {
             ++skipped_count;
-            logger::Log("Skipping extra config '%s': max peer count is %zu", entry.name, candidates.size());
+            logger::Log("Skipping extra config '%s': max peer count is %zu", entry.name, g_candidates.size());
             continue;
         }
 
-        auto &candidate = candidates[candidate_count];
+        auto &candidate = g_candidates[candidate_count];
         std::snprintf(candidate.file_name, sizeof(candidate.file_name), "%s", entry.name);
         if (!ExtractPeerName(candidate.peer_name, sizeof(candidate.peer_name), candidate.file_name)) {
             ++skipped_count;
@@ -151,17 +356,17 @@ bool LoadPeerConfig(wgnx::PeerConfigSet *out) {
 
     for (std::size_t i = 0; i < candidate_count; ++i) {
         for (std::size_t j = i + 1; j < candidate_count; ++j) {
-            if (std::strcmp(candidates[j].file_name, candidates[i].file_name) < 0) {
-                const auto tmp = candidates[i];
-                candidates[i] = candidates[j];
-                candidates[j] = tmp;
+            if (std::strcmp(g_candidates[j].file_name, g_candidates[i].file_name) < 0) {
+                const auto tmp = g_candidates[i];
+                g_candidates[i] = g_candidates[j];
+                g_candidates[j] = tmp;
             }
         }
     }
 
     for (std::size_t i = 0; i < candidate_count; ++i) {
         wgnx::PeerConfigEntry entry{};
-        if (!LoadConnectionFile(std::addressof(entry), candidates[i])) {
+        if (!LoadConnectionFile(std::addressof(entry), g_candidates[i])) {
             ++skipped_count;
             continue;
         }
@@ -184,7 +389,9 @@ bool LoadAutoStartPeerName(char *out_name, std::size_t out_name_size) {
     std::size_t size = 0;
     const ams::Result rc = fs_runtime::ReadTextFile(wgnx::AutoStartPath, buffer.data(), buffer.size(), &size);
     if (R_FAILED(rc)) {
-        logger::Log("Autostart file '%s' could not be read: rc=0x%08x", wgnx::AutoStartPath, static_cast<u32>(rc.GetValue()));
+        if (!ams::fs::ResultPathNotFound::Includes(rc)) {
+            logger::Log("Autostart file '%s' could not be read: rc=0x%08x", wgnx::AutoStartPath, static_cast<u32>(rc.GetValue()));
+        }
         return false;
     }
 
@@ -213,6 +420,23 @@ bool LoadAutoStartPeerName(char *out_name, std::size_t out_name_size) {
     out_name[trimmed_size] = '\0';
     logger::Log("Loaded autostart peer '%s' from '%s'", out_name, wgnx::AutoStartPath);
     return true;
+}
+
+ams::Result StoreAutoStartPeerName(const char *name) {
+    R_TRY(fs_runtime::EnsureDirectoryExists("/config"));
+    R_TRY(fs_runtime::EnsureDirectoryExists(wgnx::ConfigPath));
+
+    if (name == nullptr || name[0] == '\0') {
+        R_TRY(fs_runtime::DeleteFileIfExists(wgnx::AutoStartPath));
+        logger::Log("Cleared autostart peer");
+        R_SUCCEED();
+    }
+
+    const std::size_t length = std::strlen(name);
+    R_UNLESS(length < sizeof(wgnx::PeerInfo::name), ams::fs::ResultTooLongPath());
+    R_TRY(fs_runtime::WriteTextFile(wgnx::AutoStartPath, name, length));
+    logger::Log("Stored autostart peer '%s'", name);
+    R_SUCCEED();
 }
 
 } // namespace wgnx::sysmodule
