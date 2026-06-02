@@ -108,15 +108,18 @@ Replace hardcoded peer state with a shared config-backed source of truth.
 
 ### Success Criteria
 
-- replacing a config file on SD changes the peer list after restart
-- manager and overlay reflect configured peers instead of dummy peers
-- invalid config is reported in logs and does not crash the sysmodule
+- [x] replacing a config file on SD changes the peer list after restart
+- [x] manager and overlay reflect configured peers instead of dummy peers
+- [x] invalid config is reported in logs and does not crash the sysmodule
 
 ## Milestone 2: Runtime State Separation
 
 ### Goal
 
 Separate static peer configuration from live connection state.
+
+See [docs/runtime-state.md](docs/runtime-state.md) for the intended semantics of
+`active`, `inactive`, derived `established`, and local `error` conditions.
 
 ### Scope
 
@@ -304,7 +307,6 @@ Move from a validated transport engine toward console-wide usefulness.
 
 - routing strategy
 - DNS behavior
-- interaction with Nintendo services
 - coexistence with normal networking
 - handling suspend/resume and network state changes
 
