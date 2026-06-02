@@ -170,6 +170,17 @@ ams::Result ControlService::SetAutoStartPeer(const wgnx::PeerSelectionRequest &r
         R_THROW(ams::fs::ResultInvalidArgument());
     }
 
+    const char *peer_name = nullptr;
+    if (request.peer_index >= 0) {
+        peer_name = g_state.peers[static_cast<std::size_t>(request.peer_index)].name;
+    }
+
+    const ams::Result store_rc = StoreAutoStartPeerName(peer_name);
+    if (R_FAILED(store_rc)) {
+        logger::Log("Rejected SetAutoStartPeer(%d): persist failed rc=0x%08x", request.peer_index, static_cast<u32>(store_rc.GetValue()));
+        R_THROW(store_rc);
+    }
+
     g_state.auto_start_peer_index = request.peer_index;
     UpdatePeerFlags();
     logger::Log("SetAutoStartPeer(%d)", request.peer_index);
