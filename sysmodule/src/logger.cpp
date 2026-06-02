@@ -4,6 +4,8 @@
 #include <cstdio>
 #include <cstring>
 
+#include "fs_runtime.hpp"
+
 namespace wgnx::sysmodule::logger {
 
 namespace {
@@ -21,9 +23,6 @@ enum class FileBackendState : std::uint8_t {
 
 bool g_logger_initialized = false;
 FileBackendState g_file_backend_state = FileBackendState::Uninitialized;
-alignas(ams::os::MemoryPageSize) constinit u8 g_fs_heap[32 * 1024] = {};
-constinit ams::lmem::HeapHandle g_fs_heap_handle = nullptr;
-bool g_fs_ready = false;
 
 void EmitDebugString(const char *line, size_t line_size) {
     if (line == nullptr || line_size == 0) {
@@ -31,30 +30,6 @@ void EmitDebugString(const char *line, size_t line_size) {
     }
 
     (void)::svcOutputDebugString(line, line_size);
-}
-
-void *AllocateForFs(size_t size) {
-    return ams::lmem::AllocateFromExpHeap(g_fs_heap_handle, size);
-}
-
-void DeallocateForFs(void *ptr, size_t size) {
-    AMS_UNUSED(size);
-    ams::lmem::FreeToExpHeap(g_fs_heap_handle, ptr);
-}
-
-void EnsureFsReady() {
-    if (g_fs_ready) {
-        return;
-    }
-
-    ams::fs::InitializeForSystem();
-    ams::fs::SetEnabledAutoAbort(false);
-
-    g_fs_heap_handle = ams::lmem::CreateExpHeap(g_fs_heap, sizeof(g_fs_heap), ams::lmem::CreateOption_None);
-    AMS_ABORT_UNLESS(g_fs_heap_handle != nullptr);
-
-    ams::fs::SetAllocator(AllocateForFs, DeallocateForFs);
-    g_fs_ready = true;
 }
 
 bool EnsureDirectoryExists(const char *path) {
@@ -67,8 +42,13 @@ void EnsureFileBackendInitialized() {
         return;
     }
 
-    EnsureFsReady();
-    ams::Result rc = ams::fs::MountSdCard(SdMountName);
+    ams::Result rc = fs_runtime::EnsureReady();
+    if (R_FAILED(rc)) {
+        g_file_backend_state = FileBackendState::Disabled;
+        return;
+    }
+
+    rc = ams::fs::MountSdCard(SdMountName);
     if (R_FAILED(rc) && !ams::fs::ResultMountNameAlreadyExists::Includes(rc)) {
         g_file_backend_state = FileBackendState::Disabled;
         return;

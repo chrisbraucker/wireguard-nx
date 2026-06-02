@@ -1,4 +1,5 @@
 #include "ipc_service.hpp"
+#include "config_loader.hpp"
 #include "logger.hpp"
 
 #include <algorithm>
@@ -17,7 +18,8 @@ constinit ServerManager *g_server_manager = nullptr;
 constinit ams::sf::UnmanagedServiceObject<wgnx::sysmodule::IControlService, wgnx::sysmodule::ControlService> g_control_service_object;
 
 struct DaemonState {
-    std::array<wgnx::PeerInfo, 2> peers{};
+    std::array<wgnx::PeerInfo, wgnx::MaxPeers> peers{};
+    std::uint32_t peer_count{0};
     std::int32_t active_peer_index{-1};
     std::int32_t auto_start_peer_index{-1};
     std::uint32_t tick_count{0};
@@ -38,7 +40,7 @@ void ResetPeerCounters(wgnx::PeerInfo &peer) {
 }
 
 void UpdatePeerFlags() {
-    for (std::size_t i = 0; i < g_state.peers.size(); ++i) {
+    for (std::size_t i = 0; i < g_state.peer_count; ++i) {
         auto &peer = g_state.peers[i];
         peer.flags = 0;
 
@@ -56,26 +58,38 @@ void InitializeState() {
         return;
     }
 
-    auto &alpha = g_state.peers[0];
-    CopyString(alpha.name, "Test");
-    CopyString(alpha.address, "10.42.0.2/32");
-    CopyString(alpha.endpoint, "vpn.example.com:51820");
+    char auto_start_name[sizeof(wgnx::PeerInfo::name)] = {};
+    const bool has_auto_start_name = LoadAutoStartPeerName(auto_start_name, sizeof(auto_start_name));
 
-    auto &beta = g_state.peers[1];
-    CopyString(beta.name, "Example");
-    CopyString(beta.address, "10.43.0.2/32");
-    CopyString(beta.endpoint, "lab.example.net:51821");
+    wgnx::PeerConfigSet config{};
+    if (LoadPeerConfig(&config)) {
+        g_state.peer_count = static_cast<std::uint32_t>(config.peer_count);
 
-    ResetPeerCounters(alpha);
-    ResetPeerCounters(beta);
+        for (std::size_t i = 0; i < config.peer_count; ++i) {
+            auto &peer = g_state.peers[i];
+            const auto &entry = config.peers[i];
+
+            CopyString(peer.name, entry.name);
+            CopyString(peer.address, entry.address);
+            CopyString(peer.endpoint, entry.endpoint);
+            ResetPeerCounters(peer);
+
+            if (has_auto_start_name && std::strncmp(entry.name, auto_start_name, sizeof(entry.name)) == 0) {
+                g_state.auto_start_peer_index = static_cast<std::int32_t>(i);
+            }
+        }
+    } else {
+        g_state.peer_count = 0;
+        g_state.auto_start_peer_index = -1;
+    }
+
     UpdatePeerFlags();
-
     g_state.initialized = true;
-    logger::Log("Initialized dummy peer state with %zu peers", g_state.peers.size());
+    logger::Log("Initialized peer state with %u configured peer(s)", g_state.peer_count);
 }
 
 bool IsValidPeerIndex(std::int32_t peer_index) {
-    return peer_index >= -1 && peer_index < static_cast<std::int32_t>(g_state.peers.size());
+    return peer_index >= -1 && peer_index < static_cast<std::int32_t>(g_state.peer_count);
 }
 
 void TickActivePeer() {
@@ -105,7 +119,7 @@ ams::Result ControlService::GetDaemonStatus(ams::sf::Out<wgnx::DaemonStatus> out
 
     wgnx::DaemonStatus status = {
         .abi_version = wgnx::IpcApiVersion,
-        .peer_count = static_cast<u32>(g_state.peers.size()),
+        .peer_count = g_state.peer_count,
         .active_peer_index = g_state.active_peer_index,
         .auto_start_peer_index = g_state.auto_start_peer_index,
         .flags = wgnx::DaemonFlag_Ready | (g_state.active_peer_index >= 0 ? wgnx::DaemonFlag_TunnelActive : 0U),
@@ -121,12 +135,12 @@ ams::Result ControlService::ListPeers(ams::sf::Out<u32> out_count, const ams::sf
     TickActivePeer();
     UpdatePeerFlags();
 
-    const std::size_t copy_count = std::min<std::size_t>(out.GetSize(), g_state.peers.size());
+    const std::size_t copy_count = std::min<std::size_t>(out.GetSize(), g_state.peer_count);
     for (std::size_t i = 0; i < copy_count; ++i) {
         out[i] = g_state.peers[i];
     }
 
-    out_count.SetValue(static_cast<u32>(g_state.peers.size()));
+    out_count.SetValue(g_state.peer_count);
     R_SUCCEED();
 }
 

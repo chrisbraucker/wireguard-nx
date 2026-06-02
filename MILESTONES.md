@@ -133,7 +133,7 @@ Separate static peer configuration from live connection state.
 
 ### Success Criteria
 
-- overlay can show “configured but stopped” vs “active but connecting” vs “established” vs “error”
+- overlay can show "configured but stopped" vs "active but connecting" vs "established" vs "error"
 - runtime counters survive control operations correctly without corrupting config state
 
 ## Milestone 3: Platform Abstraction Layer
@@ -287,7 +287,7 @@ Choose and implement the first real packet path for non-test traffic.
 
 - define ingress/egress packet format
 - attach decrypted/encrypted packet handling to the engine
-- decide what “supported traffic” means for the first release
+- decide what "supported traffic" means for the first release
 
 ### Success Criteria
 
@@ -323,7 +323,7 @@ Move from a validated transport engine toward console-wide usefulness.
 6. Milestone 6: UDP Transport
 7. Milestone 7: App-Owned Payload Transport
 
-This preserves momentum and gets you to a meaningful “WireGuard works on Switch for app-owned traffic” checkpoint before tackling the much harder OS-level tunnel problem.
+This preserves momentum and gets you to a meaningful "WireGuard works on Switch for app-owned traffic" checkpoint before tackling the much harder OS-level tunnel problem.
 
 ## Non-Goals For The Near Term
 
