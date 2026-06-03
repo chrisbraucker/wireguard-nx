@@ -73,8 +73,8 @@ int main(int argc, char **argv)
 
         wgnx::DaemonStatus status{};
         if (R_SUCCEEDED(wgnx::client::GetDaemonStatus(&status))) {
-            printf("WireGuard peers: %u | active=%d | autostart=%d\n",
-                status.peer_count, status.active_peer_index, status.auto_start_peer_index);
+            printf("WireGuard peers: %u | active=%d | autostart=%d | flags=0x%08X\n",
+                status.peer_count, status.active_peer_index, status.auto_start_peer_index, status.flags);
         }
 
         std::array<wgnx::PeerInfo, wgnx::MaxPeers> peers{};
@@ -82,8 +82,10 @@ int main(int argc, char **argv)
         if (R_SUCCEEDED(wgnx::client::ListPeers(peers.data(), peers.size(), &peer_count))) {
             for (u32 i = 0; i < peer_count && i < peers.size(); ++i) {
                 const auto& peer = peers[i];
-                printf("[%u] %s | %s | %s | flags=0x%02X\n",
-                    i, peer.name, peer.address, peer.endpoint, peer.flags);
+                printf("[%u] %s | %s | %s | state=%u stage=%u flags=0x%02X | hs=%d rx_age=%d tx_age=%d | ka=%us err=0x%08X\n",
+                    i, peer.name, peer.address, peer.endpoint, peer.runtime_state, peer.error_stage, peer.flags,
+                    peer.last_handshake_seconds, peer.last_rx_seconds, peer.last_tx_seconds,
+                    peer.persistent_keepalive_interval, peer.last_error_code);
             }
         }
     } else {

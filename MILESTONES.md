@@ -125,7 +125,6 @@ See [docs/runtime-state.md](docs/runtime-state.md) for the intended semantics of
 
 - distinguish configured peer data from runtime counters
 - define daemon states such as stopped, resolving, handshaking, established, error
-- add richer status/error fields to the IPC-visible state
 - keep active/autostart selection separate from transport status
 
 ### Recommended Deliverables
@@ -136,8 +135,8 @@ See [docs/runtime-state.md](docs/runtime-state.md) for the intended semantics of
 
 ### Success Criteria
 
-- overlay can show "configured but stopped" vs "active but connecting" vs "established" vs "error"
-- runtime counters survive control operations correctly without corrupting config state
+- overlay can show "configured but stopped" vs "active" vs "error"
+- runtime counters are reset after control operations (start, stop) correctly without corrupting config state
 
 ## Milestone 3: Platform Abstraction Layer
 
