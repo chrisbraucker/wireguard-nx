@@ -120,7 +120,7 @@ tsl::elm::Element* GuiMain::createUI() {
             renderer->drawString("RX: " + formatBytes(peer.rxBytes) + ",   TX: " + formatBytes(peer.txBytes), false, x + 15, y + 130, 15, tsl::infoTextColor);
             renderer->drawString("Keepalive: " + (peer.persistentKeepaliveInterval > 0 ? (std::to_string(peer.persistentKeepaliveInterval) + "s") : std::string("false")), false, x + 15, y + 150, 15, tsl::infoTextColor);
             if (peer.hasError) {
-                renderer->drawString("Error: " + peerErrorStage(peer.errorStage) + " rc=0x" + formatHex32(peer.lastErrorCode), false, x + 15, y + 170, 15, tsl::warningTextColor);
+                renderer->drawString("Error: " + peerErrorStage(peer.errorStage) + " / " + peerErrorCode(peer.lastErrorCode), false, x + 15, y + 170, 15, tsl::warningTextColor);
             }
         });
         peerList->addItem(m_peerInfoDrawer);
@@ -277,18 +277,12 @@ std::string peerStateSummary(const WireGuardPeer& peer) {
     if (peer.hasError)
         return "error";
 
-    switch (static_cast<wgnx::PeerRuntimeState>(peer.runtimeState)) {
-        case wgnx::PeerRuntimeState::Inactive:
-            return "inactive";
-        case wgnx::PeerRuntimeState::ResolvingEndpoint:
-        case wgnx::PeerRuntimeState::Handshaking:
-        case wgnx::PeerRuntimeState::Active:
-            return "active";
-        case wgnx::PeerRuntimeState::Error:
-            return "error";
+    const auto state = static_cast<wgnx::PeerRuntimeState>(peer.runtimeState);
+    if (state == wgnx::PeerRuntimeState::Inactive) {
+        return "inactive";
     }
 
-    return "inactive";
+    return "active";
 }
 
 std::string peerStateDetail(const WireGuardPeer& peer) {
@@ -309,20 +303,9 @@ std::string peerStateDetail(const WireGuardPeer& peer) {
 }
 
 std::string peerErrorStage(std::uint8_t stage) {
-    switch (static_cast<wgnx::PeerErrorStage>(stage)) {
-        case wgnx::PeerErrorStage::None:
-            return "none";
-        case wgnx::PeerErrorStage::Config:
-            return "config";
-        case wgnx::PeerErrorStage::ResolveEndpoint:
-            return "resolve";
-        case wgnx::PeerErrorStage::Handshake:
-            return "handshake";
-        case wgnx::PeerErrorStage::Transport:
-            return "transport";
-        case wgnx::PeerErrorStage::Internal:
-            return "internal";
-    }
+    return wgnx::GetPeerErrorStageName(static_cast<wgnx::PeerErrorStage>(stage));
+}
 
-    return "unknown";
+std::string peerErrorCode(std::uint32_t code) {
+    return wgnx::GetPeerErrorCodeName(static_cast<wgnx::PeerErrorCode>(code));
 }

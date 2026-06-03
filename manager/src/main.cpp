@@ -82,10 +82,15 @@ int main(int argc, char **argv)
         if (R_SUCCEEDED(wgnx::client::ListPeers(peers.data(), peers.size(), &peer_count))) {
             for (u32 i = 0; i < peer_count && i < peers.size(); ++i) {
                 const auto& peer = peers[i];
-                printf("[%u] %s | %s | %s | state=%u stage=%u flags=0x%02X | hs=%d rx_age=%d tx_age=%d | ka=%us err=0x%08X\n",
-                    i, peer.name, peer.address, peer.endpoint, peer.runtime_state, peer.error_stage, peer.flags,
+                printf("[%u] %s | %s | %s | state=%s stage=%s flags=0x%02X | hs=%d rx_age=%d tx_age=%d | ka=%us err=%s (0x%08X)\n",
+                    i, peer.name, peer.address, peer.endpoint,
+                    wgnx::GetPeerRuntimeStateName(static_cast<wgnx::PeerRuntimeState>(peer.runtime_state)),
+                    wgnx::GetPeerErrorStageName(static_cast<wgnx::PeerErrorStage>(peer.error_stage)),
+                    peer.flags,
                     peer.last_handshake_seconds, peer.last_rx_seconds, peer.last_tx_seconds,
-                    peer.persistent_keepalive_interval, peer.last_error_code);
+                    peer.persistent_keepalive_interval,
+                    wgnx::GetPeerErrorCodeName(static_cast<wgnx::PeerErrorCode>(peer.last_error_code)),
+                    peer.last_error_code);
             }
         }
     } else {

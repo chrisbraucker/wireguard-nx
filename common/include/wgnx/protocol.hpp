@@ -7,7 +7,7 @@
 namespace wgnx {
 
 constexpr inline char ServiceName[] = "wgnx:ctl";
-constexpr inline std::uint32_t IpcApiVersion = 2;
+constexpr inline std::uint32_t IpcApiVersion = 1;
 constexpr inline std::size_t MaxPeers = 8;
 
 enum class CommandId : std::uint32_t {
@@ -40,6 +40,16 @@ enum class PeerErrorStage : std::uint8_t {
     Handshake = 3,
     Transport = 4,
     Internal = 5,
+};
+
+enum class PeerErrorCode : std::uint32_t {
+    None = 0,
+    ConfigInvalid = 1,
+    EndpointMissing = 2,
+    EndpointMalformed = 3,
+    EndpointResolutionFailed = 4,
+    TransportInitFailed = 5,
+    InternalFailure = 6,
 };
 
 enum DaemonFlags : std::uint32_t {
@@ -78,6 +88,63 @@ struct PeerSelectionRequest {
     std::int32_t peer_index;
     std::uint32_t reserved;
 };
+
+constexpr inline const char *GetPeerRuntimeStateName(PeerRuntimeState state) {
+    switch (state) {
+        case PeerRuntimeState::Inactive:
+            return "inactive";
+        case PeerRuntimeState::ResolvingEndpoint:
+            return "resolving";
+        case PeerRuntimeState::Handshaking:
+            return "handshaking";
+        case PeerRuntimeState::Active:
+            return "active";
+        case PeerRuntimeState::Error:
+            return "error";
+    }
+
+    return "unknown";
+}
+
+constexpr inline const char *GetPeerErrorStageName(PeerErrorStage stage) {
+    switch (stage) {
+        case PeerErrorStage::None:
+            return "none";
+        case PeerErrorStage::Config:
+            return "config";
+        case PeerErrorStage::ResolveEndpoint:
+            return "resolve";
+        case PeerErrorStage::Handshake:
+            return "handshake";
+        case PeerErrorStage::Transport:
+            return "transport";
+        case PeerErrorStage::Internal:
+            return "internal";
+    }
+
+    return "unknown";
+}
+
+constexpr inline const char *GetPeerErrorCodeName(PeerErrorCode code) {
+    switch (code) {
+        case PeerErrorCode::None:
+            return "none";
+        case PeerErrorCode::ConfigInvalid:
+            return "config invalid";
+        case PeerErrorCode::EndpointMissing:
+            return "endpoint missing";
+        case PeerErrorCode::EndpointMalformed:
+            return "endpoint malformed";
+        case PeerErrorCode::EndpointResolutionFailed:
+            return "endpoint resolution failed";
+        case PeerErrorCode::TransportInitFailed:
+            return "transport init failed";
+        case PeerErrorCode::InternalFailure:
+            return "internal failure";
+    }
+
+    return "unknown";
+}
 
 static_assert(std::is_standard_layout_v<PeerInfo>);
 static_assert(std::is_trivially_copyable_v<PeerInfo>);

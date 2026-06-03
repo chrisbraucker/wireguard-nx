@@ -53,3 +53,4 @@ std::string moment(std::int32_t seconds);
 std::string peerStateSummary(const WireGuardPeer& peer);
 std::string peerStateDetail(const WireGuardPeer& peer);
 std::string peerErrorStage(std::uint8_t stage);
+std::string peerErrorCode(std::uint32_t code);

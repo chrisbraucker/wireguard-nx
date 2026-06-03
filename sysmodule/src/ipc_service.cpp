@@ -41,55 +41,110 @@ struct DaemonState {
 
 constinit DaemonState g_state = {};
 
-void ResetRuntimePeer(DaemonState::PeerRuntimeInfo *runtime, const wgnx::PeerConfigEntry &config) {
+void ResetRuntimeMetrics(DaemonState::PeerRuntimeInfo *runtime) {
     if (runtime == nullptr) {
         return;
     }
 
-    *runtime = {};
-    runtime->state = wgnx::PeerRuntimeState::Inactive;
-    runtime->error_stage = wgnx::PeerErrorStage::None;
-    runtime->persistent_keepalive_interval = config.persistent_keepalive;
+    runtime->state_ticks = 0;
     runtime->last_handshake_seconds = -1;
     runtime->last_rx_seconds = -1;
     runtime->last_tx_seconds = -1;
+    runtime->rx_bytes = 0;
+    runtime->tx_bytes = 0;
+    runtime->established = false;
 }
 
-bool EndpointLooksUsable(const char *endpoint) {
-    if (endpoint == nullptr || endpoint[0] == '\0') {
-        return false;
+void ClearRuntimeError(DaemonState::PeerRuntimeInfo *runtime) {
+    if (runtime == nullptr) {
+        return;
     }
 
-    const char *port = std::strrchr(endpoint, ':');
-    if (port == nullptr || port == endpoint || port[1] == '\0') {
-        return false;
+    runtime->error_stage = wgnx::PeerErrorStage::None;
+    runtime->last_error_code = static_cast<std::uint32_t>(wgnx::PeerErrorCode::None);
+}
+
+void SetPeerInactive(std::size_t peer_index) {
+    auto &config = g_state.configured_peers[peer_index];
+    auto &runtime = g_state.runtime[peer_index];
+    runtime = {};
+    runtime.state = wgnx::PeerRuntimeState::Inactive;
+    runtime.persistent_keepalive_interval = config.persistent_keepalive;
+    ClearRuntimeError(&runtime);
+    ResetRuntimeMetrics(&runtime);
+}
+
+void SetPeerResolving(std::size_t peer_index) {
+    auto &runtime = g_state.runtime[peer_index];
+    runtime.state = wgnx::PeerRuntimeState::ResolvingEndpoint;
+    ClearRuntimeError(&runtime);
+    ResetRuntimeMetrics(&runtime);
+}
+
+void SetPeerHandshaking(std::size_t peer_index) {
+    auto &runtime = g_state.runtime[peer_index];
+    runtime.state = wgnx::PeerRuntimeState::Handshaking;
+    ClearRuntimeError(&runtime);
+    runtime.state_ticks = 0;
+    runtime.last_tx_seconds = 0;
+}
+
+void SetPeerActive(std::size_t peer_index) {
+    auto &runtime = g_state.runtime[peer_index];
+    runtime.state = wgnx::PeerRuntimeState::Active;
+    ClearRuntimeError(&runtime);
+    runtime.state_ticks = 0;
+    runtime.established = true;
+    runtime.last_handshake_seconds = 0;
+    runtime.last_rx_seconds = 0;
+    runtime.last_tx_seconds = 0;
+}
+
+void SetPeerError(std::size_t peer_index, wgnx::PeerErrorStage stage, wgnx::PeerErrorCode code) {
+    auto &runtime = g_state.runtime[peer_index];
+    runtime.state = wgnx::PeerRuntimeState::Error;
+    runtime.error_stage = stage;
+    runtime.last_error_code = static_cast<std::uint32_t>(code);
+    runtime.state_ticks = 0;
+    runtime.established = false;
+}
+
+wgnx::PeerErrorCode ValidatePeerConfiguration(const wgnx::PeerConfigEntry &config) {
+    if (config.private_key[0] == '\0' || config.public_key[0] == '\0' || config.allowed_ips[0] == '\0') {
+        return wgnx::PeerErrorCode::ConfigInvalid;
+    }
+    if (config.endpoint[0] == '\0') {
+        return wgnx::PeerErrorCode::EndpointMissing;
+    }
+
+    const char *port = std::strrchr(config.endpoint, ':');
+    if (port == nullptr || port == config.endpoint || port[1] == '\0') {
+        return wgnx::PeerErrorCode::EndpointMalformed;
     }
 
     ++port;
     char *end = nullptr;
     const unsigned long value = std::strtoul(port, &end, 10);
-    return end != port && *end == '\0' && value > 0 && value <= 65535;
-}
+    if (end == port || *end != '\0' || value == 0 || value > 65535) {
+        return wgnx::PeerErrorCode::EndpointMalformed;
+    }
 
-void SetRuntimeError(std::size_t peer_index, wgnx::PeerErrorStage stage, std::uint32_t code) {
-    auto &runtime = g_state.runtime[peer_index];
-    runtime.state = wgnx::PeerRuntimeState::Error;
-    runtime.error_stage = stage;
-    runtime.last_error_code = code;
-    runtime.established = false;
+    return wgnx::PeerErrorCode::None;
 }
 
 void StartPeerRuntime(std::size_t peer_index) {
-    auto &config = g_state.configured_peers[peer_index];
-    auto &runtime = g_state.runtime[peer_index];
-
-    ResetRuntimePeer(&runtime, config);
-    if (!EndpointLooksUsable(config.endpoint)) {
-        SetRuntimeError(peer_index, wgnx::PeerErrorStage::ResolveEndpoint, 1);
+    const auto &config = g_state.configured_peers[peer_index];
+    const wgnx::PeerErrorCode config_error = ValidatePeerConfiguration(config);
+    if (config_error == wgnx::PeerErrorCode::ConfigInvalid) {
+        SetPeerError(peer_index, wgnx::PeerErrorStage::Config, config_error);
+        return;
+    }
+    if (config_error != wgnx::PeerErrorCode::None) {
+        SetPeerError(peer_index, wgnx::PeerErrorStage::ResolveEndpoint, config_error);
         return;
     }
 
-    runtime.state = wgnx::PeerRuntimeState::ResolvingEndpoint;
+    SetPeerResolving(peer_index);
 }
 
 void AdvanceAges(DaemonState::PeerRuntimeInfo *runtime) {
@@ -167,7 +222,7 @@ void InitializeState() {
         for (std::size_t i = 0; i < config.peer_count; ++i) {
             const auto &entry = config.peers[i];
             g_state.configured_peers[i] = entry;
-            ResetRuntimePeer(&g_state.runtime[i], entry);
+            SetPeerInactive(i);
 
             if (has_auto_start_name && std::strncmp(entry.name, auto_start_name, sizeof(entry.name)) == 0) {
                 g_state.auto_start_peer_index = static_cast<std::int32_t>(i);
@@ -202,17 +257,12 @@ void TickActivePeer() {
             if (runtime.state_ticks >= 1) {
                 runtime.state = wgnx::PeerRuntimeState::Handshaking;
                 runtime.state_ticks = 0;
-                runtime.last_tx_seconds = 0;
+                SetPeerHandshaking(static_cast<std::size_t>(g_state.active_peer_index));
             }
             break;
         case wgnx::PeerRuntimeState::Handshaking:
             if (runtime.state_ticks >= 2) {
-                runtime.state = wgnx::PeerRuntimeState::Active;
-                runtime.state_ticks = 0;
-                runtime.established = true;
-                runtime.last_handshake_seconds = 0;
-                runtime.last_rx_seconds = 0;
-                runtime.last_tx_seconds = 0;
+                SetPeerActive(static_cast<std::size_t>(g_state.active_peer_index));
             }
             break;
         case wgnx::PeerRuntimeState::Active:
@@ -283,7 +333,7 @@ ams::Result ControlService::SetActivePeer(const wgnx::PeerSelectionRequest &requ
 
     if (g_state.active_peer_index >= 0 && g_state.active_peer_index != request.peer_index) {
         const std::size_t old_index = static_cast<std::size_t>(g_state.active_peer_index);
-        ResetRuntimePeer(&g_state.runtime[old_index], g_state.configured_peers[old_index]);
+        SetPeerInactive(old_index);
     }
 
     g_state.active_peer_index = request.peer_index;
