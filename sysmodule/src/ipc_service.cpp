@@ -1,17 +1,24 @@
 #include "ipc_service.hpp"
+
 #include "config_loader.hpp"
+#include "endpoint_resolution.hpp"
 #include "logger.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
+#include <sys/socket.h>
 
 namespace wgnx::sysmodule {
 
 namespace {
 
 using ServerManager = ams::sf::hipc::ServerManager<1>;
+
+constexpr inline std::size_t ResolverThreadStackSize = 16 * 1024;
+constexpr inline s32 ResolverThreadPriority = ams::os::DefaultThreadPriority;
 
 constinit ams::util::TypedStorage<ServerManager> g_server_manager_storage = {};
 constinit ServerManager *g_server_manager = nullptr;
@@ -25,21 +32,41 @@ struct DaemonState {
         std::uint32_t last_error_code{0};
         std::uint16_t persistent_keepalive_interval{0};
         std::uint32_t state_ticks{0};
+        std::uint32_t activation_generation{0};
         std::int32_t last_handshake_seconds{-1};
         std::int32_t last_rx_seconds{-1};
         std::int32_t last_tx_seconds{-1};
         std::uint64_t rx_bytes{0};
         std::uint64_t tx_bytes{0};
+        sockaddr_storage resolved_address{};
+        socklen_t resolved_address_length{0};
+        std::uint8_t resolved_family{0};
+        char resolved_endpoint[sizeof(wgnx::PeerInfo::resolved_endpoint)]{};
         bool established{false};
+        bool has_resolved_endpoint{false};
     };
     std::array<PeerRuntimeInfo, wgnx::MaxPeers> runtime{};
     std::uint32_t peer_count{0};
+    std::uint32_t next_activation_generation{1};
     std::int32_t active_peer_index{-1};
     std::int32_t auto_start_peer_index{-1};
     bool initialized{false};
 };
 
+struct ResolveRequest {
+    bool pending{false};
+    std::size_t peer_index{0};
+    std::uint32_t activation_generation{0};
+    char endpoint[sizeof(wgnx::PeerConfigEntry::endpoint)]{};
+};
+
 constinit DaemonState g_state = {};
+ams::os::Mutex g_state_mutex(false);
+alignas(ams::os::ThreadStackAlignment) constinit std::uint8_t g_resolver_thread_stack[ResolverThreadStackSize] = {};
+constinit ams::os::ThreadType g_resolver_thread = {};
+constinit bool g_resolver_thread_started = false;
+ams::os::Event g_resolver_event(ams::os::EventClearMode_AutoClear);
+ResolveRequest g_resolve_request = {};
 
 void ResetRuntimeMetrics(DaemonState::PeerRuntimeInfo *runtime) {
     if (runtime == nullptr) {
@@ -55,6 +82,18 @@ void ResetRuntimeMetrics(DaemonState::PeerRuntimeInfo *runtime) {
     runtime->established = false;
 }
 
+void ClearResolvedEndpoint(DaemonState::PeerRuntimeInfo *runtime) {
+    if (runtime == nullptr) {
+        return;
+    }
+
+    runtime->resolved_address = {};
+    runtime->resolved_address_length = 0;
+    runtime->resolved_family = 0;
+    runtime->resolved_endpoint[0] = '\0';
+    runtime->has_resolved_endpoint = false;
+}
+
 void ClearRuntimeError(DaemonState::PeerRuntimeInfo *runtime) {
     if (runtime == nullptr) {
         return;
@@ -64,21 +103,47 @@ void ClearRuntimeError(DaemonState::PeerRuntimeInfo *runtime) {
     runtime->last_error_code = static_cast<std::uint32_t>(wgnx::PeerErrorCode::None);
 }
 
+void SetResolvedEndpoint(DaemonState::PeerRuntimeInfo *runtime, const endpoint_resolution::ResolvedEndpoint &resolved) {
+    if (runtime == nullptr) {
+        return;
+    }
+
+    runtime->resolved_address = resolved.address;
+    runtime->resolved_address_length = resolved.address_length;
+    runtime->resolved_family = resolved.family;
+    std::snprintf(runtime->resolved_endpoint, sizeof(runtime->resolved_endpoint), "%s", resolved.endpoint);
+    runtime->has_resolved_endpoint = true;
+}
+
 void SetPeerInactive(std::size_t peer_index) {
-    auto &config = g_state.configured_peers[peer_index];
+    const auto &config = g_state.configured_peers[peer_index];
     auto &runtime = g_state.runtime[peer_index];
     runtime = {};
     runtime.state = wgnx::PeerRuntimeState::Inactive;
     runtime.persistent_keepalive_interval = config.persistent_keepalive;
     ClearRuntimeError(&runtime);
     ResetRuntimeMetrics(&runtime);
+    ClearResolvedEndpoint(&runtime);
 }
 
-void SetPeerResolving(std::size_t peer_index) {
+std::uint32_t AllocateActivationGeneration() {
+    const std::uint32_t generation = g_state.next_activation_generation++;
+    if (g_state.next_activation_generation == 0) {
+        g_state.next_activation_generation = 1;
+    }
+    return generation;
+}
+
+void SetPeerResolving(std::size_t peer_index, std::uint32_t activation_generation) {
+    const auto &config = g_state.configured_peers[peer_index];
     auto &runtime = g_state.runtime[peer_index];
+    runtime = {};
     runtime.state = wgnx::PeerRuntimeState::ResolvingEndpoint;
+    runtime.persistent_keepalive_interval = config.persistent_keepalive;
+    runtime.activation_generation = activation_generation;
     ClearRuntimeError(&runtime);
     ResetRuntimeMetrics(&runtime);
+    ClearResolvedEndpoint(&runtime);
 }
 
 void SetPeerHandshaking(std::size_t peer_index) {
@@ -117,19 +182,18 @@ wgnx::PeerErrorCode ValidatePeerConfiguration(const wgnx::PeerConfigEntry &confi
         return wgnx::PeerErrorCode::EndpointMissing;
     }
 
-    const char *port = std::strrchr(config.endpoint, ':');
-    if (port == nullptr || port == config.endpoint || port[1] == '\0') {
-        return wgnx::PeerErrorCode::EndpointMalformed;
-    }
-
-    ++port;
-    char *end = nullptr;
-    const unsigned long value = std::strtoul(port, &end, 10);
-    if (end == port || *end != '\0' || value == 0 || value > 65535) {
-        return wgnx::PeerErrorCode::EndpointMalformed;
-    }
-
     return wgnx::PeerErrorCode::None;
+}
+
+void QueueEndpointResolve(std::size_t peer_index) {
+    const auto &config = g_state.configured_peers[peer_index];
+    const auto &runtime = g_state.runtime[peer_index];
+    g_resolve_request = {};
+    g_resolve_request.pending = true;
+    g_resolve_request.peer_index = peer_index;
+    g_resolve_request.activation_generation = runtime.activation_generation;
+    std::snprintf(g_resolve_request.endpoint, sizeof(g_resolve_request.endpoint), "%s", config.endpoint);
+    g_resolver_event.Signal();
 }
 
 void StartPeerRuntime(std::size_t peer_index) {
@@ -144,7 +208,11 @@ void StartPeerRuntime(std::size_t peer_index) {
         return;
     }
 
-    SetPeerResolving(peer_index);
+    const std::uint32_t activation_generation = AllocateActivationGeneration();
+    SetPeerResolving(peer_index, activation_generation);
+    QueueEndpointResolve(peer_index);
+    logger::Log("Queued endpoint resolution for peer %zu activation=%u endpoint='%s'",
+        peer_index, activation_generation, config.endpoint);
 }
 
 void AdvanceAges(DaemonState::PeerRuntimeInfo *runtime) {
@@ -171,6 +239,7 @@ wgnx::PeerInfo BuildPeerInfo(std::size_t peer_index) {
     std::snprintf(peer.name, sizeof(peer.name), "%s", config.name);
     std::snprintf(peer.address, sizeof(peer.address), "%s", config.address);
     std::snprintf(peer.endpoint, sizeof(peer.endpoint), "%s", config.endpoint);
+    std::snprintf(peer.resolved_endpoint, sizeof(peer.resolved_endpoint), "%s", runtime.resolved_endpoint);
     peer.last_handshake_seconds = runtime.last_handshake_seconds;
     peer.last_rx_seconds = runtime.last_rx_seconds;
     peer.last_tx_seconds = runtime.last_tx_seconds;
@@ -178,6 +247,7 @@ wgnx::PeerInfo BuildPeerInfo(std::size_t peer_index) {
     peer.persistent_keepalive_interval = runtime.persistent_keepalive_interval;
     peer.runtime_state = static_cast<std::uint8_t>(runtime.state);
     peer.error_stage = static_cast<std::uint8_t>(runtime.error_stage);
+    peer.resolved_family = runtime.resolved_family;
     peer.rx_bytes = runtime.rx_bytes;
     peer.tx_bytes = runtime.tx_bytes;
     peer.flags = 0;
@@ -193,6 +263,9 @@ wgnx::PeerInfo BuildPeerInfo(std::size_t peer_index) {
     }
     if (runtime.state == wgnx::PeerRuntimeState::Error) {
         peer.flags |= wgnx::PeerFlag_HasError;
+    }
+    if (runtime.has_resolved_endpoint) {
+        peer.flags |= wgnx::PeerFlag_HasResolvedEndpoint;
     }
 
     return peer;
@@ -254,11 +327,6 @@ void TickActivePeer() {
         case wgnx::PeerRuntimeState::Inactive:
             break;
         case wgnx::PeerRuntimeState::ResolvingEndpoint:
-            if (runtime.state_ticks >= 1) {
-                runtime.state = wgnx::PeerRuntimeState::Handshaking;
-                runtime.state_ticks = 0;
-                SetPeerHandshaking(static_cast<std::size_t>(g_state.active_peer_index));
-            }
             break;
         case wgnx::PeerRuntimeState::Handshaking:
             if (runtime.state_ticks >= 2) {
@@ -283,15 +351,89 @@ void TickActivePeer() {
     }
 }
 
+bool DequeueResolveRequest(ResolveRequest *out_request) {
+    std::scoped_lock lock(g_state_mutex);
+    if (!g_resolve_request.pending || out_request == nullptr) {
+        return false;
+    }
+
+    *out_request = g_resolve_request;
+    g_resolve_request.pending = false;
+    return true;
+}
+
+void CommitResolveResult(const ResolveRequest &request, const endpoint_resolution::ResolveResult &result) {
+    std::scoped_lock lock(g_state_mutex);
+    if (request.peer_index >= g_state.peer_count) {
+        return;
+    }
+
+    auto &runtime = g_state.runtime[request.peer_index];
+    if (g_state.active_peer_index != static_cast<std::int32_t>(request.peer_index) ||
+        runtime.activation_generation != request.activation_generation ||
+        runtime.state != wgnx::PeerRuntimeState::ResolvingEndpoint) {
+        return;
+    }
+
+    if (!result.success) {
+        SetPeerError(request.peer_index, result.error_stage, result.error_code);
+        logger::Log("Endpoint resolution failed for peer %zu activation=%u stage=%s code=%s",
+            request.peer_index,
+            request.activation_generation,
+            wgnx::GetPeerErrorStageName(result.error_stage),
+            wgnx::GetPeerErrorCodeName(result.error_code));
+        return;
+    }
+
+    SetResolvedEndpoint(std::addressof(runtime), result.endpoint);
+    SetPeerHandshaking(request.peer_index);
+    logger::Log("Endpoint resolved for peer %zu activation=%u -> %s",
+        request.peer_index,
+        request.activation_generation,
+        runtime.resolved_endpoint);
+}
+
+void ResolverThreadMain(void *) {
+    while (true) {
+        g_resolver_event.Wait();
+
+        ResolveRequest request{};
+        while (DequeueResolveRequest(std::addressof(request))) {
+            const auto result = endpoint_resolution::Resolve(request.endpoint);
+            CommitResolveResult(request, result);
+        }
+    }
+}
+
+void InitializeResolverWorker() {
+    if (g_resolver_thread_started) {
+        return;
+    }
+
+    R_ABORT_UNLESS(ams::os::CreateThread(
+        std::addressof(g_resolver_thread),
+        ResolverThreadMain,
+        nullptr,
+        g_resolver_thread_stack,
+        sizeof(g_resolver_thread_stack),
+        ResolverThreadPriority));
+    ams::os::SetThreadNamePointer(std::addressof(g_resolver_thread), "wgnx-resolve");
+    ams::os::StartThread(std::addressof(g_resolver_thread));
+    g_resolver_thread_started = true;
+    logger::Log("Started endpoint resolver worker");
+}
+
 } // namespace
 
 ams::Result ControlService::GetApiVersion(ams::sf::Out<u32> out) {
+    std::scoped_lock lock(g_state_mutex);
     InitializeState();
     out.SetValue(wgnx::IpcApiVersion);
     R_SUCCEED();
 }
 
 ams::Result ControlService::GetDaemonStatus(ams::sf::Out<wgnx::DaemonStatus> out) {
+    std::scoped_lock lock(g_state_mutex);
     InitializeState();
     TickActivePeer();
 
@@ -311,6 +453,7 @@ ams::Result ControlService::GetDaemonStatus(ams::sf::Out<wgnx::DaemonStatus> out
 }
 
 ams::Result ControlService::ListPeers(ams::sf::Out<u32> out_count, const ams::sf::OutArray<wgnx::PeerInfo> &out) {
+    std::scoped_lock lock(g_state_mutex);
     InitializeState();
     TickActivePeer();
 
@@ -324,11 +467,17 @@ ams::Result ControlService::ListPeers(ams::sf::Out<u32> out_count, const ams::sf
 }
 
 ams::Result ControlService::SetActivePeer(const wgnx::PeerSelectionRequest &request) {
+    std::scoped_lock lock(g_state_mutex);
     InitializeState();
 
     if (!IsValidPeerIndex(request.peer_index)) {
         logger::Log("Rejected SetActivePeer(%d): invalid index", request.peer_index);
         R_THROW(ams::fs::ResultInvalidArgument());
+    }
+
+    if (request.peer_index == g_state.active_peer_index) {
+        logger::Log("SetActivePeer(%d): no change", request.peer_index);
+        R_SUCCEED();
     }
 
     if (g_state.active_peer_index >= 0 && g_state.active_peer_index != request.peer_index) {
@@ -345,6 +494,7 @@ ams::Result ControlService::SetActivePeer(const wgnx::PeerSelectionRequest &requ
 }
 
 ams::Result ControlService::SetAutoStartPeer(const wgnx::PeerSelectionRequest &request) {
+    std::scoped_lock lock(g_state_mutex);
     InitializeState();
 
     if (!IsValidPeerIndex(request.peer_index)) {
@@ -369,7 +519,11 @@ ams::Result ControlService::SetAutoStartPeer(const wgnx::PeerSelectionRequest &r
 }
 
 void RunIpcServer() {
-    InitializeState();
+    {
+        std::scoped_lock lock(g_state_mutex);
+        InitializeState();
+    }
+    InitializeResolverWorker();
     logger::Log("Constructing IPC server");
 
     g_server_manager = ams::util::ConstructAt(g_server_manager_storage);

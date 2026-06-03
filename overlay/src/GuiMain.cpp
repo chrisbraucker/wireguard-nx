@@ -19,6 +19,7 @@ constexpr const char* const descriptions[2][2] = {
 };
 
 std::string formatHex32(std::uint32_t value);
+std::string displayEndpoint(const WireGuardPeer& peer);
 
 GuiMain::GuiMain() {
     m_peers.reserve(5);
@@ -114,7 +115,7 @@ tsl::elm::Element* GuiMain::createUI() {
             renderer->drawString("State: " + peerStateSummary(peer), false, x + 15, y + 10, 15, tsl::infoTextColor);
             renderer->drawString("Detail: " + peerStateDetail(peer), false, x + 15, y + 30, 15, tsl::infoTextColor);
             renderer->drawString("Address: " + peer.address, false, x + 15, y + 50, 15, tsl::infoTextColor);
-            renderer->drawString("Endpoint: " + peer.endpoint, false, x + 15, y + 70, 15, tsl::infoTextColor);
+            renderer->drawString("Endpoint: " + displayEndpoint(peer), false, x + 15, y + 70, 15, tsl::infoTextColor);
             renderer->drawString("Last Handshake: " + moment(peer.lastHandshake), false, x + 15, y + 90, 15, tsl::infoTextColor);
             renderer->drawString("Last RX: " + moment(peer.lastRx) + ",   Last TX: " + moment(peer.lastTx), false, x + 15, y + 110, 15, tsl::infoTextColor);
             renderer->drawString("RX: " + formatBytes(peer.rxBytes) + ",   TX: " + formatBytes(peer.txBytes), false, x + 15, y + 130, 15, tsl::infoTextColor);
@@ -178,6 +179,7 @@ bool GuiMain::getPeers(std::vector<WireGuardPeer>& peers) {
             .name = remote.name,
             .address = remote.address,
             .endpoint = remote.endpoint,
+            .resolvedEndpoint = remote.resolved_endpoint,
             .lastHandshake = remote.last_handshake_seconds,
             .lastRx = remote.last_rx_seconds,
             .lastTx = remote.last_tx_seconds,
@@ -185,12 +187,14 @@ bool GuiMain::getPeers(std::vector<WireGuardPeer>& peers) {
             .persistentKeepaliveInterval = remote.persistent_keepalive_interval,
             .runtimeState = remote.runtime_state,
             .errorStage = remote.error_stage,
+            .resolvedFamily = remote.resolved_family,
             .rxBytes = remote.rx_bytes,
             .txBytes = remote.tx_bytes,
             .isActive = (remote.flags & wgnx::PeerFlag_Active) != 0,
             .isAutoStartEnabled = (remote.flags & wgnx::PeerFlag_AutoStart) != 0,
             .isEstablished = (remote.flags & wgnx::PeerFlag_Established) != 0,
             .hasError = (remote.flags & wgnx::PeerFlag_HasError) != 0,
+            .hasResolvedEndpoint = (remote.flags & wgnx::PeerFlag_HasResolvedEndpoint) != 0,
         });
     }
 
@@ -212,6 +216,7 @@ bool GuiMain::refreshPeers() {
 
         peer.address = remote_peer->address;
         peer.endpoint = remote_peer->endpoint;
+        peer.resolvedEndpoint = remote_peer->resolvedEndpoint;
         peer.lastHandshake = remote_peer->lastHandshake;
         peer.lastRx = remote_peer->lastRx;
         peer.lastTx = remote_peer->lastTx;
@@ -219,12 +224,14 @@ bool GuiMain::refreshPeers() {
         peer.persistentKeepaliveInterval = remote_peer->persistentKeepaliveInterval;
         peer.runtimeState = remote_peer->runtimeState;
         peer.errorStage = remote_peer->errorStage;
+        peer.resolvedFamily = remote_peer->resolvedFamily;
         peer.rxBytes = remote_peer->rxBytes;
         peer.txBytes = remote_peer->txBytes;
         peer.isActive = remote_peer->isActive;
         peer.isAutoStartEnabled = remote_peer->isAutoStartEnabled;
         peer.isEstablished = remote_peer->isEstablished;
         peer.hasError = remote_peer->hasError;
+        peer.hasResolvedEndpoint = remote_peer->hasResolvedEndpoint;
 
         peer.listItem->setValue(descriptions[peer.isActive][peer.isAutoStartEnabled], !peer.isActive);
         if (peer.isActive)
@@ -260,6 +267,14 @@ std::string formatHex32(std::uint32_t value) {
     char buffer[9];
     std::snprintf(buffer, sizeof(buffer), "%08X", value);
     return std::string(buffer);
+}
+
+std::string displayEndpoint(const WireGuardPeer& peer) {
+    if (peer.isActive && peer.hasResolvedEndpoint) {
+        return peer.resolvedEndpoint;
+    }
+
+    return peer.endpoint;
 }
 
 std::string moment(std::int32_t seconds) {

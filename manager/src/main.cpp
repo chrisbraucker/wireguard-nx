@@ -82,8 +82,12 @@ int main(int argc, char **argv)
         if (R_SUCCEEDED(wgnx::client::ListPeers(peers.data(), peers.size(), &peer_count))) {
             for (u32 i = 0; i < peer_count && i < peers.size(); ++i) {
                 const auto& peer = peers[i];
-                printf("[%u] %s | %s | %s | state=%s stage=%s flags=0x%02X | hs=%d rx_age=%d tx_age=%d | ka=%us err=%s (0x%08X)\n",
-                    i, peer.name, peer.address, peer.endpoint,
+                const char *endpoint = ((peer.flags & wgnx::PeerFlag_Active) != 0 &&
+                                        (peer.flags & wgnx::PeerFlag_HasResolvedEndpoint) != 0)
+                    ? peer.resolved_endpoint
+                    : peer.endpoint;
+                printf("[%u] %s | %s | endpoint=%s | state=%s stage=%s flags=0x%02X | hs=%d rx_age=%d tx_age=%d | ka=%us err=%s (0x%08X)\n",
+                    i, peer.name, peer.address, endpoint,
                     wgnx::GetPeerRuntimeStateName(static_cast<wgnx::PeerRuntimeState>(peer.runtime_state)),
                     wgnx::GetPeerErrorStageName(static_cast<wgnx::PeerErrorStage>(peer.error_stage)),
                     peer.flags,

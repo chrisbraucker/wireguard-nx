@@ -12,6 +12,7 @@ struct WireGuardPeer {
     std::string name;
     std::string address;
     std::string endpoint;
+    std::string resolvedEndpoint;
     std::int32_t lastHandshake;
     std::int32_t lastRx;
     std::int32_t lastTx;
@@ -19,12 +20,14 @@ struct WireGuardPeer {
     std::uint16_t persistentKeepaliveInterval;
     std::uint8_t runtimeState;
     std::uint8_t errorStage;
+    std::uint8_t resolvedFamily;
     std::uint64_t rxBytes;
     std::uint64_t txBytes;
     bool isActive;
     bool isAutoStartEnabled;
     bool isEstablished;
     bool hasError;
+    bool hasResolvedEndpoint;
 };
 
 class GuiMain : public tsl::Gui {

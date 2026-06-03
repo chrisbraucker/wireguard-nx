@@ -23,6 +23,7 @@ enum PeerFlags : std::uint8_t {
     PeerFlag_AutoStart = 1U << 1,
     PeerFlag_Established = 1U << 2,
     PeerFlag_HasError = 1U << 3,
+    PeerFlag_HasResolvedEndpoint = 1U << 4,
 };
 
 enum class PeerRuntimeState : std::uint8_t {
@@ -62,6 +63,7 @@ struct PeerInfo {
     char name[32];
     char address[48];
     char endpoint[256];
+    char resolved_endpoint[64];
     std::int32_t last_handshake_seconds;
     std::int32_t last_rx_seconds;
     std::int32_t last_tx_seconds;
@@ -69,6 +71,8 @@ struct PeerInfo {
     std::uint16_t persistent_keepalive_interval;
     std::uint8_t runtime_state;
     std::uint8_t error_stage;
+    std::uint8_t resolved_family;
+    std::uint8_t reserved0;
     std::uint64_t rx_bytes;
     std::uint64_t tx_bytes;
     std::uint8_t flags;
