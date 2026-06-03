@@ -3,11 +3,13 @@
 import argparse
 import pathlib
 import re
+import struct
 import subprocess
 import sys
 
 
 REGISTER_PATTERN = re.compile(r"\b(PC|LR|FAR|SP|ESR)\b\s*[:=]\s*(0x[0-9A-Fa-f]+)")
+FATAL_MAGIC = 0x32454641  # "AFE2"
 
 
 def parse_args() -> argparse.Namespace:
@@ -45,8 +47,22 @@ def parse_hex(value: str) -> int:
 
 
 def read_report(path: pathlib.Path) -> dict[str, int]:
+    data = path.read_bytes()
+    if len(data) >= 0x150:
+        magic = struct.unpack_from("<I", data, 0x0)[0]
+        if magic == FATAL_MAGIC:
+            return {
+                "PC": struct.unpack_from("<Q", data, 0x110)[0],
+                "LR": struct.unpack_from("<Q", data, 0x100)[0],
+                "SP": struct.unpack_from("<Q", data, 0x108)[0],
+                "ESR": struct.unpack_from("<I", data, 0x12C)[0],
+                "FAR": struct.unpack_from("<Q", data, 0x130)[0],
+                "MODULE_BASE": struct.unpack_from("<Q", data, 0x118)[0],
+                "ERROR_DESC": struct.unpack_from("<I", data, 0x4)[0],
+            }
+
     registers: dict[str, int] = {}
-    text = path.read_text(encoding="utf-8", errors="replace")
+    text = data.decode(encoding="utf-8", errors="replace")
     for name, value in REGISTER_PATTERN.findall(text):
         registers[name] = parse_hex(value)
     return registers
@@ -89,7 +105,14 @@ def main() -> int:
         return 1
 
     print(f"ELF:   {elf}")
+    if "MODULE_BASE" in registers and slide == 0:
+        slide = registers["MODULE_BASE"]
+
     print(f"Slide: {hex(slide)}")
+    if "ERROR_DESC" in registers:
+        print(f"ERROR_DESC: {hex(registers['ERROR_DESC'])}")
+    if "MODULE_BASE" in registers:
+        print(f"MODULE_BASE: {hex(registers['MODULE_BASE'])}")
 
     for name in ("PC", "LR", "FAR", "SP", "ESR"):
         if name not in registers:
