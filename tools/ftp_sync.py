@@ -132,7 +132,7 @@ def pull_fatals(ftp: ftplib.FTP, reports_dir: Path, *, delete_remote: bool = Fal
         raise
 
     for entry in remote_entries:
-        remote_path = PurePosixPath(entry)
+        remote_path = REMOTE_FATAL_DIR / PurePosixPath(entry)
         local_path = reports_dir / remote_path.name
         download_file(ftp, remote_path, local_path, delete_remote=delete_remote)
 
