@@ -25,7 +25,7 @@ TITLE_ID	:=	010000000000EAD0
 DISTDIR		:=	$(OUTDIR)/atmosphere/contents/$(TITLE_ID)
 DATA		:=	data
 RESOURCES	:=	res
-SOURCES		+=	src
+SOURCES		+=	src src/platform/horizon
 INCLUDES	+=	../common/include \
 			$(TOPDIR)/lib/Atmosphere-libs/libstratosphere/include \
 			$(TOPDIR)/lib/Atmosphere-libs/libvapours/include
