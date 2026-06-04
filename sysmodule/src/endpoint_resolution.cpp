@@ -16,6 +16,10 @@
 #include <switch/runtime/resolver.h>
 #include <switch/services/nifm.h>
 
+extern "C" {
+#include <switch/services/sfdnsres.h>
+}
+
 #include "logger.hpp"
 
 namespace wgnx::sysmodule::endpoint_resolution {
@@ -26,6 +30,7 @@ constexpr inline std::size_t MaxEndpointText = sizeof(wgnx::PeerInfo::endpoint);
 constexpr inline std::size_t MaxResolvedText = sizeof(wgnx::PeerInfo::resolved_endpoint);
 constexpr inline std::size_t MaxHostText = MaxEndpointText;
 constexpr inline std::size_t MaxServiceText = 6;
+constexpr inline std::size_t ResolverAddrInfoBufferSize = 16 * 1024;
 
 using SocketConfigType = ams::socket::SystemConfigLightDefault;
 
@@ -38,6 +43,7 @@ constexpr inline size_t SocketMemoryPoolSize = ams::util::AlignUp(
 constexpr inline size_t SocketRequiredSize = ams::util::AlignUp(SocketMemoryPoolSize + SocketAllocatorSize, ams::os::MemoryPageSize);
 
 alignas(ams::os::MemoryPageSize) constinit std::uint8_t g_socket_memory[SocketRequiredSize] = {};
+constinit std::uint8_t g_resolver_addrinfo_buffer[ResolverAddrInfoBufferSize] = {};
 constinit bool g_socket_initialized = false;
 constinit bool g_nifm_initialized = false;
 ams::os::Mutex g_socket_mutex(false);
@@ -46,6 +52,17 @@ struct EndpointParts {
     char host[MaxHostText]{};
     char service[MaxServiceText]{};
 };
+
+struct AddrInfoSerializedHeader {
+    std::uint32_t magic;
+    int ai_flags;
+    int ai_family;
+    int ai_socktype;
+    int ai_protocol;
+    std::uint32_t ai_addrlen;
+};
+
+constexpr inline std::uint32_t AddrInfoMagic = 0xBEEFCAFEu;
 
 bool IsAsciiSpace(char ch) {
     return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n';
@@ -155,6 +172,95 @@ bool IsNumericHost(const char *host) {
 }
 
 bool FormatResolvedEndpoint(const sockaddr *address, char *out_text, std::size_t out_text_size, std::uint8_t *out_family);
+
+size_t SerializeHints(const addrinfo &hints, std::uint8_t *buffer, std::size_t buffer_size) {
+    if (buffer == nullptr || buffer_size < sizeof(AddrInfoSerializedHeader) + sizeof(std::uint32_t) + 1 + sizeof(std::uint32_t)) {
+        return 0;
+    }
+
+    AddrInfoSerializedHeader header = {};
+    header.magic = htonl(AddrInfoMagic);
+    header.ai_flags = htonl(hints.ai_flags);
+    header.ai_family = htonl(hints.ai_family);
+    header.ai_socktype = htonl(hints.ai_socktype);
+    header.ai_protocol = htonl(hints.ai_protocol);
+    header.ai_addrlen = 0;
+
+    std::uint8_t *out = buffer;
+    std::memcpy(out, std::addressof(header), sizeof(header));
+    out += sizeof(header);
+
+    *reinterpret_cast<std::uint32_t *>(out) = 0;
+    out += sizeof(std::uint32_t);
+    *out++ = '\0';
+    *reinterpret_cast<std::uint32_t *>(out) = 0;
+    out += sizeof(std::uint32_t);
+
+    return static_cast<std::size_t>(out - buffer);
+}
+
+bool ParseSerializedResult(ResolvedEndpoint *out, const void *buffer, std::size_t buffer_size) {
+    if (out == nullptr || buffer == nullptr || buffer_size < sizeof(AddrInfoSerializedHeader)) {
+        return false;
+    }
+
+    const auto *cursor = static_cast<const std::uint8_t *>(buffer);
+    const auto *end = cursor + buffer_size;
+
+    while (cursor + sizeof(AddrInfoSerializedHeader) <= end) {
+        const auto *header = reinterpret_cast<const AddrInfoSerializedHeader *>(cursor);
+        if (ntohl(header->magic) != AddrInfoMagic) {
+            break;
+        }
+
+        const int family = ntohl(header->ai_family);
+        std::size_t addr_length = ntohl(header->ai_addrlen);
+        if (addr_length == 0) {
+            addr_length = sizeof(std::uint32_t);
+        }
+
+        const char *canon_name = reinterpret_cast<const char *>(cursor + sizeof(AddrInfoSerializedHeader) + addr_length);
+        if (cursor + sizeof(AddrInfoSerializedHeader) + addr_length > end || canon_name >= reinterpret_cast<const char *>(end)) {
+            break;
+        }
+
+        const std::size_t canon_length = static_cast<std::size_t>(ams::util::Strnlen(
+            canon_name,
+            static_cast<int>(reinterpret_cast<const char *>(end) - canon_name))) + 1;
+        const std::size_t total_length = sizeof(AddrInfoSerializedHeader) + addr_length + canon_length;
+        if (cursor + total_length > end) {
+            break;
+        }
+
+        if (family == AF_INET) {
+            sockaddr_in addr = {};
+            std::memcpy(std::addressof(addr), cursor + sizeof(AddrInfoSerializedHeader), std::min(addr_length, sizeof(addr)));
+            addr.sin_len = sizeof(addr);
+            addr.sin_port = ntohs(addr.sin_port);
+            addr.sin_addr.s_addr = ntohl(addr.sin_addr.s_addr);
+            out->address = {};
+            std::memcpy(std::addressof(out->address), std::addressof(addr), sizeof(addr));
+            out->address_length = sizeof(addr);
+            return FormatResolvedEndpoint(reinterpret_cast<const sockaddr *>(std::addressof(addr)), out->endpoint, sizeof(out->endpoint), std::addressof(out->family));
+        }
+
+        if (family == AF_INET6) {
+            sockaddr_in6 addr = {};
+            std::memcpy(std::addressof(addr), cursor + sizeof(AddrInfoSerializedHeader), std::min(addr_length, sizeof(addr)));
+            addr.sin6_port = ntohs(addr.sin6_port);
+            addr.sin6_flowinfo = ntohl(addr.sin6_flowinfo);
+            addr.sin6_scope_id = ntohl(addr.sin6_scope_id);
+            out->address = {};
+            std::memcpy(std::addressof(out->address), std::addressof(addr), sizeof(addr));
+            out->address_length = sizeof(addr);
+            return FormatResolvedEndpoint(reinterpret_cast<const sockaddr *>(std::addressof(addr)), out->endpoint, sizeof(out->endpoint), std::addressof(out->family));
+        }
+
+        cursor += total_length;
+    }
+
+    return false;
+}
 
 bool ResolveNumericEndpoint(const EndpointParts &parts, ResolvedEndpoint *out) {
     if (out == nullptr) {
@@ -271,40 +377,54 @@ ResolveResult Resolve(const char *configured_endpoint) {
     hints.ai_protocol = IPPROTO_UDP;
     hints.ai_flags = AI_NUMERICSERV;
 
-    addrinfo *resolved = nullptr;
-    const int ga_rc = ::getaddrinfo(parts.host, parts.service, std::addressof(hints), std::addressof(resolved));
-    if (ga_rc != 0 || resolved == nullptr) {
-        const Result resolver_rc = resolverGetLastResult();
-        logger::Log("getaddrinfo failed for '%s:%s': rc=%d msg='%s' resolver_rc=0x%08x errno=%d h_errno=%d",
-            parts.host, parts.service, ga_rc, ::gai_strerror(ga_rc), static_cast<u32>(resolver_rc), errno, h_errno);
+    std::uint8_t hints_buffer[64] = {};
+    const size_t hints_size = SerializeHints(hints, hints_buffer, sizeof(hints_buffer));
+    if (hints_size == 0) {
         result.error_stage = wgnx::PeerErrorStage::ResolveEndpoint;
         result.error_code = wgnx::PeerErrorCode::EndpointResolutionFailed;
         return result;
     }
 
-    for (addrinfo *it = resolved; it != nullptr; it = it->ai_next) {
-        if (it->ai_addr == nullptr || it->ai_addrlen > sizeof(result.endpoint.address)) {
-            continue;
-        }
-        if (it->ai_family != AF_INET && it->ai_family != AF_INET6) {
-            continue;
-        }
+    std::uint32_t remote_errno = 0;
+    std::uint32_t serialized_size = 0;
+    s32 remote_ret = 0;
+    const Result resolver_rc = sfdnsresGetAddrInfoRequest(
+        resolverGetCancelHandle(),
+        resolverGetEnableServiceDiscovery(),
+        parts.host,
+        parts.service,
+        hints_buffer,
+        hints_size,
+        g_resolver_addrinfo_buffer,
+        sizeof(g_resolver_addrinfo_buffer),
+        std::addressof(remote_errno),
+        std::addressof(remote_ret),
+        std::addressof(serialized_size));
 
-        std::memcpy(std::addressof(result.endpoint.address), it->ai_addr, it->ai_addrlen);
-        result.endpoint.address_length = it->ai_addrlen;
-        if (!FormatResolvedEndpoint(it->ai_addr, result.endpoint.endpoint, sizeof(result.endpoint.endpoint), std::addressof(result.endpoint.family))) {
-            continue;
-        }
+    if (R_FAILED(resolver_rc) || remote_ret != 0) {
+        logger::Log("sfdnsresGetAddrInfoRequest failed for '%s:%s': resolver_rc=0x%08x ret=%d errno=%u serialized_size=%u",
+            parts.host, parts.service, static_cast<u32>(resolver_rc), remote_ret, remote_errno, serialized_size);
+        result.error_stage = wgnx::PeerErrorStage::ResolveEndpoint;
+        result.error_code = wgnx::PeerErrorCode::EndpointResolutionFailed;
+        return result;
+    }
 
+    if (serialized_size == 0 || serialized_size > sizeof(g_resolver_addrinfo_buffer)) {
+        logger::Log("resolver returned invalid serialized size for '%s:%s': size=%u capacity=%zu",
+            parts.host, parts.service, serialized_size, sizeof(g_resolver_addrinfo_buffer));
+        result.error_stage = wgnx::PeerErrorStage::ResolveEndpoint;
+        result.error_code = wgnx::PeerErrorCode::EndpointResolutionFailed;
+        return result;
+    }
+
+    if (ParseSerializedResult(std::addressof(result.endpoint), g_resolver_addrinfo_buffer, serialized_size)) {
         result.success = true;
         result.error_stage = wgnx::PeerErrorStage::None;
         result.error_code = wgnx::PeerErrorCode::None;
-        break;
     }
 
-    ::freeaddrinfo(resolved);
-
     if (!result.success) {
+        logger::Log("resolver returned no usable AF_INET/AF_INET6 result for '%s:%s'", parts.host, parts.service);
         result.error_stage = wgnx::PeerErrorStage::ResolveEndpoint;
         result.error_code = wgnx::PeerErrorCode::EndpointResolutionFailed;
     }
