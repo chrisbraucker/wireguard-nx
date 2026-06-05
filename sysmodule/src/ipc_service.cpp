@@ -4,6 +4,9 @@
 #include "logger.hpp"
 #include "wgnx/platform/udp.hpp"
 #include "wgnx/platform/work.hpp"
+#include "wireguard/device.hpp"
+#include "wireguard/handshake.hpp"
+#include "wireguard/timers.hpp"
 
 #include <algorithm>
 #include <array>
@@ -41,6 +44,11 @@ struct DaemonState {
         bool has_resolved_endpoint{false};
     };
     std::array<PeerRuntimeInfo, wgnx::MaxPeers> runtime{};
+    struct PeerProtocolInfo {
+        wgnx::wireguard::wg_device device{};
+        bool instantiated{false};
+    };
+    std::array<PeerProtocolInfo, wgnx::MaxPeers> protocol{};
     std::uint32_t peer_count{0};
     std::uint32_t next_activation_generation{1};
     std::int32_t active_peer_index{-1};
@@ -63,6 +71,143 @@ struct ResolveDispatcher {
 };
 constinit ResolveDispatcher g_resolve_dispatcher = {};
 wgnx::platform::workqueue_struct *g_resolver_workqueue = nullptr;
+
+constexpr inline wgnx::platform::jiffies_t SimulatedHandshakeRetransmitJiffies = 5U * wgnx::platform::HZ;
+constexpr inline wgnx::platform::jiffies_t SimulatedRekeyJiffies = 120U * wgnx::platform::HZ;
+
+void ResetProtocolPeer(std::size_t peer_index) {
+    auto &protocol = g_state.protocol[peer_index];
+    if (protocol.instantiated) {
+        if (wgnx::wireguard::wg_peer *peer = wgnx::wireguard::wg_device_first_peer(std::addressof(protocol.device))) {
+            wgnx::wireguard::wg_timers_cancel_all(std::addressof(peer->timers), peer->name);
+        }
+    }
+
+    wgnx::wireguard::wg_device_reset(std::addressof(protocol.device));
+    protocol.instantiated = false;
+}
+
+wgnx::wireguard::wg_peer *GetProtocolPeer(std::size_t peer_index) {
+    auto &protocol = g_state.protocol[peer_index];
+    if (!protocol.instantiated) {
+        return nullptr;
+    }
+
+    return wgnx::wireguard::wg_device_first_peer(std::addressof(protocol.device));
+}
+
+void InstantiateProtocolPeer(std::size_t peer_index, std::uint32_t activation_generation) {
+    auto &protocol = g_state.protocol[peer_index];
+    static_cast<void>(wgnx::wireguard::wg_device_init_from_config_entry(
+        std::addressof(protocol.device),
+        g_state.configured_peers[peer_index]));
+    protocol.instantiated = true;
+
+    if (wgnx::wireguard::wg_peer *peer = GetProtocolPeer(peer_index)) {
+        const std::uint32_t local_index =
+            (activation_generation << 8) | static_cast<std::uint32_t>(peer_index + 1U);
+        wgnx::wireguard::noise_handshake_set_local_index(std::addressof(peer->handshake), local_index);
+        logger::Log(
+            "Instantiated WG protocol peer '%s' activation=%u local_index=0x%08x",
+            peer->name,
+            activation_generation,
+            local_index);
+    }
+}
+
+void BindResolvedEndpointToProtocolPeer(std::size_t peer_index) {
+    auto &runtime = g_state.runtime[peer_index];
+    wgnx::wireguard::wg_peer *peer = GetProtocolPeer(peer_index);
+    if (peer == nullptr || !runtime.has_resolved_endpoint) {
+        return;
+    }
+
+    wgnx::wireguard::wg_peer_set_resolved_endpoint(
+        peer,
+        runtime.resolved_endpoint,
+        runtime.resolved_endpoint_text);
+    static_cast<void>(wgnx::wireguard::noise_handshake_transition(
+        std::addressof(peer->handshake),
+        wgnx::wireguard::HandshakeState::InitiationCreated,
+        peer->name,
+        "activation resolved endpoint"));
+    wgnx::wireguard::wg_timers_schedule(
+        std::addressof(peer->timers),
+        wgnx::wireguard::TimerHook::RetransmitHandshake,
+        wgnx::platform::get_jiffies_64() + SimulatedHandshakeRetransmitJiffies,
+        peer->name);
+}
+
+void AdvanceProtocolPeerHandshaking(std::size_t peer_index) {
+    auto &runtime = g_state.runtime[peer_index];
+    wgnx::wireguard::wg_peer *peer = GetProtocolPeer(peer_index);
+    if (peer == nullptr) {
+        return;
+    }
+
+    if (runtime.state_ticks == 1U) {
+        const std::uint32_t remote_index =
+            0x80000000U | (runtime.activation_generation << 4) | static_cast<std::uint32_t>(peer_index & 0xFU);
+        wgnx::wireguard::noise_handshake_set_remote_index(std::addressof(peer->handshake), remote_index);
+        static_cast<void>(wgnx::wireguard::noise_handshake_transition(
+            std::addressof(peer->handshake),
+            wgnx::wireguard::HandshakeState::ResponseReceived,
+            peer->name,
+            "simulated handshake response"));
+        wgnx::wireguard::wg_timers_cancel(
+            std::addressof(peer->timers),
+            wgnx::wireguard::TimerHook::RetransmitHandshake,
+            peer->name);
+        if (peer->persistent_keepalive_interval > 0) {
+            wgnx::wireguard::wg_timers_schedule(
+                std::addressof(peer->timers),
+                wgnx::wireguard::TimerHook::SendKeepalive,
+                wgnx::platform::get_jiffies_64() +
+                    static_cast<wgnx::platform::jiffies_t>(peer->persistent_keepalive_interval) * wgnx::platform::HZ,
+                peer->name);
+        }
+        wgnx::wireguard::wg_timers_schedule(
+            std::addressof(peer->timers),
+            wgnx::wireguard::TimerHook::Rekey,
+            wgnx::platform::get_jiffies_64() + SimulatedRekeyJiffies,
+            peer->name);
+    }
+}
+
+void MarkProtocolPeerActive(std::size_t peer_index) {
+    wgnx::wireguard::wg_peer *peer = GetProtocolPeer(peer_index);
+    if (peer == nullptr) {
+        return;
+    }
+
+    static_cast<void>(wgnx::wireguard::noise_handshake_transition(
+        std::addressof(peer->handshake),
+        wgnx::wireguard::HandshakeState::SessionDerived,
+        peer->name,
+        "simulated active transition"));
+    peer->current_keypair.valid = true;
+    peer->current_keypair.local_index = peer->handshake.local_index;
+    peer->current_keypair.remote_index = peer->handshake.remote_index;
+    peer->current_keypair.send_counter = 0;
+    peer->current_keypair.birthdate_ns = wgnx::platform::ktime_get_coarse_boottime_ns();
+    peer->next_keypair = {};
+    peer->previous_keypair = {};
+}
+
+void FailProtocolPeer(std::size_t peer_index, const char *reason) {
+    wgnx::wireguard::wg_peer *peer = GetProtocolPeer(peer_index);
+    if (peer == nullptr) {
+        return;
+    }
+
+    static_cast<void>(wgnx::wireguard::noise_handshake_transition(
+        std::addressof(peer->handshake),
+        wgnx::wireguard::HandshakeState::Failed,
+        peer->name,
+        reason));
+    wgnx::wireguard::wg_timers_cancel_all(std::addressof(peer->timers), peer->name);
+    wgnx::wireguard::wg_peer_reset_keypairs(peer);
+}
 
 void ResetRuntimeMetrics(DaemonState::PeerRuntimeInfo *runtime) {
     if (runtime == nullptr) {
@@ -110,6 +255,7 @@ void SetResolvedEndpoint(DaemonState::PeerRuntimeInfo *runtime, const wgnx::plat
 void SetPeerInactive(std::size_t peer_index) {
     const auto &config = g_state.configured_peers[peer_index];
     auto &runtime = g_state.runtime[peer_index];
+    ResetProtocolPeer(peer_index);
     runtime = {};
     runtime.state = wgnx::PeerRuntimeState::Inactive;
     runtime.persistent_keepalive_interval = config.persistent_keepalive;
@@ -155,6 +301,7 @@ void SetPeerActive(std::size_t peer_index) {
     runtime.last_handshake_seconds = 0;
     runtime.last_rx_seconds = 0;
     runtime.last_tx_seconds = 0;
+    MarkProtocolPeerActive(peer_index);
 }
 
 void SetPeerError(std::size_t peer_index, wgnx::PeerErrorStage stage, wgnx::PeerErrorCode code) {
@@ -164,6 +311,7 @@ void SetPeerError(std::size_t peer_index, wgnx::PeerErrorStage stage, wgnx::Peer
     runtime.last_error_code = static_cast<std::uint32_t>(code);
     runtime.state_ticks = 0;
     runtime.established = false;
+    FailProtocolPeer(peer_index, wgnx::GetPeerErrorCodeName(code));
 }
 
 wgnx::PeerErrorCode ValidatePeerConfiguration(const wgnx::PeerConfigEntry &config) {
@@ -202,6 +350,7 @@ void StartPeerRuntime(std::size_t peer_index) {
 
     const std::uint32_t activation_generation = AllocateActivationGeneration();
     SetPeerResolving(peer_index, activation_generation);
+    InstantiateProtocolPeer(peer_index, activation_generation);
     QueueEndpointResolve(peer_index);
     logger::Log("Queued endpoint resolution for peer %zu activation=%u endpoint='%s'",
         peer_index, activation_generation, config.endpoint);
@@ -321,6 +470,7 @@ void TickActivePeer() {
         case wgnx::PeerRuntimeState::ResolvingEndpoint:
             break;
         case wgnx::PeerRuntimeState::Handshaking:
+            AdvanceProtocolPeerHandshaking(static_cast<std::size_t>(g_state.active_peer_index));
             if (runtime.state_ticks >= 2) {
                 SetPeerActive(static_cast<std::size_t>(g_state.active_peer_index));
             }
@@ -378,6 +528,7 @@ void CommitResolveResult(const ResolveRequest &request, const wgnx::platform::en
     }
 
     SetResolvedEndpoint(std::addressof(runtime), result);
+    BindResolvedEndpointToProtocolPeer(request.peer_index);
     SetPeerHandshaking(request.peer_index);
     logger::Log("Endpoint resolved for peer %zu activation=%u -> %s",
         request.peer_index,
