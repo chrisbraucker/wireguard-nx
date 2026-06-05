@@ -9,13 +9,6 @@
 
 namespace wgnx::wireguard {
 
-/*
- * Deviation from Linux:
- * These packet structs use plain fixed-width integer fields rather than
- * `__le32` and `__le64` annotations. The implication is that the current
- * Horizon-only target relies on little-endian layout, while future non-little-
- * endian work would need explicit conversion wrappers.
- */
 struct message_macs {
     std::uint8_t mac1[NoiseMacSize];
     std::uint8_t mac2[NoiseMacSize];
@@ -77,6 +70,8 @@ const char *GetMessageTypeName(MessageType type);
 const char *GetParseErrorName(ParseError error);
 
 ParseResult InspectMessageType(const wgnx::platform::packet_buffer *packet, MessageType *out_type);
+void SetMessageType(std::uint32_t *field, MessageType type);
+MessageType GetMessageType(std::uint32_t field);
 
 ParseResult ParseHandshakeInitiation(
     const wgnx::platform::packet_buffer *packet,

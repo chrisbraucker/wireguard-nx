@@ -5,19 +5,12 @@
 #include "wgnx/platform/udp.hpp"
 
 #include "wireguard/handshake.hpp"
+#include "wireguard/session.hpp"
 #include "wireguard/timers.hpp"
 
 #include <cstdint>
 
 namespace wgnx::wireguard {
-
-struct noise_keypair {
-    bool valid{false};
-    std::uint32_t local_index{0};
-    std::uint32_t remote_index{0};
-    std::uint64_t send_counter{0};
-    wgnx::platform::ktime_t birthdate_ns{0};
-};
 
 /*
  * Deviation from Linux:
@@ -38,6 +31,8 @@ struct wg_peer {
     bool has_preshared_key{false};
     bool has_resolved_endpoint{false};
     wgnx::platform::endpoint resolved_endpoint{};
+    noise_static_identity static_identity{};
+    noise_handshake_material handshake_material{};
     noise_handshake handshake{};
     wg_timers timers{};
     noise_keypair current_keypair{};

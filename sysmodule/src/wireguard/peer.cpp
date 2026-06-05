@@ -18,6 +18,8 @@ void wg_peer_init_from_config(wg_peer *peer, const wgnx::PeerConfigEntry &config
     std::snprintf(peer->preshared_key, sizeof(peer->preshared_key), "%s", config.preshared_key);
     peer->persistent_keepalive_interval = config.persistent_keepalive;
     peer->has_preshared_key = config.preshared_key[0] != '\0';
+    noise_static_identity_reset(&peer->static_identity);
+    noise_handshake_material_reset(&peer->handshake_material);
     noise_handshake_init(&peer->handshake);
     wg_timers_init(&peer->timers);
     wg_peer_reset_keypairs(peer);
@@ -55,9 +57,9 @@ void wg_peer_reset_keypairs(wg_peer *peer) {
         return;
     }
 
-    peer->current_keypair = {};
-    peer->next_keypair = {};
-    peer->previous_keypair = {};
+    noise_keypair_reset(&peer->current_keypair);
+    noise_keypair_reset(&peer->next_keypair);
+    noise_keypair_reset(&peer->previous_keypair);
 }
 
 } // namespace wgnx::wireguard

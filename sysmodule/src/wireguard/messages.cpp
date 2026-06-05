@@ -1,5 +1,7 @@
 #include "wireguard/messages.hpp"
 
+#include "wireguard/endian.hpp"
+
 #include <cstring>
 
 namespace wgnx::wireguard {
@@ -22,16 +24,12 @@ ParseResult MakeSuccess(MessageType type) {
     };
 }
 
-ParseResult InspectPacketTypeAndLength(
+ParseResult ValidateExactPacket(
     const wgnx::platform::packet_buffer *packet,
     MessageType expected_type,
-    std::size_t exact_size,
-    void *out_message) {
+    std::size_t exact_size) {
     if (packet == nullptr || packet->data == nullptr) {
         return MakeFailure(ParseError::NullPacket);
-    }
-    if (out_message == nullptr) {
-        return MakeFailure(ParseError::InvalidArgument);
     }
 
     MessageType actual_type = MessageType::Invalid;
@@ -46,21 +44,15 @@ ParseResult InspectPacketTypeAndLength(
         return MakeFailure(ParseError::InvalidLength, actual_type);
     }
 
-    std::memcpy(out_message, packet->data, exact_size);
     return MakeSuccess(actual_type);
 }
 
-ParseResult InspectPacketTypeAndMinimumLength(
+ParseResult ValidateMinimumPacket(
     const wgnx::platform::packet_buffer *packet,
     MessageType expected_type,
-    std::size_t minimum_size,
-    void *out_message,
-    std::size_t copy_size) {
+    std::size_t minimum_size) {
     if (packet == nullptr || packet->data == nullptr) {
         return MakeFailure(ParseError::NullPacket);
-    }
-    if (out_message == nullptr) {
-        return MakeFailure(ParseError::InvalidArgument);
     }
 
     MessageType actual_type = MessageType::Invalid;
@@ -75,31 +67,24 @@ ParseResult InspectPacketTypeAndMinimumLength(
         return MakeFailure(ParseError::InvalidLength, actual_type);
     }
 
-    if (copy_size > packet->len) {
-        return MakeFailure(ParseError::InvalidLength, actual_type);
-    }
-
-    std::memcpy(out_message, packet->data, copy_size);
     return MakeSuccess(actual_type);
 }
 
-template<typename Message>
-ParseError SerializeFixedMessage(
+ParseError ValidateSerializeTarget(
     wgnx::platform::packet_buffer *packet,
-    const Message &message,
+    std::size_t required_size,
+    MessageType actual_type,
     MessageType expected_type) {
     if (packet == nullptr || packet->data == nullptr) {
         return ParseError::NullPacket;
     }
-    if (packet->capacity < sizeof(Message)) {
+    if (packet->capacity < required_size) {
         return ParseError::InsufficientCapacity;
     }
-    if (static_cast<MessageType>(message.type) != expected_type) {
+    if (actual_type != expected_type) {
         return ParseError::InvalidArgument;
     }
 
-    std::memcpy(packet->data, &message, sizeof(Message));
-    packet->len = sizeof(Message);
     return ParseError::None;
 }
 
@@ -155,9 +140,7 @@ ParseResult InspectMessageType(const wgnx::platform::packet_buffer *packet, Mess
         return MakeFailure(ParseError::MissingType);
     }
 
-    std::uint32_t raw_type = 0;
-    std::memcpy(&raw_type, packet->data, sizeof(raw_type));
-    const auto type = static_cast<MessageType>(raw_type);
+    const auto type = static_cast<MessageType>(LoadLe32(packet->data));
     *out_type = type;
     switch (type) {
         case MessageType::HandshakeInitiation:
@@ -172,56 +155,200 @@ ParseResult InspectMessageType(const wgnx::platform::packet_buffer *packet, Mess
     return MakeFailure(ParseError::UnknownType, type);
 }
 
+void SetMessageType(std::uint32_t *field, MessageType type) {
+    if (field == nullptr) {
+        return;
+    }
+
+    *field = static_cast<std::uint32_t>(type);
+}
+
+MessageType GetMessageType(std::uint32_t field) {
+    return static_cast<MessageType>(field);
+}
+
 ParseResult ParseHandshakeInitiation(
     const wgnx::platform::packet_buffer *packet,
     message_handshake_initiation *out_message) {
-    return InspectPacketTypeAndLength(packet, MessageType::HandshakeInitiation, sizeof(message_handshake_initiation),
-        out_message);
+    if (out_message == nullptr) {
+        return MakeFailure(ParseError::InvalidArgument);
+    }
+
+    const ParseResult result = ValidateExactPacket(packet, MessageType::HandshakeInitiation, sizeof(message_handshake_initiation));
+    if (!result.success) {
+        return result;
+    }
+
+    const std::uint8_t *in = packet->data;
+    out_message->type = LoadLe32(in);
+    in += sizeof(std::uint32_t);
+    out_message->sender_index = LoadLe32(in);
+    in += sizeof(std::uint32_t);
+    std::memcpy(out_message->unencrypted_ephemeral, in, sizeof(out_message->unencrypted_ephemeral));
+    in += sizeof(out_message->unencrypted_ephemeral);
+    std::memcpy(out_message->encrypted_static, in, sizeof(out_message->encrypted_static));
+    in += sizeof(out_message->encrypted_static);
+    std::memcpy(out_message->encrypted_timestamp, in, sizeof(out_message->encrypted_timestamp));
+    in += sizeof(out_message->encrypted_timestamp);
+    std::memcpy(&out_message->macs, in, sizeof(out_message->macs));
+    return result;
 }
 
 ParseResult ParseHandshakeResponse(
     const wgnx::platform::packet_buffer *packet,
     message_handshake_response *out_message) {
-    return InspectPacketTypeAndLength(packet, MessageType::HandshakeResponse, sizeof(message_handshake_response),
-        out_message);
+    if (out_message == nullptr) {
+        return MakeFailure(ParseError::InvalidArgument);
+    }
+
+    const ParseResult result = ValidateExactPacket(packet, MessageType::HandshakeResponse, sizeof(message_handshake_response));
+    if (!result.success) {
+        return result;
+    }
+
+    const std::uint8_t *in = packet->data;
+    out_message->type = LoadLe32(in);
+    in += sizeof(std::uint32_t);
+    out_message->sender_index = LoadLe32(in);
+    in += sizeof(std::uint32_t);
+    out_message->receiver_index = LoadLe32(in);
+    in += sizeof(std::uint32_t);
+    std::memcpy(out_message->unencrypted_ephemeral, in, sizeof(out_message->unencrypted_ephemeral));
+    in += sizeof(out_message->unencrypted_ephemeral);
+    std::memcpy(out_message->encrypted_nothing, in, sizeof(out_message->encrypted_nothing));
+    in += sizeof(out_message->encrypted_nothing);
+    std::memcpy(&out_message->macs, in, sizeof(out_message->macs));
+    return result;
 }
 
 ParseResult ParseHandshakeCookie(
     const wgnx::platform::packet_buffer *packet,
     message_handshake_cookie *out_message) {
-    return InspectPacketTypeAndLength(packet, MessageType::CookieReply, sizeof(message_handshake_cookie),
-        out_message);
+    if (out_message == nullptr) {
+        return MakeFailure(ParseError::InvalidArgument);
+    }
+
+    const ParseResult result = ValidateExactPacket(packet, MessageType::CookieReply, sizeof(message_handshake_cookie));
+    if (!result.success) {
+        return result;
+    }
+
+    const std::uint8_t *in = packet->data;
+    out_message->type = LoadLe32(in);
+    in += sizeof(std::uint32_t);
+    out_message->receiver_index = LoadLe32(in);
+    in += sizeof(std::uint32_t);
+    std::memcpy(out_message->nonce, in, sizeof(out_message->nonce));
+    in += sizeof(out_message->nonce);
+    std::memcpy(out_message->encrypted_cookie, in, sizeof(out_message->encrypted_cookie));
+    return result;
 }
 
 ParseResult ParseTransportDataHeader(
     const wgnx::platform::packet_buffer *packet,
     message_transport_data *out_message) {
-    return InspectPacketTypeAndMinimumLength(packet, MessageType::TransportData, sizeof(message_transport_data),
-        out_message, sizeof(message_transport_data));
+    if (out_message == nullptr) {
+        return MakeFailure(ParseError::InvalidArgument);
+    }
+
+    const ParseResult result = ValidateMinimumPacket(packet, MessageType::TransportData, sizeof(message_transport_data));
+    if (!result.success) {
+        return result;
+    }
+
+    const std::uint8_t *in = packet->data;
+    out_message->type = LoadLe32(in);
+    in += sizeof(std::uint32_t);
+    out_message->receiver_index = LoadLe32(in);
+    in += sizeof(std::uint32_t);
+    out_message->counter = LoadLe64(in);
+    return result;
 }
 
 ParseError SerializeHandshakeInitiation(
     wgnx::platform::packet_buffer *packet,
     const message_handshake_initiation &message) {
-    return SerializeFixedMessage(packet, message, MessageType::HandshakeInitiation);
+    ParseError error = ValidateSerializeTarget(packet, sizeof(message_handshake_initiation), GetMessageType(message.type), MessageType::HandshakeInitiation);
+    if (error != ParseError::None) {
+        return error;
+    }
+
+    std::uint8_t *out = packet->data;
+    StoreLe32(out, message.type);
+    out += sizeof(std::uint32_t);
+    StoreLe32(out, message.sender_index);
+    out += sizeof(std::uint32_t);
+    std::memcpy(out, message.unencrypted_ephemeral, sizeof(message.unencrypted_ephemeral));
+    out += sizeof(message.unencrypted_ephemeral);
+    std::memcpy(out, message.encrypted_static, sizeof(message.encrypted_static));
+    out += sizeof(message.encrypted_static);
+    std::memcpy(out, message.encrypted_timestamp, sizeof(message.encrypted_timestamp));
+    out += sizeof(message.encrypted_timestamp);
+    std::memcpy(out, &message.macs, sizeof(message.macs));
+    packet->len = sizeof(message_handshake_initiation);
+    return ParseError::None;
 }
 
 ParseError SerializeHandshakeResponse(
     wgnx::platform::packet_buffer *packet,
     const message_handshake_response &message) {
-    return SerializeFixedMessage(packet, message, MessageType::HandshakeResponse);
+    ParseError error = ValidateSerializeTarget(packet, sizeof(message_handshake_response), GetMessageType(message.type), MessageType::HandshakeResponse);
+    if (error != ParseError::None) {
+        return error;
+    }
+
+    std::uint8_t *out = packet->data;
+    StoreLe32(out, message.type);
+    out += sizeof(std::uint32_t);
+    StoreLe32(out, message.sender_index);
+    out += sizeof(std::uint32_t);
+    StoreLe32(out, message.receiver_index);
+    out += sizeof(std::uint32_t);
+    std::memcpy(out, message.unencrypted_ephemeral, sizeof(message.unencrypted_ephemeral));
+    out += sizeof(message.unencrypted_ephemeral);
+    std::memcpy(out, message.encrypted_nothing, sizeof(message.encrypted_nothing));
+    out += sizeof(message.encrypted_nothing);
+    std::memcpy(out, &message.macs, sizeof(message.macs));
+    packet->len = sizeof(message_handshake_response);
+    return ParseError::None;
 }
 
 ParseError SerializeHandshakeCookie(
     wgnx::platform::packet_buffer *packet,
     const message_handshake_cookie &message) {
-    return SerializeFixedMessage(packet, message, MessageType::CookieReply);
+    ParseError error = ValidateSerializeTarget(packet, sizeof(message_handshake_cookie), GetMessageType(message.type), MessageType::CookieReply);
+    if (error != ParseError::None) {
+        return error;
+    }
+
+    std::uint8_t *out = packet->data;
+    StoreLe32(out, message.type);
+    out += sizeof(std::uint32_t);
+    StoreLe32(out, message.receiver_index);
+    out += sizeof(std::uint32_t);
+    std::memcpy(out, message.nonce, sizeof(message.nonce));
+    out += sizeof(message.nonce);
+    std::memcpy(out, message.encrypted_cookie, sizeof(message.encrypted_cookie));
+    packet->len = sizeof(message_handshake_cookie);
+    return ParseError::None;
 }
 
 ParseError SerializeTransportDataHeader(
     wgnx::platform::packet_buffer *packet,
     const message_transport_data &message) {
-    return SerializeFixedMessage(packet, message, MessageType::TransportData);
+    ParseError error = ValidateSerializeTarget(packet, sizeof(message_transport_data), GetMessageType(message.type), MessageType::TransportData);
+    if (error != ParseError::None) {
+        return error;
+    }
+
+    std::uint8_t *out = packet->data;
+    StoreLe32(out, message.type);
+    out += sizeof(std::uint32_t);
+    StoreLe32(out, message.receiver_index);
+    out += sizeof(std::uint32_t);
+    StoreLe64(out, message.counter);
+    packet->len = sizeof(message_transport_data);
+    return ParseError::None;
 }
 
 } // namespace wgnx::wireguard

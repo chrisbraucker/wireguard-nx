@@ -104,8 +104,7 @@ void InstantiateProtocolPeer(std::size_t peer_index, std::uint32_t activation_ge
     protocol.instantiated = true;
 
     if (wgnx::wireguard::wg_peer *peer = GetProtocolPeer(peer_index)) {
-        const std::uint32_t local_index =
-            (activation_generation << 8) | static_cast<std::uint32_t>(peer_index + 1U);
+        const std::uint32_t local_index = wgnx::wireguard::wg_device_allocate_index(std::addressof(protocol.device));
         wgnx::wireguard::noise_handshake_set_local_index(std::addressof(peer->handshake), local_index);
         logger::Log(
             "Instantiated WG protocol peer '%s' activation=%u local_index=0x%08x",

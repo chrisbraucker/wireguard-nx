@@ -18,6 +18,7 @@ bool wg_device_init_from_config_entry(wg_device *device, const wgnx::PeerConfigE
     device->mtu = config.mtu;
     device->has_private_key = config.private_key[0] != '\0';
     device->has_dns = config.dns[0] != '\0';
+    wg_index_allocator_init(&device->index_allocator);
 
     wg_peer_init_from_config(&device->peers[0], config);
     device->peer_count = 1;
@@ -30,6 +31,14 @@ void wg_device_reset(wg_device *device) {
     }
 
     *device = {};
+}
+
+std::uint32_t wg_device_allocate_index(wg_device *device) {
+    if (device == nullptr) {
+        return 0;
+    }
+
+    return wg_index_allocator_next(&device->index_allocator);
 }
 
 wg_peer *wg_device_first_peer(wg_device *device) {

@@ -1,9 +1,12 @@
 #include "wireguard/debug_harness.hpp"
 
 #include "wireguard/device.hpp"
+#include "wireguard/dispatch.hpp"
+#include "wireguard/endian.hpp"
 #include "wireguard/handshake.hpp"
 #include "logger.hpp"
 #include "wireguard/messages.hpp"
+#include "wireguard/session.hpp"
 #include "wireguard/timers.hpp"
 
 #include <cstdio>
@@ -12,6 +15,47 @@
 namespace wgnx::wireguard {
 
 namespace {
+
+struct DispatchTestContext {
+    std::uint32_t initiation_count{0};
+    std::uint32_t response_count{0};
+    std::uint32_t cookie_count{0};
+    std::uint32_t transport_count{0};
+    std::size_t last_payload_size{0};
+};
+
+struct CoreSelfTestStorage {
+    wgnx::PeerConfigEntry config{};
+    wg_device device{};
+};
+
+constinit CoreSelfTestStorage g_core_self_test_storage{};
+
+void ResetCoreSelfTestStorage() {
+    g_core_self_test_storage = {};
+}
+
+void CountHandshakeInitiation(void *context, const message_handshake_initiation &) {
+    static_cast<DispatchTestContext *>(context)->initiation_count++;
+}
+
+void CountHandshakeResponse(void *context, const message_handshake_response &) {
+    static_cast<DispatchTestContext *>(context)->response_count++;
+}
+
+void CountCookieReply(void *context, const message_handshake_cookie &) {
+    static_cast<DispatchTestContext *>(context)->cookie_count++;
+}
+
+void CountTransportData(
+    void *context,
+    const message_transport_data &,
+    const std::uint8_t *,
+    std::size_t payload_size) {
+    auto *dispatch_context = static_cast<DispatchTestContext *>(context);
+    dispatch_context->transport_count++;
+    dispatch_context->last_payload_size = payload_size;
+}
 
 template<typename Message>
 bool RoundTripExact(
@@ -34,7 +78,7 @@ bool RoundTripExact(
 
 bool TestHandshakeInitiation() {
     message_handshake_initiation message = {};
-    message.type = static_cast<std::uint32_t>(MessageType::HandshakeInitiation);
+    SetMessageType(&message.type, MessageType::HandshakeInitiation);
     message.sender_index = 0x11223344U;
     for (std::size_t i = 0; i < sizeof(message.unencrypted_ephemeral); ++i) {
         message.unencrypted_ephemeral[i] = static_cast<std::uint8_t>(i);
@@ -55,7 +99,7 @@ bool TestHandshakeInitiation() {
 
 bool TestHandshakeResponse() {
     message_handshake_response message = {};
-    message.type = static_cast<std::uint32_t>(MessageType::HandshakeResponse);
+    SetMessageType(&message.type, MessageType::HandshakeResponse);
     message.sender_index = 0x01020304U;
     message.receiver_index = 0x55667788U;
     for (std::size_t i = 0; i < sizeof(message.unencrypted_ephemeral); ++i) {
@@ -74,7 +118,7 @@ bool TestHandshakeResponse() {
 
 bool TestHandshakeCookie() {
     message_handshake_cookie message = {};
-    message.type = static_cast<std::uint32_t>(MessageType::CookieReply);
+    SetMessageType(&message.type, MessageType::CookieReply);
     message.receiver_index = 0xAABBCCDDU;
     for (std::size_t i = 0; i < sizeof(message.nonce); ++i) {
         message.nonce[i] = static_cast<std::uint8_t>(0x30U + i);
@@ -88,7 +132,7 @@ bool TestHandshakeCookie() {
 
 bool TestTransportDataHeader() {
     message_transport_data message = {};
-    message.type = static_cast<std::uint32_t>(MessageType::TransportData);
+    SetMessageType(&message.type, MessageType::TransportData);
     message.receiver_index = 0xCAFEBABEU;
     message.counter = 0x0102030405060708ULL;
 
@@ -112,9 +156,8 @@ bool TestTransportDataHeader() {
 
 bool TestUnknownTypeRejected() {
     wgnx::platform::static_packet_buffer<16> buffer;
-    const std::uint32_t unknown_type = 99;
-    std::memcpy(buffer.storage.data(), &unknown_type, sizeof(unknown_type));
-    buffer.packet.len = sizeof(unknown_type);
+    StoreLe32(buffer.storage.data(), 99);
+    buffer.packet.len = sizeof(std::uint32_t);
 
     MessageType type = MessageType::Invalid;
     const ParseResult result = InspectMessageType(&buffer.packet, &type);
@@ -123,7 +166,7 @@ bool TestUnknownTypeRejected() {
 
 bool TestMalformedLengthRejected() {
     message_handshake_initiation message = {};
-    message.type = static_cast<std::uint32_t>(MessageType::HandshakeInitiation);
+    SetMessageType(&message.type, MessageType::HandshakeInitiation);
 
     wgnx::platform::static_packet_buffer<256> buffer;
     if (SerializeHandshakeInitiation(&buffer.packet, message) != ParseError::None) {
@@ -136,8 +179,73 @@ bool TestMalformedLengthRejected() {
     return !result.success && result.error == ParseError::InvalidLength;
 }
 
+bool TestPacketDispatch() {
+    message_transport_data message = {};
+    SetMessageType(&message.type, MessageType::TransportData);
+    message.receiver_index = 0x01020304U;
+    message.counter = 0xA0A1A2A3A4A5A6A7ULL;
+
+    wgnx::platform::static_packet_buffer<64> buffer;
+    if (SerializeTransportDataHeader(&buffer.packet, message) != ParseError::None) {
+        return false;
+    }
+
+    const std::uint8_t payload[3] = {0xAA, 0xBB, 0xCC};
+    std::memcpy(buffer.storage.data() + buffer.packet.len, payload, sizeof(payload));
+    buffer.packet.len += sizeof(payload);
+
+    DispatchTestContext context = {};
+    const PacketDispatchHandlers handlers = {
+        .context = &context,
+        .handshake_initiation = CountHandshakeInitiation,
+        .handshake_response = CountHandshakeResponse,
+        .cookie_reply = CountCookieReply,
+        .transport_data = CountTransportData,
+    };
+    const ParseResult result = DispatchPacket(&buffer.packet, handlers);
+    return result.success &&
+           context.transport_count == 1 &&
+           context.last_payload_size == sizeof(payload) &&
+           context.initiation_count == 0 &&
+           context.response_count == 0 &&
+           context.cookie_count == 0;
+}
+
+bool TestTransportFixedVector() {
+    message_transport_data message = {};
+    SetMessageType(&message.type, MessageType::TransportData);
+    message.receiver_index = 0xCAFEBABEU;
+    message.counter = 0x0102030405060708ULL;
+
+    wgnx::platform::static_packet_buffer<32> buffer;
+    if (SerializeTransportDataHeader(&buffer.packet, message) != ParseError::None) {
+        return false;
+    }
+
+    const std::uint8_t expected[TransportDataHeaderSize] = {
+        0x04, 0x00, 0x00, 0x00,
+        0xBE, 0xBA, 0xFE, 0xCA,
+        0x08, 0x07, 0x06, 0x05,
+        0x04, 0x03, 0x02, 0x01,
+    };
+    if (buffer.packet.len != sizeof(expected)) {
+        return false;
+    }
+    if (std::memcmp(buffer.storage.data(), expected, sizeof(expected)) != 0) {
+        return false;
+    }
+
+    message_transport_data parsed = {};
+    const ParseResult result = ParseTransportDataHeader(&buffer.packet, &parsed);
+    return result.success &&
+           GetMessageType(parsed.type) == MessageType::TransportData &&
+           parsed.receiver_index == message.receiver_index &&
+           parsed.counter == message.counter;
+}
+
 bool TestDeviceAndPeerSkeleton() {
-    wgnx::PeerConfigEntry config = {};
+    ResetCoreSelfTestStorage();
+    wgnx::PeerConfigEntry &config = g_core_self_test_storage.config;
     std::snprintf(config.name, sizeof(config.name), "%s", "harness-peer");
     std::snprintf(config.address, sizeof(config.address), "%s", "10.66.66.2/32");
     std::snprintf(config.endpoint, sizeof(config.endpoint), "%s", "vpn.example.test:51820");
@@ -150,11 +258,16 @@ bool TestDeviceAndPeerSkeleton() {
     config.persistent_keepalive = 25;
     config.mtu = 1420;
 
-    wg_device device = {};
+    wg_device &device = g_core_self_test_storage.device;
     if (!wg_device_init_from_config_entry(&device, config)) {
         return false;
     }
     if (device.peer_count != 1 || !device.has_private_key || !device.has_dns) {
+        return false;
+    }
+    const std::uint32_t first_index = wg_device_allocate_index(&device);
+    const std::uint32_t second_index = wg_device_allocate_index(&device);
+    if (first_index == 0 || second_index != first_index + 1) {
         return false;
     }
 
@@ -172,8 +285,14 @@ bool TestDeviceAndPeerSkeleton() {
     if (!peer->has_resolved_endpoint) {
         return false;
     }
+    noise_static_identity_reset(&peer->static_identity);
+    noise_handshake_material_reset(&peer->handshake_material);
+    if (peer->static_identity.static_private.valid ||
+        peer->handshake_material.chaining_key.valid) {
+        return false;
+    }
 
-    noise_handshake_set_local_index(&peer->handshake, 0x12345678U);
+    noise_handshake_set_local_index(&peer->handshake, first_index);
     noise_handshake_set_remote_index(&peer->handshake, 0x90ABCDEFU);
     static_cast<void>(noise_handshake_transition(
         &peer->handshake,
@@ -215,7 +334,9 @@ bool RunMessageSelfTest() {
         TestHandshakeCookie() &&
         TestTransportDataHeader() &&
         TestUnknownTypeRejected() &&
-        TestMalformedLengthRejected();
+        TestMalformedLengthRejected() &&
+        TestPacketDispatch() &&
+        TestTransportFixedVector();
 
     if (ok) {
         wgnx::sysmodule::logger::Log("WireGuard message self-test passed");
@@ -228,6 +349,7 @@ bool RunMessageSelfTest() {
 
 bool RunCoreSelfTest() {
     const bool ok = TestDeviceAndPeerSkeleton();
+    ResetCoreSelfTestStorage();
 
     if (ok) {
         wgnx::sysmodule::logger::Log("WireGuard core skeleton self-test passed");

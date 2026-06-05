@@ -2,6 +2,7 @@
 
 #include "wgnx/config.hpp"
 
+#include "wireguard/index_allocator.hpp"
 #include "wireguard/peer.hpp"
 
 #include <array>
@@ -27,12 +28,14 @@ struct wg_device {
     std::uint16_t mtu{0};
     bool has_private_key{false};
     bool has_dns{false};
+    wg_index_allocator index_allocator{};
     std::array<wg_peer, wgnx::MaxPeers> peers{};
     std::size_t peer_count{0};
 };
 
 bool wg_device_init_from_config_entry(wg_device *device, const wgnx::PeerConfigEntry &config);
 void wg_device_reset(wg_device *device);
+std::uint32_t wg_device_allocate_index(wg_device *device);
 wg_peer *wg_device_first_peer(wg_device *device);
 const wg_peer *wg_device_first_peer(const wg_device *device);
 
