@@ -25,7 +25,7 @@ TITLE_ID	:=	010000000000EAD0
 DISTDIR		:=	$(OUTDIR)/atmosphere/contents/$(TITLE_ID)
 DATA		:=	data
 RESOURCES	:=	res
-SOURCES		+=	src src/platform/horizon src/wireguard
+SOURCES		+=	src src/platform/horizon src/wireguard src/wireguard/crypto
 INCLUDES	+=	../common/include \
 			src \
 			src/platform/horizon \

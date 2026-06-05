@@ -5,6 +5,7 @@
 #include "wireguard/endian.hpp"
 #include "wireguard/handshake.hpp"
 #include "logger.hpp"
+#include "wireguard/crypto/primitives.hpp"
 #include "wireguard/messages.hpp"
 #include "wireguard/session.hpp"
 #include "wireguard/timers.hpp"
@@ -342,6 +343,18 @@ bool RunMessageSelfTest() {
         wgnx::sysmodule::logger::Log("WireGuard message self-test passed");
     } else {
         wgnx::sysmodule::logger::Log("WireGuard message self-test failed");
+    }
+
+    return ok;
+}
+
+bool RunPrimitiveSelfTest() {
+    const bool ok = crypto::RunPrimitiveSelfTest();
+
+    if (ok) {
+        wgnx::sysmodule::logger::Log("WireGuard primitive self-test passed");
+    } else {
+        wgnx::sysmodule::logger::Log("WireGuard primitive self-test failed");
     }
 
     return ok;
