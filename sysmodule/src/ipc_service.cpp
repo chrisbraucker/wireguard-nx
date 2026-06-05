@@ -1,8 +1,8 @@
 #include "ipc_service.hpp"
 
 #include "config_loader.hpp"
-#include "endpoint_resolution.hpp"
 #include "logger.hpp"
+#include "wgnx/platform/udp.hpp"
 #include "wgnx/platform/work.hpp"
 
 #include <algorithm>
@@ -10,7 +10,6 @@
 #include <cstdio>
 #include <cstring>
 #include <mutex>
-#include <sys/socket.h>
 
 namespace wgnx::sysmodule {
 
@@ -36,10 +35,8 @@ struct DaemonState {
         std::int32_t last_tx_seconds{-1};
         std::uint64_t rx_bytes{0};
         std::uint64_t tx_bytes{0};
-        sockaddr_storage resolved_address{};
-        socklen_t resolved_address_length{0};
-        std::uint8_t resolved_family{0};
-        char resolved_endpoint[sizeof(wgnx::PeerInfo::resolved_endpoint)]{};
+        wgnx::platform::endpoint resolved_endpoint{};
+        char resolved_endpoint_text[sizeof(wgnx::PeerInfo::resolved_endpoint)]{};
         bool established{false};
         bool has_resolved_endpoint{false};
     };
@@ -86,10 +83,8 @@ void ClearResolvedEndpoint(DaemonState::PeerRuntimeInfo *runtime) {
         return;
     }
 
-    runtime->resolved_address = {};
-    runtime->resolved_address_length = 0;
-    runtime->resolved_family = 0;
-    runtime->resolved_endpoint[0] = '\0';
+    runtime->resolved_endpoint = {};
+    runtime->resolved_endpoint_text[0] = '\0';
     runtime->has_resolved_endpoint = false;
 }
 
@@ -102,15 +97,13 @@ void ClearRuntimeError(DaemonState::PeerRuntimeInfo *runtime) {
     runtime->last_error_code = static_cast<std::uint32_t>(wgnx::PeerErrorCode::None);
 }
 
-void SetResolvedEndpoint(DaemonState::PeerRuntimeInfo *runtime, const endpoint_resolution::ResolvedEndpoint &resolved) {
+void SetResolvedEndpoint(DaemonState::PeerRuntimeInfo *runtime, const wgnx::platform::endpoint_resolution_result &resolved) {
     if (runtime == nullptr) {
         return;
     }
 
-    runtime->resolved_address = resolved.address;
-    runtime->resolved_address_length = resolved.address_length;
-    runtime->resolved_family = resolved.family;
-    std::snprintf(runtime->resolved_endpoint, sizeof(runtime->resolved_endpoint), "%s", resolved.endpoint);
+    runtime->resolved_endpoint = resolved.resolved;
+    std::snprintf(runtime->resolved_endpoint_text, sizeof(runtime->resolved_endpoint_text), "%s", resolved.text);
     runtime->has_resolved_endpoint = true;
 }
 
@@ -238,7 +231,7 @@ wgnx::PeerInfo BuildPeerInfo(std::size_t peer_index) {
     std::snprintf(peer.name, sizeof(peer.name), "%s", config.name);
     std::snprintf(peer.address, sizeof(peer.address), "%s", config.address);
     std::snprintf(peer.endpoint, sizeof(peer.endpoint), "%s", config.endpoint);
-    std::snprintf(peer.resolved_endpoint, sizeof(peer.resolved_endpoint), "%s", runtime.resolved_endpoint);
+    std::snprintf(peer.resolved_endpoint, sizeof(peer.resolved_endpoint), "%s", runtime.resolved_endpoint_text);
     peer.last_handshake_seconds = runtime.last_handshake_seconds;
     peer.last_rx_seconds = runtime.last_rx_seconds;
     peer.last_tx_seconds = runtime.last_tx_seconds;
@@ -246,7 +239,7 @@ wgnx::PeerInfo BuildPeerInfo(std::size_t peer_index) {
     peer.persistent_keepalive_interval = runtime.persistent_keepalive_interval;
     peer.runtime_state = static_cast<std::uint8_t>(runtime.state);
     peer.error_stage = static_cast<std::uint8_t>(runtime.error_stage);
-    peer.resolved_family = runtime.resolved_family;
+    peer.resolved_family = static_cast<std::uint8_t>(runtime.resolved_endpoint.family);
     peer.rx_bytes = runtime.rx_bytes;
     peer.tx_bytes = runtime.tx_bytes;
     peer.flags = 0;
@@ -361,7 +354,7 @@ bool DequeueResolveRequest(ResolveRequest *out_request) {
     return true;
 }
 
-void CommitResolveResult(const ResolveRequest &request, const endpoint_resolution::ResolveResult &result) {
+void CommitResolveResult(const ResolveRequest &request, const wgnx::platform::endpoint_resolution_result &result) {
     std::scoped_lock lock(g_state_mutex);
     if (request.peer_index >= g_state.peer_count) {
         return;
@@ -384,18 +377,18 @@ void CommitResolveResult(const ResolveRequest &request, const endpoint_resolutio
         return;
     }
 
-    SetResolvedEndpoint(std::addressof(runtime), result.endpoint);
+    SetResolvedEndpoint(std::addressof(runtime), result);
     SetPeerHandshaking(request.peer_index);
     logger::Log("Endpoint resolved for peer %zu activation=%u -> %s",
         request.peer_index,
         request.activation_generation,
-        runtime.resolved_endpoint);
+        runtime.resolved_endpoint_text);
 }
 
 void ResolverWorkMain(wgnx::platform::work_struct *) {
     ResolveRequest request{};
     while (DequeueResolveRequest(std::addressof(request))) {
-        const auto result = endpoint_resolution::Resolve(request.endpoint);
+        const auto result = wgnx::platform::resolve_endpoint(request.endpoint);
         CommitResolveResult(request, result);
     }
 }

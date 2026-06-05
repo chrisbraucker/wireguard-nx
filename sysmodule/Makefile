@@ -27,6 +27,8 @@ DATA		:=	data
 RESOURCES	:=	res
 SOURCES		+=	src src/platform/horizon
 INCLUDES	+=	../common/include \
+			src \
+			src/platform/horizon \
 			$(TOPDIR)/lib/Atmosphere-libs/libstratosphere/include \
 			$(TOPDIR)/lib/Atmosphere-libs/libvapours/include
 LIBNAMES	:= Atmosphere-libs/libstratosphere

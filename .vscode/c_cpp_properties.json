@@ -10,7 +10,8 @@
     ],
     "sysmoduleIncludePath": [
       "${workspaceFolder}/sysmodule/lib/Atmosphere-libs/libstratosphere/include/**",
-      "${workspaceFolder}/sysmodule/lib/Atmosphere-libs/libvapours/include/**"
+      "${workspaceFolder}/sysmodule/lib/Atmosphere-libs/libvapours/include/**",
+      "${workspaceFolder}/sysmodule/src/**"
     ],
     "defaultDefines": [
       "__aarch64__",
