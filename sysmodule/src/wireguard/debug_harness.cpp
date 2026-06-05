@@ -1,8 +1,12 @@
 #include "wireguard/debug_harness.hpp"
 
+#include "wireguard/device.hpp"
+#include "wireguard/handshake.hpp"
 #include "logger.hpp"
 #include "wireguard/messages.hpp"
+#include "wireguard/timers.hpp"
 
+#include <cstdio>
 #include <cstring>
 
 namespace wgnx::wireguard {
@@ -132,6 +136,76 @@ bool TestMalformedLengthRejected() {
     return !result.success && result.error == ParseError::InvalidLength;
 }
 
+bool TestDeviceAndPeerSkeleton() {
+    wgnx::PeerConfigEntry config = {};
+    std::snprintf(config.name, sizeof(config.name), "%s", "harness-peer");
+    std::snprintf(config.address, sizeof(config.address), "%s", "10.66.66.2/32");
+    std::snprintf(config.endpoint, sizeof(config.endpoint), "%s", "vpn.example.test:51820");
+    std::snprintf(config.private_key, sizeof(config.private_key), "%s", "test-private-key");
+    std::snprintf(config.public_key, sizeof(config.public_key), "%s", "test-public-key");
+    std::snprintf(config.preshared_key, sizeof(config.preshared_key), "%s", "test-preshared-key");
+    std::snprintf(config.allowed_ips, sizeof(config.allowed_ips), "%s", "0.0.0.0/0, ::/0");
+    std::snprintf(config.dns, sizeof(config.dns), "%s", "1.1.1.1");
+    config.listen_port = 51820;
+    config.persistent_keepalive = 25;
+    config.mtu = 1420;
+
+    wg_device device = {};
+    if (!wg_device_init_from_config_entry(&device, config)) {
+        return false;
+    }
+    if (device.peer_count != 1 || !device.has_private_key || !device.has_dns) {
+        return false;
+    }
+
+    wg_peer *peer = wg_device_first_peer(&device);
+    if (peer == nullptr) {
+        return false;
+    }
+
+    const wgnx::platform::endpoint endpoint = {
+        .family = wgnx::platform::address_family::inet,
+        .port = 51820,
+        .address = {203, 0, 113, 4},
+    };
+    wg_peer_set_resolved_endpoint(peer, endpoint, "203.0.113.4:51820");
+    if (!peer->has_resolved_endpoint) {
+        return false;
+    }
+
+    noise_handshake_set_local_index(&peer->handshake, 0x12345678U);
+    noise_handshake_set_remote_index(&peer->handshake, 0x90ABCDEFU);
+    static_cast<void>(noise_handshake_transition(
+        &peer->handshake,
+        HandshakeState::InitiationCreated,
+        peer->name,
+        "self-test create initiation"));
+    static_cast<void>(noise_handshake_transition(
+        &peer->handshake,
+        HandshakeState::ResponseReceived,
+        peer->name,
+        "self-test receive response"));
+    static_cast<void>(noise_handshake_transition(
+        &peer->handshake,
+        HandshakeState::SessionDerived,
+        peer->name,
+        "self-test derive session"));
+
+    wg_timers_schedule(&peer->timers, TimerHook::RetransmitHandshake, 2000, peer->name);
+    wg_timers_schedule(&peer->timers, TimerHook::Rekey, 4000, peer->name);
+    if (!wg_timers_any_pending(peer->timers)) {
+        return false;
+    }
+    wg_timers_cancel(&peer->timers, TimerHook::RetransmitHandshake, peer->name);
+    wg_timers_cancel_all(&peer->timers, peer->name);
+    if (wg_timers_any_pending(peer->timers)) {
+        return false;
+    }
+
+    return peer->handshake.state == HandshakeState::SessionDerived &&
+           peer->handshake.transition_count == 3;
+}
+
 } // namespace
 
 bool RunMessageSelfTest() {
@@ -147,6 +221,18 @@ bool RunMessageSelfTest() {
         wgnx::sysmodule::logger::Log("WireGuard message self-test passed");
     } else {
         wgnx::sysmodule::logger::Log("WireGuard message self-test failed");
+    }
+
+    return ok;
+}
+
+bool RunCoreSelfTest() {
+    const bool ok = TestDeviceAndPeerSkeleton();
+
+    if (ok) {
+        wgnx::sysmodule::logger::Log("WireGuard core skeleton self-test passed");
+    } else {
+        wgnx::sysmodule::logger::Log("WireGuard core skeleton self-test failed");
     }
 
     return ok;
