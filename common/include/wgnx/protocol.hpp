@@ -59,6 +59,12 @@ enum DaemonFlags : std::uint32_t {
     DaemonFlag_HasErrors = 1U << 2,
 };
 
+enum class PeerResolvedFamily : std::uint8_t {
+    Unspecified = 0,
+    Inet = 1,
+    Inet6 = 2,
+};
+
 struct PeerInfo {
     char name[32];
     char address[48];
@@ -71,6 +77,10 @@ struct PeerInfo {
     std::uint16_t persistent_keepalive_interval;
     std::uint8_t runtime_state;
     std::uint8_t error_stage;
+    /*
+     * Stores `PeerResolvedFamily` values, not native `AF_*` socket constants.
+     * This keeps the IPC surface aligned with the project-owned endpoint model.
+     */
     std::uint8_t resolved_family;
     std::uint8_t reserved0;
     std::uint64_t rx_bytes;
@@ -145,6 +155,19 @@ constexpr inline const char *GetPeerErrorCodeName(PeerErrorCode code) {
             return "transport init failed";
         case PeerErrorCode::InternalFailure:
             return "internal failure";
+    }
+
+    return "unknown";
+}
+
+constexpr inline const char *GetPeerResolvedFamilyName(PeerResolvedFamily family) {
+    switch (family) {
+        case PeerResolvedFamily::Unspecified:
+            return "unspecified";
+        case PeerResolvedFamily::Inet:
+            return "inet";
+        case PeerResolvedFamily::Inet6:
+            return "inet6";
     }
 
     return "unknown";

@@ -13,6 +13,10 @@ enum class address_family : std::uint8_t {
     inet6 = 2,
 };
 
+static_assert(static_cast<std::uint8_t>(address_family::unspecified) == static_cast<std::uint8_t>(wgnx::PeerResolvedFamily::Unspecified));
+static_assert(static_cast<std::uint8_t>(address_family::inet) == static_cast<std::uint8_t>(wgnx::PeerResolvedFamily::Inet));
+static_assert(static_cast<std::uint8_t>(address_family::inet6) == static_cast<std::uint8_t>(wgnx::PeerResolvedFamily::Inet6));
+
 struct endpoint {
     address_family family{address_family::unspecified};
     std::uint16_t port{0};
