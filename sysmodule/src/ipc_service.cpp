@@ -3,6 +3,7 @@
 #include "config_loader.hpp"
 #include "endpoint_resolution.hpp"
 #include "logger.hpp"
+#include "wgnx/platform/work.hpp"
 
 #include <algorithm>
 #include <array>
@@ -16,9 +17,6 @@ namespace wgnx::sysmodule {
 namespace {
 
 using ServerManager = ams::sf::hipc::ServerManager<1>;
-
-constexpr inline std::size_t ResolverThreadStackSize = 16 * 1024;
-constexpr inline s32 ResolverThreadPriority = ams::os::DefaultThreadPriority;
 
 constinit ams::util::TypedStorage<ServerManager> g_server_manager_storage = {};
 constinit ServerManager *g_server_manager = nullptr;
@@ -62,11 +60,12 @@ struct ResolveRequest {
 
 constinit DaemonState g_state = {};
 ams::os::Mutex g_state_mutex(false);
-alignas(ams::os::ThreadStackAlignment) constinit std::uint8_t g_resolver_thread_stack[ResolverThreadStackSize] = {};
-constinit ams::os::ThreadType g_resolver_thread = {};
-constinit bool g_resolver_thread_started = false;
-ams::os::Event g_resolver_event(ams::os::EventClearMode_AutoClear);
 ResolveRequest g_resolve_request = {};
+struct ResolveDispatcher {
+    wgnx::platform::work_struct work{};
+};
+constinit ResolveDispatcher g_resolve_dispatcher = {};
+wgnx::platform::workqueue_struct *g_resolver_workqueue = nullptr;
 
 void ResetRuntimeMetrics(DaemonState::PeerRuntimeInfo *runtime) {
     if (runtime == nullptr) {
@@ -193,7 +192,7 @@ void QueueEndpointResolve(std::size_t peer_index) {
     g_resolve_request.peer_index = peer_index;
     g_resolve_request.activation_generation = runtime.activation_generation;
     std::snprintf(g_resolve_request.endpoint, sizeof(g_resolve_request.endpoint), "%s", config.endpoint);
-    g_resolver_event.Signal();
+    static_cast<void>(wgnx::platform::queue_work(g_resolver_workqueue, std::addressof(g_resolve_dispatcher.work)));
 }
 
 void StartPeerRuntime(std::size_t peer_index) {
@@ -393,33 +392,22 @@ void CommitResolveResult(const ResolveRequest &request, const endpoint_resolutio
         runtime.resolved_endpoint);
 }
 
-void ResolverThreadMain(void *) {
-    while (true) {
-        g_resolver_event.Wait();
-
-        ResolveRequest request{};
-        while (DequeueResolveRequest(std::addressof(request))) {
-            const auto result = endpoint_resolution::Resolve(request.endpoint);
-            CommitResolveResult(request, result);
-        }
+void ResolverWorkMain(wgnx::platform::work_struct *) {
+    ResolveRequest request{};
+    while (DequeueResolveRequest(std::addressof(request))) {
+        const auto result = endpoint_resolution::Resolve(request.endpoint);
+        CommitResolveResult(request, result);
     }
 }
 
 void InitializeResolverWorker() {
-    if (g_resolver_thread_started) {
+    if (g_resolver_workqueue != nullptr) {
         return;
     }
 
-    R_ABORT_UNLESS(ams::os::CreateThread(
-        std::addressof(g_resolver_thread),
-        ResolverThreadMain,
-        nullptr,
-        g_resolver_thread_stack,
-        sizeof(g_resolver_thread_stack),
-        ResolverThreadPriority));
-    ams::os::SetThreadNamePointer(std::addressof(g_resolver_thread), "wgnx-resolve");
-    ams::os::StartThread(std::addressof(g_resolver_thread));
-    g_resolver_thread_started = true;
+    g_resolver_workqueue = wgnx::platform::alloc_ordered_workqueue("wgnx-resolve");
+    AMS_ABORT_UNLESS(g_resolver_workqueue != nullptr);
+    wgnx::platform::INIT_WORK(std::addressof(g_resolve_dispatcher.work), ResolverWorkMain);
     logger::Log("Started endpoint resolver worker");
 }
 
