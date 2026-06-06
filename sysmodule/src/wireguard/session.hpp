@@ -23,6 +23,11 @@ struct noise_symmetric_key {
     bool valid{false};
 };
 
+struct noise_secret32 {
+    std::uint8_t bytes[32]{};
+    bool valid{false};
+};
+
 struct noise_static_identity {
     noise_private_key static_private{};
     noise_public_key static_public{};
@@ -34,6 +39,7 @@ struct noise_handshake_material {
     noise_private_key ephemeral_private{};
     noise_public_key ephemeral_public{};
     noise_public_key remote_ephemeral{};
+    noise_secret32 precomputed_static_static{};
     noise_symmetric_key chaining_key{};
     noise_symmetric_key hash{};
 };
@@ -51,5 +57,18 @@ struct noise_keypair {
 void noise_static_identity_reset(noise_static_identity *identity);
 void noise_handshake_material_reset(noise_handshake_material *material);
 void noise_keypair_reset(noise_keypair *keypair);
+
+bool noise_is_valid_encoded_key(const char *text, bool allow_empty = false);
+bool noise_parse_private_key(noise_private_key *out_key, const char *text);
+bool noise_parse_public_key(noise_public_key *out_key, const char *text);
+bool noise_parse_preshared_key(noise_symmetric_key *out_key, const char *text);
+bool noise_static_identity_init(
+    noise_static_identity *identity,
+    const char *private_key_text,
+    const char *peer_public_key_text,
+    const char *preshared_key_text);
+bool noise_precompute_static_static(
+    noise_handshake_material *material,
+    const noise_static_identity *identity);
 
 } // namespace wgnx::wireguard

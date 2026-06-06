@@ -1,5 +1,7 @@
 #include "wireguard/peer.hpp"
 
+#include "logger.hpp"
+
 #include <cstdio>
 #include <cstring>
 
@@ -23,6 +25,32 @@ void wg_peer_init_from_config(wg_peer *peer, const wgnx::PeerConfigEntry &config
     noise_handshake_init(&peer->handshake);
     wg_timers_init(&peer->timers);
     wg_peer_reset_keypairs(peer);
+    wg_peer_clear_last_initiation(peer);
+}
+
+bool wg_peer_prepare_static_identity(wg_peer *peer, const char *local_private_key_text) {
+    if (peer == nullptr || local_private_key_text == nullptr) {
+        return false;
+    }
+
+    noise_static_identity_reset(&peer->static_identity);
+    noise_handshake_material_reset(&peer->handshake_material);
+    if (!noise_static_identity_init(
+            &peer->static_identity,
+            local_private_key_text,
+            peer->public_key,
+            peer->preshared_key)) {
+        wgnx::sysmodule::logger::Log("WG peer '%s': invalid static identity or peer keys", peer->name);
+        return false;
+    }
+    if (!noise_precompute_static_static(&peer->handshake_material, &peer->static_identity)) {
+        wgnx::sysmodule::logger::Log("WG peer '%s': failed to precompute static-static DH", peer->name);
+        noise_static_identity_reset(&peer->static_identity);
+        noise_handshake_material_reset(&peer->handshake_material);
+        return false;
+    }
+
+    return true;
 }
 
 void wg_peer_set_resolved_endpoint(
@@ -60,6 +88,15 @@ void wg_peer_reset_keypairs(wg_peer *peer) {
     noise_keypair_reset(&peer->current_keypair);
     noise_keypair_reset(&peer->next_keypair);
     noise_keypair_reset(&peer->previous_keypair);
+}
+
+void wg_peer_clear_last_initiation(wg_peer *peer) {
+    if (peer == nullptr) {
+        return;
+    }
+
+    peer->last_initiation = {};
+    peer->has_last_initiation = false;
 }
 
 } // namespace wgnx::wireguard

@@ -5,6 +5,7 @@
 #include "wgnx/platform/udp.hpp"
 
 #include "wireguard/handshake.hpp"
+#include "wireguard/messages.hpp"
 #include "wireguard/session.hpp"
 #include "wireguard/timers.hpp"
 
@@ -38,14 +39,24 @@ struct wg_peer {
     noise_keypair current_keypair{};
     noise_keypair next_keypair{};
     noise_keypair previous_keypair{};
+    /*
+     * Deviation from Linux:
+     * We keep the last serialized initiation on the peer so Milestone 5 can
+     * build a real packet now and Milestone 6 can resend or transmit it
+     * without reopening the control-plane boundary.
+     */
+    message_handshake_initiation last_initiation{};
+    bool has_last_initiation{false};
 };
 
 void wg_peer_init_from_config(wg_peer *peer, const wgnx::PeerConfigEntry &config);
+bool wg_peer_prepare_static_identity(wg_peer *peer, const char *local_private_key_text);
 void wg_peer_set_resolved_endpoint(
     wg_peer *peer,
     const wgnx::platform::endpoint &endpoint,
     const char *endpoint_text);
 void wg_peer_clear_resolved_endpoint(wg_peer *peer);
 void wg_peer_reset_keypairs(wg_peer *peer);
+void wg_peer_clear_last_initiation(wg_peer *peer);
 
 } // namespace wgnx::wireguard

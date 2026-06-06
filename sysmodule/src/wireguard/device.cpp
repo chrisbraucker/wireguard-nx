@@ -21,6 +21,10 @@ bool wg_device_init_from_config_entry(wg_device *device, const wgnx::PeerConfigE
     wg_index_allocator_init(&device->index_allocator);
 
     wg_peer_init_from_config(&device->peers[0], config);
+    if (!wg_peer_prepare_static_identity(&device->peers[0], config.private_key)) {
+        wg_device_reset(device);
+        return false;
+    }
     device->peer_count = 1;
     return true;
 }

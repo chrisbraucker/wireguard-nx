@@ -1,7 +1,5 @@
 #include "wgnx/platform/clock.hpp"
 
-#include <switch/services/time.h>
-
 #include <stratosphere.hpp>
 
 namespace wgnx::platform {
@@ -9,8 +7,7 @@ namespace wgnx::platform {
 namespace {
 
 constinit bool g_time_initialized = false;
-constinit bool g_time_available = false;
-ams::os::Mutex g_time_mutex(false);
+ams::os::SdkMutex g_time_initialize_mutex;
 
 void SetFallbackMonotonicTime(timespec64 *ts) {
     const ktime_t ns = ktime_get_coarse_boottime_ns();
@@ -19,13 +16,19 @@ void SetFallbackMonotonicTime(timespec64 *ts) {
 }
 
 bool EnsureTimeInitialized() {
-    std::scoped_lock lock(g_time_mutex);
-    if (!g_time_initialized) {
-        g_time_available = R_SUCCEEDED(::timeInitialize());
+    if (AMS_LIKELY(g_time_initialized)) {
+        return true;
+    }
+
+    std::scoped_lock lk(g_time_initialize_mutex);
+    if (AMS_UNLIKELY(!g_time_initialized)) {
+        if (R_FAILED(ams::time::Initialize())) {
+            return false;
+        }
         g_time_initialized = true;
     }
 
-    return g_time_available;
+    return true;
 }
 
 } // namespace
@@ -41,15 +44,16 @@ void ktime_get_real_ts64(timespec64 *ts) {
 
     /*
      * Deviation from Linux:
-     * The preferred source is the Horizon user system clock. If that service is
-     * unavailable in this sysmodule context, we fall back to monotonic boot
-     * time. The implication is that ordering remains correct, but the fallback
-     * is not a real wall clock for user-facing timestamps.
+     * We use Atmosphere's time wrapper here instead of calling a raw libnx
+     * time service API directly from this shim. The implication is that time
+     * service mode selection and initialization stay aligned with the broader
+     * Atmosphere runtime surface already used by the sysmodule.
      */
     if (EnsureTimeInitialized()) {
-        u64 posix_seconds = 0;
-        if (R_SUCCEEDED(::timeGetCurrentTime(TimeType_UserSystemClock, std::addressof(posix_seconds)))) {
-            ts->tv_sec = static_cast<std::int64_t>(posix_seconds);
+        ams::time::PosixTime current_time{};
+        if (R_SUCCEEDED(ams::time::StandardUserSystemClock::GetCurrentTime(std::addressof(current_time))) &&
+            current_time.value > 0) {
+            ts->tv_sec = static_cast<std::int64_t>(current_time.value);
             ts->tv_nsec = 0;
             return;
         }

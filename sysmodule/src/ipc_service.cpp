@@ -6,6 +6,7 @@
 #include "wgnx/platform/work.hpp"
 #include "wireguard/device.hpp"
 #include "wireguard/handshake.hpp"
+#include "wireguard/session.hpp"
 #include "wireguard/timers.hpp"
 
 #include <algorithm>
@@ -96,11 +97,16 @@ wgnx::wireguard::wg_peer *GetProtocolPeer(std::size_t peer_index) {
     return wgnx::wireguard::wg_device_first_peer(std::addressof(protocol.device));
 }
 
-void InstantiateProtocolPeer(std::size_t peer_index, std::uint32_t activation_generation) {
+wgnx::PeerErrorCode InstantiateProtocolPeer(std::size_t peer_index, std::uint32_t activation_generation) {
     auto &protocol = g_state.protocol[peer_index];
-    static_cast<void>(wgnx::wireguard::wg_device_init_from_config_entry(
-        std::addressof(protocol.device),
-        g_state.configured_peers[peer_index]));
+    if (!wgnx::wireguard::wg_device_init_from_config_entry(
+            std::addressof(protocol.device),
+            g_state.configured_peers[peer_index])) {
+        logger::Log(
+            "Failed to instantiate WG protocol peer for '%s'",
+            g_state.configured_peers[peer_index].name);
+        return wgnx::PeerErrorCode::KeyInvalid;
+    }
     protocol.instantiated = true;
 
     if (wgnx::wireguard::wg_peer *peer = GetProtocolPeer(peer_index)) {
@@ -112,29 +118,35 @@ void InstantiateProtocolPeer(std::size_t peer_index, std::uint32_t activation_ge
             activation_generation,
             local_index);
     }
+
+    return wgnx::PeerErrorCode::None;
 }
 
-void BindResolvedEndpointToProtocolPeer(std::size_t peer_index) {
+wgnx::PeerErrorCode BindResolvedEndpointToProtocolPeer(std::size_t peer_index) {
     auto &runtime = g_state.runtime[peer_index];
     wgnx::wireguard::wg_peer *peer = GetProtocolPeer(peer_index);
     if (peer == nullptr || !runtime.has_resolved_endpoint) {
-        return;
+        return wgnx::PeerErrorCode::InternalFailure;
     }
 
     wgnx::wireguard::wg_peer_set_resolved_endpoint(
         peer,
         runtime.resolved_endpoint,
         runtime.resolved_endpoint_text);
-    static_cast<void>(wgnx::wireguard::noise_handshake_transition(
-        std::addressof(peer->handshake),
-        wgnx::wireguard::HandshakeState::InitiationCreated,
-        peer->name,
-        "activation resolved endpoint"));
+    if (!wgnx::wireguard::noise_handshake_create_initiation(
+            std::addressof(peer->last_initiation),
+            peer)) {
+        logger::Log(
+            "Failed to create real WG handshake initiation for peer '%s'",
+            peer->name);
+        return wgnx::PeerErrorCode::HandshakeInitFailed;
+    }
     wgnx::wireguard::wg_timers_schedule(
         std::addressof(peer->timers),
         wgnx::wireguard::TimerHook::RetransmitHandshake,
         wgnx::platform::get_jiffies_64() + SimulatedHandshakeRetransmitJiffies,
         peer->name);
+    return wgnx::PeerErrorCode::None;
 }
 
 void AdvanceProtocolPeerHandshaking(std::size_t peer_index) {
@@ -317,6 +329,11 @@ wgnx::PeerErrorCode ValidatePeerConfiguration(const wgnx::PeerConfigEntry &confi
     if (config.private_key[0] == '\0' || config.public_key[0] == '\0' || config.allowed_ips[0] == '\0') {
         return wgnx::PeerErrorCode::ConfigInvalid;
     }
+    if (!wgnx::wireguard::noise_is_valid_encoded_key(config.private_key) ||
+        !wgnx::wireguard::noise_is_valid_encoded_key(config.public_key) ||
+        !wgnx::wireguard::noise_is_valid_encoded_key(config.preshared_key, true)) {
+        return wgnx::PeerErrorCode::KeyInvalid;
+    }
     if (config.endpoint[0] == '\0') {
         return wgnx::PeerErrorCode::EndpointMissing;
     }
@@ -349,7 +366,11 @@ void StartPeerRuntime(std::size_t peer_index) {
 
     const std::uint32_t activation_generation = AllocateActivationGeneration();
     SetPeerResolving(peer_index, activation_generation);
-    InstantiateProtocolPeer(peer_index, activation_generation);
+    const wgnx::PeerErrorCode instantiate_error = InstantiateProtocolPeer(peer_index, activation_generation);
+    if (instantiate_error != wgnx::PeerErrorCode::None) {
+        SetPeerError(peer_index, wgnx::PeerErrorStage::Config, instantiate_error);
+        return;
+    }
     QueueEndpointResolve(peer_index);
     logger::Log("Queued endpoint resolution for peer %zu activation=%u endpoint='%s'",
         peer_index, activation_generation, config.endpoint);
@@ -527,7 +548,11 @@ void CommitResolveResult(const ResolveRequest &request, const wgnx::platform::en
     }
 
     SetResolvedEndpoint(std::addressof(runtime), result);
-    BindResolvedEndpointToProtocolPeer(request.peer_index);
+    const wgnx::PeerErrorCode handshake_error = BindResolvedEndpointToProtocolPeer(request.peer_index);
+    if (handshake_error != wgnx::PeerErrorCode::None) {
+        SetPeerError(request.peer_index, wgnx::PeerErrorStage::Handshake, handshake_error);
+        return;
+    }
     SetPeerHandshaking(request.peer_index);
     logger::Log("Endpoint resolved for peer %zu activation=%u -> %s",
         request.peer_index,

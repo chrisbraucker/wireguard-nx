@@ -17,6 +17,11 @@ namespace wgnx::wireguard {
 
 namespace {
 
+constexpr char HarnessLocalPrivateKey[] = "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=";
+constexpr char HarnessRemotePublicKey[] = "VxR2nRFr92Q2rnS8eT0sMK0ZA8WaxSc4BcfiaYtBDDY=";
+constexpr char HarnessPresharedKey[] = "ycrLzM3Oz9DR0tPU1dbX2Nna29zd3t/g4eLj5OXm5+g=";
+constexpr char HarnessLocalPublicKey[] = "B6N8vBQgk8i3VdwbEOhstCY3StFqqFPtC9/AsrhtHHw=";
+
 struct DispatchTestContext {
     std::uint32_t initiation_count{0};
     std::uint32_t response_count{0};
@@ -250,9 +255,9 @@ bool TestDeviceAndPeerSkeleton() {
     std::snprintf(config.name, sizeof(config.name), "%s", "harness-peer");
     std::snprintf(config.address, sizeof(config.address), "%s", "10.66.66.2/32");
     std::snprintf(config.endpoint, sizeof(config.endpoint), "%s", "vpn.example.test:51820");
-    std::snprintf(config.private_key, sizeof(config.private_key), "%s", "test-private-key");
-    std::snprintf(config.public_key, sizeof(config.public_key), "%s", "test-public-key");
-    std::snprintf(config.preshared_key, sizeof(config.preshared_key), "%s", "test-preshared-key");
+    std::snprintf(config.private_key, sizeof(config.private_key), "%s", HarnessLocalPrivateKey);
+    std::snprintf(config.public_key, sizeof(config.public_key), "%s", HarnessRemotePublicKey);
+    std::snprintf(config.preshared_key, sizeof(config.preshared_key), "%s", HarnessPresharedKey);
     std::snprintf(config.allowed_ips, sizeof(config.allowed_ips), "%s", "0.0.0.0/0, ::/0");
     std::snprintf(config.dns, sizeof(config.dns), "%s", "1.1.1.1");
     config.listen_port = 51820;
@@ -326,6 +331,82 @@ bool TestDeviceAndPeerSkeleton() {
            peer->handshake.transition_count == 3;
 }
 
+bool TestStaticIdentityParsing() {
+    noise_static_identity identity{};
+    if (!noise_static_identity_init(
+            &identity,
+            HarnessLocalPrivateKey,
+            HarnessRemotePublicKey,
+            HarnessPresharedKey)) {
+        return false;
+    }
+
+    noise_public_key expected_local_public{};
+    if (!noise_parse_public_key(&expected_local_public, HarnessLocalPublicKey)) {
+        return false;
+    }
+
+    const bool ok = identity.static_private.valid &&
+                    identity.static_public.valid &&
+                    identity.remote_static.valid &&
+                    identity.preshared_key.valid &&
+                    std::memcmp(
+                        identity.static_public.bytes,
+                        expected_local_public.bytes,
+                        sizeof(identity.static_public.bytes)) == 0;
+    noise_static_identity_reset(&identity);
+    return ok;
+}
+
+bool TestHandshakeInitiationCreation() {
+    ResetCoreSelfTestStorage();
+    wgnx::PeerConfigEntry &config = g_core_self_test_storage.config;
+    std::snprintf(config.name, sizeof(config.name), "%s", "handshake-peer");
+    std::snprintf(config.address, sizeof(config.address), "%s", "10.66.66.2/32");
+    std::snprintf(config.endpoint, sizeof(config.endpoint), "%s", "vpn.example.test:51820");
+    std::snprintf(config.private_key, sizeof(config.private_key), "%s", HarnessLocalPrivateKey);
+    std::snprintf(config.public_key, sizeof(config.public_key), "%s", HarnessRemotePublicKey);
+    std::snprintf(config.preshared_key, sizeof(config.preshared_key), "%s", HarnessPresharedKey);
+    std::snprintf(config.allowed_ips, sizeof(config.allowed_ips), "%s", "0.0.0.0/0, ::/0");
+
+    wg_device &device = g_core_self_test_storage.device;
+    if (!wg_device_init_from_config_entry(&device, config)) {
+        return false;
+    }
+
+    wg_peer *peer = wg_device_first_peer(&device);
+    if (peer == nullptr) {
+        return false;
+    }
+
+    noise_handshake_set_local_index(&peer->handshake, 0x01020304U);
+    if (!noise_handshake_create_initiation(&peer->last_initiation, peer)) {
+        return false;
+    }
+
+    wgnx::platform::static_packet_buffer<HandshakeInitiationSize> buffer;
+    if (SerializeHandshakeInitiation(&buffer.packet, peer->last_initiation) != ParseError::None) {
+        return false;
+    }
+
+    message_handshake_initiation parsed{};
+    const ParseResult parsed_result = ParseHandshakeInitiation(&buffer.packet, &parsed);
+    if (!parsed_result.success) {
+        return false;
+    }
+
+    std::uint8_t zero_block[NoisePublicKeySize]{};
+    std::uint8_t zero_mac[NoiseMacSize]{};
+    return peer->has_last_initiation &&
+           peer->handshake.state == HandshakeState::InitiationCreated &&
+           GetMessageType(parsed.type) == MessageType::HandshakeInitiation &&
+           parsed.sender_index == 0x01020304U &&
+           std::memcmp(parsed.unencrypted_ephemeral, zero_block, sizeof(parsed.unencrypted_ephemeral)) != 0 &&
+           std::memcmp(parsed.encrypted_static, zero_block, sizeof(parsed.unencrypted_ephemeral)) != 0 &&
+           std::memcmp(parsed.macs.mac1, zero_mac, sizeof(parsed.macs.mac1)) != 0 &&
+           std::memcmp(parsed.macs.mac2, zero_mac, sizeof(parsed.macs.mac2)) == 0;
+}
+
 } // namespace
 
 bool RunMessageSelfTest() {
@@ -361,7 +442,10 @@ bool RunPrimitiveSelfTest() {
 }
 
 bool RunCoreSelfTest() {
-    const bool ok = TestDeviceAndPeerSkeleton();
+    const bool ok =
+        TestDeviceAndPeerSkeleton() &&
+        TestStaticIdentityParsing() &&
+        TestHandshakeInitiationCreation();
     ResetCoreSelfTestStorage();
 
     if (ok) {

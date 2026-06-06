@@ -2,9 +2,13 @@
 
 #include "wgnx/platform/clock.hpp"
 
+#include "wireguard/messages.hpp"
+
 #include <cstdint>
 
 namespace wgnx::wireguard {
+
+struct wg_peer;
 
 enum class HandshakeState : std::uint8_t {
     Zeroed = 0,
@@ -34,5 +38,6 @@ bool noise_handshake_transition(
     const char *reason);
 void noise_handshake_set_local_index(noise_handshake *handshake, std::uint32_t local_index);
 void noise_handshake_set_remote_index(noise_handshake *handshake, std::uint32_t remote_index);
+bool noise_handshake_create_initiation(message_handshake_initiation *dst, wg_peer *peer);
 
 } // namespace wgnx::wireguard
