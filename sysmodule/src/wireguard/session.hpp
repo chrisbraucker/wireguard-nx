@@ -62,6 +62,8 @@ bool noise_is_valid_encoded_key(const char *text, bool allow_empty = false);
 bool noise_parse_private_key(noise_private_key *out_key, const char *text);
 bool noise_parse_public_key(noise_public_key *out_key, const char *text);
 bool noise_parse_preshared_key(noise_symmetric_key *out_key, const char *text);
+bool noise_public_key_to_text(char *out_text, std::size_t out_size, const noise_public_key *key);
+bool noise_derive_public_key_text(char *out_text, std::size_t out_size, const char *private_key_text);
 bool noise_static_identity_init(
     noise_static_identity *identity,
     const char *private_key_text,

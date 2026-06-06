@@ -27,6 +27,11 @@ constinit ams::sf::UnmanagedServiceObject<wgnx::sysmodule::IControlService, wgnx
 
 struct DaemonState {
     std::array<wgnx::PeerConfigEntry, wgnx::MaxPeers> configured_peers{};
+    struct PeerConfigDerivedInfo {
+        char derived_public_key[64]{};
+        bool has_derived_public_key{false};
+    };
+    std::array<PeerConfigDerivedInfo, wgnx::MaxPeers> config_derived{};
     struct PeerRuntimeInfo {
         wgnx::PeerRuntimeState state{wgnx::PeerRuntimeState::Inactive};
         wgnx::PeerErrorStage error_stage{wgnx::PeerErrorStage::None};
@@ -263,6 +268,21 @@ void SetResolvedEndpoint(DaemonState::PeerRuntimeInfo *runtime, const wgnx::plat
     runtime->has_resolved_endpoint = true;
 }
 
+void RefreshDerivedPublicKey(std::size_t peer_index) {
+    if (peer_index >= g_state.peer_count) {
+        return;
+    }
+
+    auto &derived = g_state.config_derived[peer_index];
+    derived = {};
+    if (wgnx::wireguard::noise_derive_public_key_text(
+            derived.derived_public_key,
+            sizeof(derived.derived_public_key),
+            g_state.configured_peers[peer_index].private_key)) {
+        derived.has_derived_public_key = true;
+    }
+}
+
 void SetPeerInactive(std::size_t peer_index) {
     const auto &config = g_state.configured_peers[peer_index];
     auto &runtime = g_state.runtime[peer_index];
@@ -401,6 +421,11 @@ wgnx::PeerInfo BuildPeerInfo(std::size_t peer_index) {
     std::snprintf(peer.address, sizeof(peer.address), "%s", config.address);
     std::snprintf(peer.endpoint, sizeof(peer.endpoint), "%s", config.endpoint);
     std::snprintf(peer.resolved_endpoint, sizeof(peer.resolved_endpoint), "%s", runtime.resolved_endpoint_text);
+    std::snprintf(
+        peer.derived_public_key,
+        sizeof(peer.derived_public_key),
+        "%s",
+        g_state.config_derived[peer_index].has_derived_public_key ? g_state.config_derived[peer_index].derived_public_key : "");
     peer.last_handshake_seconds = runtime.last_handshake_seconds;
     peer.last_rx_seconds = runtime.last_rx_seconds;
     peer.last_tx_seconds = runtime.last_tx_seconds;
@@ -456,6 +481,7 @@ void InitializeState() {
         for (std::size_t i = 0; i < config.peer_count; ++i) {
             const auto &entry = config.peers[i];
             g_state.configured_peers[i] = entry;
+            RefreshDerivedPublicKey(i);
             SetPeerInactive(i);
 
             if (has_auto_start_name && std::strncmp(entry.name, auto_start_name, sizeof(entry.name)) == 0) {
@@ -465,6 +491,7 @@ void InitializeState() {
     } else {
         g_state.peer_count = 0;
         g_state.auto_start_peer_index = -1;
+        g_state.config_derived = {};
     }
 
     g_state.initialized = true;

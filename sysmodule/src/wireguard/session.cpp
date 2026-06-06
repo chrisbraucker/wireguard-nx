@@ -10,6 +10,7 @@ namespace wgnx::wireguard {
 namespace {
 
 constexpr std::size_t WireGuardEncodedKeySize = 44;
+constexpr char Base64Alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 int DecodeBase64Char(char ch) {
     if (ch >= 'A' && ch <= 'Z') {
@@ -110,6 +111,29 @@ bool DecodeWireGuardKey(std::uint8_t out[NoisePublicKeySize], const char *text) 
     return out_index == NoisePublicKeySize;
 }
 
+bool EncodeWireGuardKey(char *out_text, std::size_t out_size, const std::uint8_t bytes[NoisePublicKeySize]) {
+    if (out_text == nullptr || bytes == nullptr || out_size < (WireGuardEncodedKeySize + 1)) {
+        return false;
+    }
+
+    std::size_t out_index = 0;
+    for (std::size_t i = 0; i < NoisePublicKeySize; i += 3) {
+        const int remaining = static_cast<int>(NoisePublicKeySize - i);
+        const std::uint32_t value =
+            (static_cast<std::uint32_t>(bytes[i]) << 16) |
+            (static_cast<std::uint32_t>(remaining > 1 ? bytes[i + 1] : 0) << 8) |
+            static_cast<std::uint32_t>(remaining > 2 ? bytes[i + 2] : 0);
+
+        out_text[out_index++] = Base64Alphabet[(value >> 18) & 0x3fU];
+        out_text[out_index++] = Base64Alphabet[(value >> 12) & 0x3fU];
+        out_text[out_index++] = remaining > 1 ? Base64Alphabet[(value >> 6) & 0x3fU] : '=';
+        out_text[out_index++] = remaining > 2 ? Base64Alphabet[value & 0x3fU] : '=';
+    }
+
+    out_text[out_index] = '\0';
+    return out_index == WireGuardEncodedKeySize;
+}
+
 } // namespace
 
 void noise_static_identity_reset(noise_static_identity *identity) {
@@ -199,6 +223,35 @@ bool noise_parse_preshared_key(noise_symmetric_key *out_key, const char *text) {
     key.valid = true;
     *out_key = key;
     return true;
+}
+
+bool noise_public_key_to_text(char *out_text, std::size_t out_size, const noise_public_key *key) {
+    if (out_text == nullptr || key == nullptr || !key->valid) {
+        return false;
+    }
+
+    return EncodeWireGuardKey(out_text, out_size, key->bytes);
+}
+
+bool noise_derive_public_key_text(char *out_text, std::size_t out_size, const char *private_key_text) {
+    if (out_text == nullptr || private_key_text == nullptr) {
+        return false;
+    }
+
+    noise_private_key private_key{};
+    noise_public_key public_key{};
+    if (!noise_parse_private_key(&private_key, private_key_text) ||
+        !crypto::x25519_public_key(public_key.bytes, private_key.bytes)) {
+        crypto::secure_clear(&private_key, sizeof(private_key));
+        crypto::secure_clear(&public_key, sizeof(public_key));
+        return false;
+    }
+
+    public_key.valid = true;
+    const bool ok = noise_public_key_to_text(out_text, out_size, &public_key);
+    crypto::secure_clear(&private_key, sizeof(private_key));
+    crypto::secure_clear(&public_key, sizeof(public_key));
+    return ok;
 }
 
 bool noise_static_identity_init(

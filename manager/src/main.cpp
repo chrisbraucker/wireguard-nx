@@ -86,8 +86,9 @@ int main(int argc, char **argv)
                                         (peer.flags & wgnx::PeerFlag_HasResolvedEndpoint) != 0)
                     ? peer.resolved_endpoint
                     : peer.endpoint;
-                printf("[%u] %s | %s | endpoint=%s | state=%s stage=%s flags=0x%02X | hs=%d rx_age=%d tx_age=%d | ka=%us err=%s (0x%08X)\n",
+                printf("[%u] %s | %s | endpoint=%s | local_pub=%s | state=%s stage=%s flags=0x%02X | hs=%d rx_age=%d tx_age=%d | ka=%us err=%s (0x%08X)\n",
                     i, peer.name, peer.address, endpoint,
+                    peer.derived_public_key[0] != '\0' ? peer.derived_public_key : "<unavailable>",
                     wgnx::GetPeerRuntimeStateName(static_cast<wgnx::PeerRuntimeState>(peer.runtime_state)),
                     wgnx::GetPeerErrorStageName(static_cast<wgnx::PeerErrorStage>(peer.error_stage)),
                     peer.flags,

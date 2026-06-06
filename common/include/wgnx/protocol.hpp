@@ -72,6 +72,7 @@ struct PeerInfo {
     char address[48];
     char endpoint[256];
     char resolved_endpoint[64];
+    char derived_public_key[64];
     std::int32_t last_handshake_seconds;
     std::int32_t last_rx_seconds;
     std::int32_t last_tx_seconds;
