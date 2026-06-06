@@ -33,6 +33,29 @@ INCLUDES	+=	../common/include \
 			$(TOPDIR)/lib/Atmosphere-libs/libvapours/include
 LIBNAMES	:= Atmosphere-libs/libstratosphere
 
+HOST_CXX	?= g++
+HOST_CC		?= cc
+HOST_TEST_DIR	:= $(OUTDIR)/host-test
+HOST_TEST_TARGET := $(HOST_TEST_DIR)/wireguard-host-test
+HOST_TEST_CPP_SOURCES := \
+	src/wireguard/messages.cpp \
+	src/wireguard/dispatch.cpp \
+	src/wireguard/index_allocator.cpp \
+	src/wireguard/session.cpp \
+	src/wireguard/handshake.cpp \
+	src/wireguard/timers.cpp \
+	src/wireguard/peer.cpp \
+	src/wireguard/device.cpp \
+	src/wireguard/debug_harness.cpp \
+	src/wireguard/crypto/primitives.cpp \
+	test/host/host_stubs.cpp \
+	test/host/main.cpp
+HOST_TEST_C_SOURCES := src/wireguard/crypto/monocypher.c
+HOST_TEST_INCLUDES := \
+	-I$(CURDIR)/test/host/include \
+	-I$(CURDIR)/../common/include \
+	-I$(CURDIR)/src
+
 #---------------------------------------------------------------------------------
 # version control constants
 #---------------------------------------------------------------------------------
@@ -107,7 +130,7 @@ export BUILD_EXEFS_SRC := $(TOPDIR)/$(EXEFS_SRC)
 
 export APP_JSON := $(TOPDIR)/res/module.json
 
-.PHONY	: $(BUILD) clean clean-libs clean-build all libs dist
+.PHONY	: $(BUILD) clean clean-libs clean-build all libs dist test
 
 #---------------------------------------------------------------------------------
 all	: $(BUILD)
@@ -118,6 +141,14 @@ dist	: $(BUILD)
 	@printf '{\n  "name": "WireGuard-NX",\n  "tid": "$(TITLE_ID)",\n  "requires_reboot": false\n}\n' > $(DISTDIR)/toolbox.json
 	@: > $(DISTDIR)/flags/boot2.flag
 	@echo "prepared Atmosphere layout in $(DISTDIR)"
+
+test: $(HOST_TEST_TARGET)
+	@$(HOST_TEST_TARGET)
+
+$(HOST_TEST_TARGET): $(HOST_TEST_CPP_SOURCES) $(HOST_TEST_C_SOURCES)
+	@[ -d $(HOST_TEST_DIR) ] || mkdir -p $(HOST_TEST_DIR)
+	@$(HOST_CC) -std=c11 -I$(CURDIR)/src/wireguard/crypto -c $(CURDIR)/src/wireguard/crypto/monocypher.c -o $(HOST_TEST_DIR)/monocypher.o
+	@$(HOST_CXX) -std=c++20 $(HOST_TEST_INCLUDES) $(addprefix $(CURDIR)/,$(HOST_TEST_CPP_SOURCES)) $(HOST_TEST_DIR)/monocypher.o -o $(HOST_TEST_TARGET)
 
 libs	:
 	@$(foreach lib,$(LIBNAMES),$(MAKE) --no-print-directory -C $(TOPDIR)/lib/$(lib) && ) true
