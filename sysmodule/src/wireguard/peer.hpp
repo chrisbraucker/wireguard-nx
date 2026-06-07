@@ -34,6 +34,7 @@ struct wg_peer {
     wgnx::platform::endpoint resolved_endpoint{};
     noise_static_identity static_identity{};
     noise_handshake_material handshake_material{};
+    noise_cookie cookie{};
     noise_handshake handshake{};
     wg_timers timers{};
     noise_keypair current_keypair{};

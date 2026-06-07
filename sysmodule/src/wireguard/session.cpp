@@ -136,6 +136,34 @@ bool EncodeWireGuardKey(char *out_text, std::size_t out_size, const std::uint8_t
 
 } // namespace
 
+void noise_cookie_reset(noise_cookie *cookie) {
+    if (cookie == nullptr) {
+        return;
+    }
+
+    crypto::secure_clear(cookie, sizeof(*cookie));
+}
+
+void noise_cookie_record_last_mac1(noise_cookie *cookie, const std::uint8_t mac1[NoiseMacSize]) {
+    if (cookie == nullptr || mac1 == nullptr) {
+        return;
+    }
+
+    std::memcpy(cookie->last_mac1, mac1, sizeof(cookie->last_mac1));
+    cookie->has_last_mac1 = true;
+}
+
+bool noise_cookie_is_valid(const noise_cookie *cookie) {
+    if (cookie == nullptr || !cookie->valid) {
+        return false;
+    }
+
+    constexpr wgnx::platform::ktime_t CookieLifetimeNs = 120LL * wgnx::platform::NSEC_PER_SEC;
+    const wgnx::platform::ktime_t now = wgnx::platform::ktime_get_coarse_boottime_ns();
+    return cookie->birthdate_ns != 0 && now >= cookie->birthdate_ns &&
+           (now - cookie->birthdate_ns) <= CookieLifetimeNs;
+}
+
 void noise_static_identity_reset(noise_static_identity *identity) {
     if (identity == nullptr) {
         return;

@@ -32,7 +32,7 @@ struct noise_handshake {
 enum class HandshakePacketOutcome : std::uint8_t {
     Invalid = 0,
     ResponseConsumed = 1,
-    CookieReplyDeferred = 2,
+    CookieReplyConsumed = 2,
 };
 
 const char *GetHandshakeStateName(HandshakeState state);
@@ -50,6 +50,7 @@ bool noise_handshake_create_initiation(message_handshake_initiation *dst, wg_pee
 bool noise_handshake_consume_initiation(const message_handshake_initiation *src, wg_peer *peer);
 bool noise_handshake_create_response(message_handshake_response *dst, wg_peer *peer);
 bool noise_handshake_consume_response(const message_handshake_response *src, wg_peer *peer);
+bool noise_handshake_consume_cookie_reply(const message_handshake_cookie *src, wg_peer *peer);
 bool noise_handshake_begin_session(wg_peer *peer);
 HandshakePacketOutcome noise_handshake_consume_incoming_packet(
     const wgnx::platform::packet_buffer *packet,

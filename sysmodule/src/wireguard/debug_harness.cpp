@@ -70,6 +70,68 @@ void ResetCoreSelfTestStorage() {
     g_core_self_test_storage = {};
 }
 
+bool ComputeHarnessCookieKey(
+    std::uint8_t out_key[32],
+    const noise_public_key &remote_static) {
+    if (out_key == nullptr || !remote_static.valid) {
+        return false;
+    }
+
+    static constexpr char CookieKeyLabel[] = "cookie--";
+    crypto::blake2s_state state{};
+    if (!crypto::blake2s_init(&state, 32, nullptr, 0)) {
+        return false;
+    }
+    crypto::blake2s_update(&state, CookieKeyLabel, sizeof(CookieKeyLabel) - 1);
+    crypto::blake2s_update(&state, remote_static.bytes, sizeof(remote_static.bytes));
+    return crypto::blake2s_final(&state, out_key, 32);
+}
+
+bool BuildHarnessCookieReply(
+    message_handshake_cookie *out_cookie,
+    const wg_peer &initiator,
+    const wg_peer &responder) {
+    if (out_cookie == nullptr || !initiator.cookie.has_last_mac1 || !responder.static_identity.static_public.valid) {
+        return false;
+    }
+
+    static constexpr std::uint8_t CookieValue[CookieValueSize] = {
+        0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+        0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
+    };
+
+    std::uint8_t cookie_key[32]{};
+    std::uint8_t tag[NoiseTagSize]{};
+    if (!ComputeHarnessCookieKey(cookie_key, responder.static_identity.static_public)) {
+        return false;
+    }
+
+    *out_cookie = {};
+    SetMessageType(&out_cookie->type, MessageType::CookieReply);
+    out_cookie->receiver_index = initiator.handshake.local_index;
+    for (std::size_t i = 0; i < sizeof(out_cookie->nonce); ++i) {
+        out_cookie->nonce[i] = static_cast<std::uint8_t>(0x90U + i);
+    }
+    if (!crypto::xchacha20poly1305_encrypt(
+            out_cookie->encrypted_cookie,
+            tag,
+            CookieValue,
+            sizeof(CookieValue),
+            initiator.cookie.last_mac1,
+            sizeof(initiator.cookie.last_mac1),
+            cookie_key,
+            out_cookie->nonce)) {
+        crypto::secure_clear(cookie_key, sizeof(cookie_key));
+        crypto::secure_clear(tag, sizeof(tag));
+        return false;
+    }
+
+    std::memcpy(out_cookie->encrypted_cookie + CookieValueSize, tag, sizeof(tag));
+    crypto::secure_clear(cookie_key, sizeof(cookie_key));
+    crypto::secure_clear(tag, sizeof(tag));
+    return true;
+}
+
 void CountHandshakeInitiation(void *context, const message_handshake_initiation &) {
     static_cast<DispatchTestContext *>(context)->initiation_count++;
 }
@@ -437,6 +499,8 @@ bool TestHandshakeInitiationCreation() {
 }
 
 bool TestHandshakeResponseAndSessionDerivation() {
+    static constexpr std::uint8_t ZeroMac[NoiseMacSize] = {};
+
     ResetCoreSelfTestStorage();
     wgnx::PeerConfigEntry &initiator_config = g_core_self_test_storage.config;
     std::snprintf(initiator_config.name, sizeof(initiator_config.name), "%s", "initiator-peer");
@@ -521,19 +585,14 @@ bool TestHandshakeResponseAndSessionDerivation() {
     }
 
     message_handshake_cookie cookie{};
-    SetMessageType(&cookie.type, MessageType::CookieReply);
-    cookie.receiver_index = 0x01020304U;
-    for (std::size_t i = 0; i < sizeof(cookie.nonce); ++i) {
-        cookie.nonce[i] = static_cast<std::uint8_t>(0x90U + i);
-    }
-    for (std::size_t i = 0; i < sizeof(cookie.encrypted_cookie); ++i) {
-        cookie.encrypted_cookie[i] = static_cast<std::uint8_t>(0xB0U + i);
+    if (!BuildHarnessCookieReply(&cookie, *initiator, *responder)) {
+        return false;
     }
     wgnx::platform::static_packet_buffer<HandshakeCookieSize> cookie_buffer;
     if (SerializeHandshakeCookie(&cookie_buffer.packet, cookie) != ParseError::None) {
         return false;
     }
-    if (noise_handshake_consume_incoming_packet(&cookie_buffer.packet, initiator) != HandshakePacketOutcome::CookieReplyDeferred) {
+    if (noise_handshake_consume_incoming_packet(&cookie_buffer.packet, initiator) != HandshakePacketOutcome::CookieReplyConsumed) {
         return false;
     }
 
@@ -549,6 +608,8 @@ bool TestHandshakeResponseAndSessionDerivation() {
            initiator->current_keypair.receiving_key.valid &&
            responder->current_keypair.sending_key.valid &&
            responder->current_keypair.receiving_key.valid &&
+           initiator->cookie.valid &&
+           initiator->has_last_initiation &&
            std::memcmp(
                initiator->current_keypair.sending_key.bytes,
                responder->current_keypair.receiving_key.bytes,
@@ -556,7 +617,11 @@ bool TestHandshakeResponseAndSessionDerivation() {
            std::memcmp(
                initiator->current_keypair.receiving_key.bytes,
                responder->current_keypair.sending_key.bytes,
-               sizeof(initiator->current_keypair.receiving_key.bytes)) == 0;
+               sizeof(initiator->current_keypair.receiving_key.bytes)) == 0 &&
+           std::memcmp(
+               initiator->last_initiation.macs.mac2,
+               ZeroMac,
+               NoiseMacSize) != 0;
 }
 
 } // namespace

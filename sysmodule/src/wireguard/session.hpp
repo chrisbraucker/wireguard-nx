@@ -28,6 +28,14 @@ struct noise_secret32 {
     bool valid{false};
 };
 
+struct noise_cookie {
+    std::uint8_t value[CookieValueSize]{};
+    std::uint8_t last_mac1[NoiseMacSize]{};
+    wgnx::platform::ktime_t birthdate_ns{0};
+    bool valid{false};
+    bool has_last_mac1{false};
+};
+
 struct noise_static_identity {
     noise_private_key static_private{};
     noise_public_key static_public{};
@@ -54,6 +62,9 @@ struct noise_keypair {
     noise_symmetric_key receiving_key{};
 };
 
+void noise_cookie_reset(noise_cookie *cookie);
+void noise_cookie_record_last_mac1(noise_cookie *cookie, const std::uint8_t mac1[NoiseMacSize]);
+bool noise_cookie_is_valid(const noise_cookie *cookie);
 void noise_static_identity_reset(noise_static_identity *identity);
 void noise_handshake_material_reset(noise_handshake_material *material);
 void noise_keypair_reset(noise_keypair *keypair);

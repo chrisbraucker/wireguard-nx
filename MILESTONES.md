@@ -219,6 +219,7 @@ Send and receive real WireGuard packets over the network without full tunnel int
 - initialize network services in sysmodule
 - resolve endpoint and open UDP transport
 - send handshake packets
+- process cookie replies and retransmit handshake packets with cookie state
 - receive handshake/session packets
 - maintain keepalive/retry/rekey timers
 

@@ -22,6 +22,7 @@ constexpr std::uint8_t ZeroNonce[crypto::ChaCha20NonceSize] = {};
 constexpr char HandshakeName[] = "Noise_IKpsk2_25519_ChaChaPoly_BLAKE2s";
 constexpr char IdentifierName[] = "WireGuard v1 zx2c4 Jason@zx2c4.com";
 constexpr char Mac1KeyLabel[] = "mac1----";
+constexpr char CookieKeyLabel[] = "cookie--";
 
 struct HandshakeInitCache {
     std::uint8_t chaining_key[NoiseHashSize]{};
@@ -373,6 +374,10 @@ void Tai64nNow(std::uint8_t output[TAI64NTimestampSize]) {
 }
 
 void ComputeMac1(message_handshake_initiation *message, const noise_public_key &remote_static) {
+    if (message == nullptr) {
+        return;
+    }
+
     std::uint8_t mac1_key[NoiseSymmetricKeySize]{};
     crypto::blake2s_state state{};
     static_cast<void>(crypto::blake2s_init(&state, sizeof(mac1_key), nullptr, 0));
@@ -393,6 +398,10 @@ void ComputeMac1(message_handshake_initiation *message, const noise_public_key &
 }
 
 void ComputeMac1(message_handshake_response *message, const noise_public_key &remote_static) {
+    if (message == nullptr) {
+        return;
+    }
+
     std::uint8_t mac1_key[NoiseSymmetricKeySize]{};
     crypto::blake2s_state state{};
     static_cast<void>(crypto::blake2s_init(&state, sizeof(mac1_key), nullptr, 0));
@@ -410,6 +419,72 @@ void ComputeMac1(message_handshake_response *message, const noise_public_key &re
         mac1_key,
         sizeof(mac1_key)));
     crypto::secure_clear(mac1_key, sizeof(mac1_key));
+}
+
+bool ComputeCookieKey(
+    std::uint8_t key[NoiseSymmetricKeySize],
+    const noise_public_key &remote_static) {
+    if (key == nullptr || !remote_static.valid) {
+        return false;
+    }
+
+    crypto::blake2s_state state{};
+    if (!crypto::blake2s_init(&state, NoiseSymmetricKeySize, nullptr, 0)) {
+        return false;
+    }
+    crypto::blake2s_update(&state, CookieKeyLabel, sizeof(CookieKeyLabel) - 1);
+    crypto::blake2s_update(&state, remote_static.bytes, sizeof(remote_static.bytes));
+    return crypto::blake2s_final(&state, key, NoiseSymmetricKeySize);
+}
+
+template <typename T>
+std::size_t GetMac2InputSize(const T &message) {
+    return sizeof(message) - sizeof(message.macs) + offsetof(message_macs, mac2);
+}
+
+template <typename T>
+void ComputeMac2(
+    const T &message,
+    const noise_cookie &cookie,
+    std::uint8_t out_mac2[NoiseMacSize]) {
+    if (out_mac2 == nullptr) {
+        return;
+    }
+
+    static_cast<void>(crypto::blake2s(
+        out_mac2,
+        NoiseMacSize,
+        &message,
+        GetMac2InputSize(message),
+        cookie.value,
+        CookieValueSize));
+}
+
+bool MatchesCookieReceiverIndex(const wg_peer *peer, std::uint32_t receiver_index) {
+    if (peer == nullptr || receiver_index == 0) {
+        return false;
+    }
+
+    return receiver_index == peer->handshake.local_index ||
+           (peer->current_keypair.valid && receiver_index == peer->current_keypair.local_index) ||
+           (peer->next_keypair.valid && receiver_index == peer->next_keypair.local_index) ||
+           (peer->previous_keypair.valid && receiver_index == peer->previous_keypair.local_index);
+}
+
+template <typename T>
+void ApplyOutgoingMacs(T *message, const noise_public_key &remote_static, wg_peer *peer) {
+    if (message == nullptr) {
+        return;
+    }
+
+    std::memset(&message->macs, 0, sizeof(message->macs));
+    ComputeMac1(message, remote_static);
+    if (peer != nullptr) {
+        noise_cookie_record_last_mac1(&peer->cookie, message->macs.mac1);
+        if (noise_cookie_is_valid(&peer->cookie)) {
+            ComputeMac2(*message, peer->cookie, message->macs.mac2);
+        }
+    }
 }
 
 void ClearHandshakeTranscript(wg_peer *peer) {
@@ -487,8 +562,8 @@ const char *GetHandshakePacketOutcomeName(HandshakePacketOutcome outcome) {
             return "invalid";
         case HandshakePacketOutcome::ResponseConsumed:
             return "response_consumed";
-        case HandshakePacketOutcome::CookieReplyDeferred:
-            return "cookie_reply_deferred";
+        case HandshakePacketOutcome::CookieReplyConsumed:
+            return "cookie_reply_consumed";
     }
 
     return "unknown";
@@ -630,8 +705,7 @@ bool noise_handshake_create_initiation(message_handshake_initiation *dst, wg_pee
         return false;
     }
 
-    std::memset(&dst->macs, 0, sizeof(dst->macs));
-    ComputeMac1(dst, peer->static_identity.remote_static);
+    ApplyOutgoingMacs(dst, peer->static_identity.remote_static, peer);
     peer->last_initiation = *dst;
     peer->has_last_initiation = true;
 
@@ -805,9 +879,8 @@ bool noise_handshake_create_response(message_handshake_response *dst, wg_peer *p
         return false;
     }
 
-    std::memset(&dst->macs, 0, sizeof(dst->macs));
     dst->sender_index = peer->handshake.local_index;
-    ComputeMac1(dst, peer->static_identity.remote_static);
+    ApplyOutgoingMacs(dst, peer->static_identity.remote_static, peer);
     static_cast<void>(noise_handshake_transition(
         &peer->handshake,
         HandshakeState::ResponseCreated,
@@ -898,6 +971,66 @@ out:
     return ok;
 }
 
+bool noise_handshake_consume_cookie_reply(const message_handshake_cookie *src, wg_peer *peer) {
+    if (src == nullptr || peer == nullptr || !peer->static_identity.remote_static.valid) {
+        return false;
+    }
+
+    std::uint8_t cookie_key[NoiseSymmetricKeySize]{};
+    std::uint8_t cookie_value[CookieValueSize]{};
+    bool ok = false;
+
+    if (GetMessageType(src->type) != MessageType::CookieReply) {
+        wgnx::sysmodule::logger::Log("WG handshake peer='%s': rejected cookie reply with wrong message type", peer->name);
+        goto out;
+    }
+    if (!MatchesCookieReceiverIndex(peer, src->receiver_index)) {
+        wgnx::sysmodule::logger::Log(
+            "WG handshake peer='%s': rejected cookie reply receiver mismatch local=0x%08x got=0x%08x",
+            peer->name,
+            peer->handshake.local_index,
+            src->receiver_index);
+        goto out;
+    }
+    if (!peer->cookie.has_last_mac1) {
+        wgnx::sysmodule::logger::Log("WG handshake peer='%s': rejected cookie reply without prior mac1", peer->name);
+        goto out;
+    }
+    if (!ComputeCookieKey(cookie_key, peer->static_identity.remote_static)) {
+        wgnx::sysmodule::logger::Log("WG handshake peer='%s': failed to derive cookie reply key", peer->name);
+        goto out;
+    }
+    if (!crypto::xchacha20poly1305_decrypt(
+            cookie_value,
+            src->encrypted_cookie,
+            CookieValueSize,
+            src->encrypted_cookie + CookieValueSize,
+            peer->cookie.last_mac1,
+            sizeof(peer->cookie.last_mac1),
+            cookie_key,
+            src->nonce)) {
+        wgnx::sysmodule::logger::Log("WG handshake peer='%s': cookie reply decrypt failed", peer->name);
+        goto out;
+    }
+
+    std::memcpy(peer->cookie.value, cookie_value, sizeof(peer->cookie.value));
+    peer->cookie.valid = true;
+    peer->cookie.birthdate_ns = wgnx::platform::ktime_get_coarse_boottime_ns();
+    if (peer->has_last_initiation) {
+        ApplyOutgoingMacs(&peer->last_initiation, peer->static_identity.remote_static, peer);
+    }
+    wgnx::sysmodule::logger::Log(
+        "WG handshake peer='%s': consumed cookie reply for receiver=0x%08x",
+        peer->name,
+        src->receiver_index);
+    ok = true;
+
+out:
+    crypto::secure_clear(cookie_key, sizeof(cookie_key));
+    crypto::secure_clear(cookie_value, sizeof(cookie_value));
+    return ok;
+}
+
 bool noise_handshake_begin_session(wg_peer *peer) {
     if (peer == nullptr) {
         return false;
@@ -984,17 +1117,9 @@ HandshakePacketOutcome noise_handshake_consume_incoming_packet(
                     GetParseErrorName(parse_result.error));
                 return HandshakePacketOutcome::Invalid;
             }
-            /*
-             * Deliberate Milestone 5 boundary:
-             * Cookie replies are recognized at the packet seam now so Milestone
-             * 6 can route them explicitly, but full cookie decryption/response
-             * handling remains deferred until XChaCha20-Poly1305 is added.
-             */
-            wgnx::sysmodule::logger::Log(
-                "WG handshake peer='%s': received cookie reply for receiver=0x%08x (deferred)",
-                peer->name,
-                cookie.receiver_index);
-            return HandshakePacketOutcome::CookieReplyDeferred;
+            return noise_handshake_consume_cookie_reply(&cookie, peer)
+                ? HandshakePacketOutcome::CookieReplyConsumed
+                : HandshakePacketOutcome::Invalid;
         }
         case MessageType::HandshakeInitiation:
         case MessageType::TransportData:

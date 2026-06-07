@@ -10,6 +10,7 @@ constexpr inline std::size_t Blake2sHashSize = 32;
 constexpr inline std::size_t ChaCha20KeySize = 32;
 constexpr inline std::size_t ChaCha20BlockSize = 64;
 constexpr inline std::size_t ChaCha20NonceSize = 12;
+constexpr inline std::size_t XChaCha20NonceSize = 24;
 constexpr inline std::size_t Poly1305KeySize = 32;
 constexpr inline std::size_t Poly1305TagSize = 16;
 constexpr inline std::size_t X25519KeySize = 32;
@@ -78,6 +79,24 @@ bool chacha20poly1305_decrypt(
     std::size_t aad_size,
     const std::uint8_t key[ChaCha20KeySize],
     const std::uint8_t nonce[ChaCha20NonceSize]);
+bool xchacha20poly1305_encrypt(
+    std::uint8_t *ciphertext,
+    std::uint8_t tag[Poly1305TagSize],
+    const std::uint8_t *plaintext,
+    std::size_t plaintext_size,
+    const std::uint8_t *aad,
+    std::size_t aad_size,
+    const std::uint8_t key[ChaCha20KeySize],
+    const std::uint8_t nonce[XChaCha20NonceSize]);
+bool xchacha20poly1305_decrypt(
+    std::uint8_t *plaintext,
+    const std::uint8_t *ciphertext,
+    std::size_t ciphertext_size,
+    const std::uint8_t tag[Poly1305TagSize],
+    const std::uint8_t *aad,
+    std::size_t aad_size,
+    const std::uint8_t key[ChaCha20KeySize],
+    const std::uint8_t nonce[XChaCha20NonceSize]);
 
 bool x25519(
     std::uint8_t out[X25519KeySize],
@@ -86,13 +105,6 @@ bool x25519(
 bool x25519_public_key(
     std::uint8_t out[X25519KeySize],
     const std::uint8_t private_key[X25519KeySize]);
-
-/*
- * Deliberate Milestone 5 Increment 1 scope boundary:
- * XChaCha20-Poly1305 is not added yet because cookie processing is not part of
- * the active handshake path in this increment. Add it when cookie handling
- * becomes protocol-real rather than speculative scaffolding.
- */
 
 bool RunPrimitiveSelfTest();
 

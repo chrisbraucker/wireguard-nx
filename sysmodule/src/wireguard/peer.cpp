@@ -24,6 +24,7 @@ void wg_peer_init_from_config(wg_peer *peer, const wgnx::PeerConfigEntry &config
     peer->has_preshared_key = config.preshared_key[0] != '\0';
     noise_static_identity_reset(&peer->static_identity);
     noise_handshake_material_reset(&peer->handshake_material);
+    noise_cookie_reset(&peer->cookie);
     noise_handshake_init(&peer->handshake);
     wg_timers_init(&peer->timers);
     wg_peer_reset_keypairs(peer);
@@ -122,6 +123,7 @@ void wg_peer_scrub_transient_state(wg_peer *peer) {
     peer->handshake_material.chaining_key.valid = false;
     crypto::secure_clear(peer->handshake_material.hash.bytes, sizeof(peer->handshake_material.hash.bytes));
     peer->handshake_material.hash.valid = false;
+    noise_cookie_reset(&peer->cookie);
     wg_peer_clear_last_initiation(peer);
     wg_peer_reset_keypairs(peer);
 }
