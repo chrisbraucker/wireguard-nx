@@ -48,6 +48,7 @@ struct DaemonState {
         char resolved_endpoint_text[sizeof(wgnx::PeerInfo::resolved_endpoint)]{};
         bool established{false};
         bool has_resolved_endpoint{false};
+        wgnx::platform::socket_handle socket{wgnx::platform::InvalidSocket};
     };
     std::array<PeerRuntimeInfo, wgnx::MaxPeers> runtime{};
     struct PeerProtocolInfo {
@@ -80,6 +81,33 @@ wgnx::platform::workqueue_struct *g_resolver_workqueue = nullptr;
 
 constexpr inline wgnx::platform::jiffies_t SimulatedHandshakeRetransmitJiffies = 5U * wgnx::platform::HZ;
 constexpr inline wgnx::platform::jiffies_t SimulatedRekeyJiffies = 120U * wgnx::platform::HZ;
+
+void CloseRuntimeSocket(DaemonState::PeerRuntimeInfo *runtime) {
+    if (runtime == nullptr || runtime->socket == wgnx::platform::InvalidSocket) {
+        return;
+    }
+
+    wgnx::platform::udp_close(runtime->socket);
+    runtime->socket = wgnx::platform::InvalidSocket;
+}
+
+wgnx::PeerErrorCode MapSocketErrorToPeerErrorCode(wgnx::platform::socket_error error) {
+    switch (error) {
+        case wgnx::platform::socket_error::none:
+            return wgnx::PeerErrorCode::None;
+        case wgnx::platform::socket_error::transport_init_failed:
+            return wgnx::PeerErrorCode::TransportInitFailed;
+        case wgnx::platform::socket_error::open_failed:
+            return wgnx::PeerErrorCode::TransportOpenFailed;
+        case wgnx::platform::socket_error::send_failed:
+            return wgnx::PeerErrorCode::TransportSendFailed;
+        case wgnx::platform::socket_error::invalid_endpoint:
+        case wgnx::platform::socket_error::receive_failed:
+            return wgnx::PeerErrorCode::InternalFailure;
+    }
+
+    return wgnx::PeerErrorCode::InternalFailure;
+}
 
 void ResetProtocolPeer(std::size_t peer_index) {
     auto &protocol = g_state.protocol[peer_index];
@@ -151,6 +179,73 @@ wgnx::PeerErrorCode BindResolvedEndpointToProtocolPeer(std::size_t peer_index) {
         wgnx::wireguard::TimerHook::RetransmitHandshake,
         wgnx::platform::get_jiffies_64() + SimulatedHandshakeRetransmitJiffies,
         peer->name);
+    return wgnx::PeerErrorCode::None;
+}
+
+wgnx::PeerErrorCode OpenRuntimeSocket(std::size_t peer_index) {
+    auto &runtime = g_state.runtime[peer_index];
+    CloseRuntimeSocket(std::addressof(runtime));
+
+    const auto open_error = wgnx::platform::udp_open(
+        std::addressof(runtime.socket),
+        runtime.resolved_endpoint.family);
+    if (open_error != wgnx::platform::socket_error::none) {
+        runtime.socket = wgnx::platform::InvalidSocket;
+        logger::Log(
+            "Failed to open UDP socket for peer %zu endpoint=%s err=%u",
+            peer_index,
+            runtime.resolved_endpoint_text,
+            static_cast<unsigned int>(open_error));
+        return MapSocketErrorToPeerErrorCode(open_error);
+    }
+
+    logger::Log(
+        "Opened UDP socket for peer %zu family=%s endpoint=%s",
+        peer_index,
+        wgnx::GetPeerResolvedFamilyName(
+            static_cast<wgnx::PeerResolvedFamily>(runtime.resolved_endpoint.family)),
+        runtime.resolved_endpoint_text);
+    return wgnx::PeerErrorCode::None;
+}
+
+wgnx::PeerErrorCode SendProtocolPeerInitiation(std::size_t peer_index) {
+    auto &runtime = g_state.runtime[peer_index];
+    wgnx::wireguard::wg_peer *peer = GetProtocolPeer(peer_index);
+    if (peer == nullptr || !peer->has_last_initiation || !runtime.has_resolved_endpoint ||
+        runtime.socket == wgnx::platform::InvalidSocket) {
+        return wgnx::PeerErrorCode::InternalFailure;
+    }
+
+    wgnx::platform::static_packet_buffer<wgnx::wireguard::HandshakeInitiationSize> packet;
+    if (wgnx::wireguard::SerializeHandshakeInitiation(
+            std::addressof(packet.packet),
+            peer->last_initiation) != wgnx::wireguard::ParseError::None) {
+        return wgnx::PeerErrorCode::InternalFailure;
+    }
+
+    std::size_t sent = 0;
+    const auto send_error = wgnx::platform::udp_send(
+        runtime.socket,
+        std::addressof(runtime.resolved_endpoint),
+        packet.packet.data,
+        packet.packet.len,
+        std::addressof(sent));
+    if (send_error != wgnx::platform::socket_error::none) {
+        logger::Log(
+            "Failed to send WG handshake initiation for peer %zu endpoint=%s err=%u",
+            peer_index,
+            runtime.resolved_endpoint_text,
+            static_cast<unsigned int>(send_error));
+        return MapSocketErrorToPeerErrorCode(send_error);
+    }
+
+    runtime.last_tx_seconds = 0;
+    runtime.tx_bytes += sent;
+    logger::Log(
+        "Sent WG handshake initiation for peer %zu bytes=%zu endpoint=%s",
+        peer_index,
+        sent,
+        runtime.resolved_endpoint_text);
     return wgnx::PeerErrorCode::None;
 }
 
@@ -292,6 +387,7 @@ void RefreshDerivedPublicKey(std::size_t peer_index) {
 void SetPeerInactive(std::size_t peer_index) {
     const auto &config = g_state.configured_peers[peer_index];
     auto &runtime = g_state.runtime[peer_index];
+    CloseRuntimeSocket(std::addressof(runtime));
     ResetProtocolPeer(peer_index);
     runtime = {};
     runtime.state = wgnx::PeerRuntimeState::Inactive;
@@ -343,6 +439,7 @@ void SetPeerActive(std::size_t peer_index) {
 
 void SetPeerError(std::size_t peer_index, wgnx::PeerErrorStage stage, wgnx::PeerErrorCode code) {
     auto &runtime = g_state.runtime[peer_index];
+    CloseRuntimeSocket(std::addressof(runtime));
     runtime.state = wgnx::PeerRuntimeState::Error;
     runtime.error_stage = stage;
     runtime.last_error_code = static_cast<std::uint32_t>(code);
@@ -584,6 +681,16 @@ void CommitResolveResult(const ResolveRequest &request, const wgnx::platform::en
     const wgnx::PeerErrorCode handshake_error = BindResolvedEndpointToProtocolPeer(request.peer_index);
     if (handshake_error != wgnx::PeerErrorCode::None) {
         SetPeerError(request.peer_index, wgnx::PeerErrorStage::Handshake, handshake_error);
+        return;
+    }
+    const wgnx::PeerErrorCode socket_error = OpenRuntimeSocket(request.peer_index);
+    if (socket_error != wgnx::PeerErrorCode::None) {
+        SetPeerError(request.peer_index, wgnx::PeerErrorStage::Transport, socket_error);
+        return;
+    }
+    const wgnx::PeerErrorCode send_error = SendProtocolPeerInitiation(request.peer_index);
+    if (send_error != wgnx::PeerErrorCode::None) {
+        SetPeerError(request.peer_index, wgnx::PeerErrorStage::Transport, send_error);
         return;
     }
     SetPeerHandshaking(request.peer_index);

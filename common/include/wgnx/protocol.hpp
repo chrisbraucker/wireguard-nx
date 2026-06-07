@@ -53,6 +53,8 @@ enum class PeerErrorCode : std::uint32_t {
     InternalFailure = 6,
     KeyInvalid = 7,
     HandshakeInitFailed = 8,
+    TransportOpenFailed = 9,
+    TransportSendFailed = 10,
 };
 
 enum DaemonFlags : std::uint32_t {
@@ -162,6 +164,10 @@ constexpr inline const char *GetPeerErrorCodeName(PeerErrorCode code) {
             return "key invalid";
         case PeerErrorCode::HandshakeInitFailed:
             return "handshake init failed";
+        case PeerErrorCode::TransportOpenFailed:
+            return "transport open failed";
+        case PeerErrorCode::TransportSendFailed:
+            return "transport send failed";
     }
 
     return "unknown";
