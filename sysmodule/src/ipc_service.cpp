@@ -78,9 +78,15 @@ struct ResolveDispatcher {
 };
 constinit ResolveDispatcher g_resolve_dispatcher = {};
 wgnx::platform::workqueue_struct *g_resolver_workqueue = nullptr;
+struct ReceiveDispatcher {
+    wgnx::platform::work_struct work{};
+};
+constinit ReceiveDispatcher g_receive_dispatcher = {};
+wgnx::platform::workqueue_struct *g_receive_workqueue = nullptr;
 
 constexpr inline wgnx::platform::jiffies_t SimulatedHandshakeRetransmitJiffies = 5U * wgnx::platform::HZ;
 constexpr inline wgnx::platform::jiffies_t SimulatedRekeyJiffies = 120U * wgnx::platform::HZ;
+constexpr inline std::size_t ReceivePacketCapacity = 4096;
 
 void CloseRuntimeSocket(DaemonState::PeerRuntimeInfo *runtime) {
     if (runtime == nullptr || runtime->socket == wgnx::platform::InvalidSocket) {
@@ -101,8 +107,9 @@ wgnx::PeerErrorCode MapSocketErrorToPeerErrorCode(wgnx::platform::socket_error e
             return wgnx::PeerErrorCode::TransportOpenFailed;
         case wgnx::platform::socket_error::send_failed:
             return wgnx::PeerErrorCode::TransportSendFailed;
-        case wgnx::platform::socket_error::invalid_endpoint:
         case wgnx::platform::socket_error::receive_failed:
+            return wgnx::PeerErrorCode::TransportReceiveFailed;
+        case wgnx::platform::socket_error::invalid_endpoint:
             return wgnx::PeerErrorCode::InternalFailure;
     }
 
@@ -249,66 +256,47 @@ wgnx::PeerErrorCode SendProtocolPeerInitiation(std::size_t peer_index) {
     return wgnx::PeerErrorCode::None;
 }
 
-void AdvanceProtocolPeerHandshaking(std::size_t peer_index) {
-    auto &runtime = g_state.runtime[peer_index];
-    wgnx::wireguard::wg_peer *peer = GetProtocolPeer(peer_index);
+void ScheduleProtocolSessionTimers(wgnx::wireguard::wg_peer *peer) {
     if (peer == nullptr) {
         return;
     }
 
-    if (runtime.state_ticks == 1U) {
-        const std::uint32_t remote_index =
-            0x80000000U | (runtime.activation_generation << 4) | static_cast<std::uint32_t>(peer_index & 0xFU);
-        wgnx::wireguard::noise_handshake_set_remote_index(std::addressof(peer->handshake), remote_index);
-        static_cast<void>(wgnx::wireguard::noise_handshake_transition(
-            std::addressof(peer->handshake),
-            wgnx::wireguard::HandshakeState::ResponseReceived,
-            peer->name,
-            "simulated handshake response"));
-        wgnx::wireguard::wg_timers_cancel(
-            std::addressof(peer->timers),
-            wgnx::wireguard::TimerHook::RetransmitHandshake,
-            peer->name);
-        if (peer->persistent_keepalive_interval > 0) {
-            wgnx::wireguard::wg_timers_schedule(
-                std::addressof(peer->timers),
-                wgnx::wireguard::TimerHook::SendKeepalive,
-                wgnx::platform::get_jiffies_64() +
-                    static_cast<wgnx::platform::jiffies_t>(peer->persistent_keepalive_interval) * wgnx::platform::HZ,
-                peer->name);
-        }
+    wgnx::wireguard::wg_timers_cancel(
+        std::addressof(peer->timers),
+        wgnx::wireguard::TimerHook::RetransmitHandshake,
+        peer->name);
+    if (peer->persistent_keepalive_interval > 0) {
         wgnx::wireguard::wg_timers_schedule(
             std::addressof(peer->timers),
-            wgnx::wireguard::TimerHook::Rekey,
-            wgnx::platform::get_jiffies_64() + SimulatedRekeyJiffies,
+            wgnx::wireguard::TimerHook::SendKeepalive,
+            wgnx::platform::get_jiffies_64() +
+                static_cast<wgnx::platform::jiffies_t>(peer->persistent_keepalive_interval) * wgnx::platform::HZ,
             peer->name);
     }
+    wgnx::wireguard::wg_timers_schedule(
+        std::addressof(peer->timers),
+        wgnx::wireguard::TimerHook::Rekey,
+        wgnx::platform::get_jiffies_64() + SimulatedRekeyJiffies,
+        peer->name);
 }
 
-void MarkProtocolPeerActive(std::size_t peer_index) {
+wgnx::PeerErrorCode BeginProtocolPeerSession(std::size_t peer_index) {
     wgnx::wireguard::wg_peer *peer = GetProtocolPeer(peer_index);
     if (peer == nullptr) {
-        return;
+        return wgnx::PeerErrorCode::InternalFailure;
     }
 
-    if (peer->handshake_material.remote_ephemeral.valid &&
-        peer->handshake_material.chaining_key.valid &&
-        wgnx::wireguard::noise_handshake_begin_session(peer)) {
-        return;
+    if (!peer->handshake_material.remote_ephemeral.valid ||
+        !peer->handshake_material.chaining_key.valid) {
+        return wgnx::PeerErrorCode::InternalFailure;
     }
 
-    static_cast<void>(wgnx::wireguard::noise_handshake_transition(
-        std::addressof(peer->handshake),
-        wgnx::wireguard::HandshakeState::SessionDerived,
-        peer->name,
-        "simulated active transition"));
-    peer->current_keypair.valid = true;
-    peer->current_keypair.local_index = peer->handshake.local_index;
-    peer->current_keypair.remote_index = peer->handshake.remote_index;
-    peer->current_keypair.send_counter = 0;
-    peer->current_keypair.birthdate_ns = wgnx::platform::ktime_get_coarse_boottime_ns();
-    peer->next_keypair = {};
-    peer->previous_keypair = {};
+    if (!wgnx::wireguard::noise_handshake_begin_session(peer)) {
+        return wgnx::PeerErrorCode::InternalFailure;
+    }
+
+    ScheduleProtocolSessionTimers(peer);
+    return wgnx::PeerErrorCode::None;
 }
 
 void FailProtocolPeer(std::size_t peer_index, const char *reason) {
@@ -433,8 +421,6 @@ void SetPeerActive(std::size_t peer_index) {
     runtime.established = true;
     runtime.last_handshake_seconds = 0;
     runtime.last_rx_seconds = 0;
-    runtime.last_tx_seconds = 0;
-    MarkProtocolPeerActive(peer_index);
 }
 
 void SetPeerError(std::size_t peer_index, wgnx::PeerErrorStage stage, wgnx::PeerErrorCode code) {
@@ -473,6 +459,14 @@ void QueueEndpointResolve(std::size_t peer_index) {
     g_resolve_request.activation_generation = runtime.activation_generation;
     std::snprintf(g_resolve_request.endpoint, sizeof(g_resolve_request.endpoint), "%s", config.endpoint);
     static_cast<void>(wgnx::platform::queue_work(g_resolver_workqueue, std::addressof(g_resolve_dispatcher.work)));
+}
+
+void QueueReceiveWork() {
+    if (g_receive_workqueue == nullptr) {
+        return;
+    }
+
+    static_cast<void>(wgnx::platform::queue_work(g_receive_workqueue, std::addressof(g_receive_dispatcher.work)));
 }
 
 void StartPeerRuntime(std::size_t peer_index) {
@@ -620,23 +614,8 @@ void TickActivePeer() {
         case wgnx::PeerRuntimeState::ResolvingEndpoint:
             break;
         case wgnx::PeerRuntimeState::Handshaking:
-            AdvanceProtocolPeerHandshaking(static_cast<std::size_t>(g_state.active_peer_index));
-            if (runtime.state_ticks >= 2) {
-                SetPeerActive(static_cast<std::size_t>(g_state.active_peer_index));
-            }
             break;
         case wgnx::PeerRuntimeState::Active:
-            if ((runtime.state_ticks % 2U) == 0) {
-                runtime.last_tx_seconds = 0;
-                runtime.tx_bytes += 768 + (runtime.state_ticks * 29U);
-            }
-            if ((runtime.state_ticks % 3U) == 0) {
-                runtime.last_rx_seconds = 0;
-                runtime.rx_bytes += 1024 + (runtime.state_ticks * 37U);
-            }
-            if ((runtime.state_ticks % 10U) == 0) {
-                runtime.last_handshake_seconds = 0;
-            }
             break;
         case wgnx::PeerRuntimeState::Error:
             break;
@@ -651,6 +630,33 @@ bool DequeueResolveRequest(ResolveRequest *out_request) {
 
     *out_request = g_resolve_request;
     g_resolve_request.pending = false;
+    return true;
+}
+
+bool SnapshotReceiveRuntime(
+    std::size_t *out_peer_index,
+    std::uint32_t *out_activation_generation,
+    wgnx::platform::socket_handle *out_socket) {
+    if (out_peer_index == nullptr || out_activation_generation == nullptr || out_socket == nullptr) {
+        return false;
+    }
+
+    std::scoped_lock lock(g_state_mutex);
+    if (g_state.active_peer_index < 0) {
+        return false;
+    }
+
+    const std::size_t peer_index = static_cast<std::size_t>(g_state.active_peer_index);
+    const auto &runtime = g_state.runtime[peer_index];
+    if ((runtime.state != wgnx::PeerRuntimeState::Handshaking &&
+         runtime.state != wgnx::PeerRuntimeState::Active) ||
+        runtime.socket == wgnx::platform::InvalidSocket) {
+        return false;
+    }
+
+    *out_peer_index = peer_index;
+    *out_activation_generation = runtime.activation_generation;
+    *out_socket = runtime.socket;
     return true;
 }
 
@@ -694,10 +700,90 @@ void CommitResolveResult(const ResolveRequest &request, const wgnx::platform::en
         return;
     }
     SetPeerHandshaking(request.peer_index);
+    QueueReceiveWork();
     logger::Log("Endpoint resolved for peer %zu activation=%u -> %s",
         request.peer_index,
         request.activation_generation,
         runtime.resolved_endpoint_text);
+}
+
+void CommitReceivedPacket(
+    std::size_t peer_index,
+    std::uint32_t activation_generation,
+    wgnx::platform::socket_handle socket,
+    const wgnx::platform::packet_buffer *packet,
+    const wgnx::platform::endpoint &source) {
+    std::scoped_lock lock(g_state_mutex);
+    if (peer_index >= g_state.peer_count || g_state.active_peer_index != static_cast<std::int32_t>(peer_index)) {
+        return;
+    }
+
+    auto &runtime = g_state.runtime[peer_index];
+    if (runtime.activation_generation != activation_generation ||
+        runtime.socket != socket ||
+        (runtime.state != wgnx::PeerRuntimeState::Handshaking &&
+         runtime.state != wgnx::PeerRuntimeState::Active)) {
+        return;
+    }
+
+    runtime.rx_bytes += packet->len;
+    runtime.last_rx_seconds = 0;
+
+    wgnx::wireguard::wg_peer *peer = GetProtocolPeer(peer_index);
+    if (peer == nullptr) {
+        SetPeerError(peer_index, wgnx::PeerErrorStage::Internal, wgnx::PeerErrorCode::InternalFailure);
+        return;
+    }
+
+    const auto outcome = wgnx::wireguard::noise_handshake_consume_incoming_packet(packet, peer);
+    logger::Log(
+        "Received UDP packet for peer %zu bytes=%zu source_family=%s outcome=%s",
+        peer_index,
+        packet->len,
+        wgnx::GetPeerResolvedFamilyName(static_cast<wgnx::PeerResolvedFamily>(source.family)),
+        wgnx::wireguard::GetHandshakePacketOutcomeName(outcome));
+
+    switch (outcome) {
+        case wgnx::wireguard::HandshakePacketOutcome::Invalid:
+            return;
+        case wgnx::wireguard::HandshakePacketOutcome::CookieReplyConsumed:
+            return;
+        case wgnx::wireguard::HandshakePacketOutcome::ResponseConsumed: {
+            const wgnx::PeerErrorCode session_error = BeginProtocolPeerSession(peer_index);
+            if (session_error != wgnx::PeerErrorCode::None) {
+                SetPeerError(peer_index, wgnx::PeerErrorStage::Handshake, session_error);
+                return;
+            }
+            SetPeerActive(peer_index);
+            return;
+        }
+    }
+}
+
+void CommitReceiveFailure(
+    std::size_t peer_index,
+    std::uint32_t activation_generation,
+    wgnx::platform::socket_handle socket,
+    wgnx::platform::socket_error error) {
+    std::scoped_lock lock(g_state_mutex);
+    if (peer_index >= g_state.peer_count || g_state.active_peer_index != static_cast<std::int32_t>(peer_index)) {
+        return;
+    }
+
+    auto &runtime = g_state.runtime[peer_index];
+    if (runtime.activation_generation != activation_generation ||
+        runtime.socket != socket ||
+        (runtime.state != wgnx::PeerRuntimeState::Handshaking &&
+         runtime.state != wgnx::PeerRuntimeState::Active)) {
+        return;
+    }
+
+    logger::Log(
+        "UDP receive failed for peer %zu endpoint=%s err=%u",
+        peer_index,
+        runtime.resolved_endpoint_text,
+        static_cast<unsigned int>(error));
+    SetPeerError(peer_index, wgnx::PeerErrorStage::Transport, MapSocketErrorToPeerErrorCode(error));
 }
 
 void ResolverWorkMain(wgnx::platform::work_struct *) {
@@ -705,6 +791,38 @@ void ResolverWorkMain(wgnx::platform::work_struct *) {
     while (DequeueResolveRequest(std::addressof(request))) {
         const auto result = wgnx::platform::resolve_endpoint(request.endpoint);
         CommitResolveResult(request, result);
+    }
+}
+
+void ReceiveWorkMain(wgnx::platform::work_struct *) {
+    wgnx::platform::static_packet_buffer<ReceivePacketCapacity> packet;
+    while (true) {
+        std::size_t peer_index = 0;
+        std::uint32_t activation_generation = 0;
+        wgnx::platform::socket_handle socket = wgnx::platform::InvalidSocket;
+        if (!SnapshotReceiveRuntime(
+                std::addressof(peer_index),
+                std::addressof(activation_generation),
+                std::addressof(socket))) {
+            return;
+        }
+
+        wgnx::platform::endpoint source{};
+        std::size_t received = 0;
+        const auto receive_error = wgnx::platform::udp_receive(
+            socket,
+            packet.storage.data(),
+            packet.storage.size(),
+            std::addressof(received),
+            std::addressof(source));
+        if (receive_error != wgnx::platform::socket_error::none) {
+            CommitReceiveFailure(peer_index, activation_generation, socket, receive_error);
+            return;
+        }
+
+        static_cast<void>(wgnx::platform::packet_set_len(std::addressof(packet.packet), received));
+        CommitReceivedPacket(peer_index, activation_generation, socket, std::addressof(packet.packet), source);
+        wgnx::platform::packet_clear(std::addressof(packet.packet));
     }
 }
 
@@ -717,6 +835,17 @@ void InitializeResolverWorker() {
     AMS_ABORT_UNLESS(g_resolver_workqueue != nullptr);
     wgnx::platform::INIT_WORK(std::addressof(g_resolve_dispatcher.work), ResolverWorkMain);
     logger::Log("Started endpoint resolver worker");
+}
+
+void InitializeReceiveWorker() {
+    if (g_receive_workqueue != nullptr) {
+        return;
+    }
+
+    g_receive_workqueue = wgnx::platform::alloc_ordered_workqueue("wgnx-recv");
+    AMS_ABORT_UNLESS(g_receive_workqueue != nullptr);
+    wgnx::platform::INIT_WORK(std::addressof(g_receive_dispatcher.work), ReceiveWorkMain);
+    logger::Log("Started UDP receive worker");
 }
 
 } // namespace
@@ -820,6 +949,7 @@ void RunIpcServer() {
         InitializeState();
     }
     InitializeResolverWorker();
+    InitializeReceiveWorker();
     logger::Log("Constructing IPC server");
 
     g_server_manager = ams::util::ConstructAt(g_server_manager_storage);
