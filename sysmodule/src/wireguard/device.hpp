@@ -62,6 +62,8 @@ void wg_device_register_handshake_index(wg_device *device, std::uint32_t index);
 void wg_device_refresh_keypair_indices(wg_device *device, const wg_peer *peer);
 wg_index_slot wg_device_lookup_index_slot(const wg_device *device, std::uint32_t index);
 bool wg_device_index_matches_slot(const wg_device *device, wg_index_slot slot, std::uint32_t index);
+noise_keypair *wg_peer_keypair_for_slot(wg_peer *peer, wg_index_slot slot);
+const noise_keypair *wg_peer_keypair_for_slot(const wg_peer *peer, wg_index_slot slot);
 wg_peer *wg_device_first_peer(wg_device *device);
 const wg_peer *wg_device_first_peer(const wg_device *device);
 

@@ -2,6 +2,7 @@
 
 #include "wgnx/platform/packet.hpp"
 
+#include "wireguard/device.hpp"
 #include "wireguard/messages.hpp"
 #include "wireguard/session.hpp"
 
@@ -27,6 +28,11 @@ struct TransportDataDecryptResult {
     std::size_t payload_size{0};
 };
 
+struct IncomingTransportDataResult {
+    wg_index_slot slot{wg_index_slot::None};
+    TransportDataDecryptResult decrypt{};
+};
+
 const char *GetTransportDataErrorName(TransportDataError error);
 
 TransportDataError noise_create_transport_data_packet(
@@ -43,5 +49,12 @@ TransportDataError noise_consume_transport_data_packet(
     std::uint8_t *out_payload,
     std::size_t out_payload_capacity,
     TransportDataDecryptResult *out_result);
+TransportDataError noise_consume_incoming_transport_data_packet(
+    const wgnx::platform::packet_buffer *packet,
+    const wg_device *device,
+    wg_peer *peer,
+    std::uint8_t *out_payload,
+    std::size_t out_payload_capacity,
+    IncomingTransportDataResult *out_result);
 
 } // namespace wgnx::wireguard

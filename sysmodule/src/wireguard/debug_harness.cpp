@@ -748,6 +748,36 @@ bool TestHandshakeResponseAndSessionDerivation() {
         return false;
     }
 
+    if (noise_create_transport_data_packet(
+            &payload_buffer.packet,
+            initiator->current_keypair,
+            g_core_self_test_storage.payload_plaintext,
+            8) != TransportDataError::None) {
+        return false;
+    }
+
+    IncomingTransportDataResult incoming_result{};
+    const TransportDataError incoming_error = noise_consume_incoming_transport_data_packet(
+        &payload_buffer.packet,
+        &responder_device,
+        &g_core_self_test_storage.responder_copy,
+        g_core_self_test_storage.decrypted_payload,
+        sizeof(g_core_self_test_storage.decrypted_payload),
+        &incoming_result);
+    if (incoming_error != TransportDataError::None) {
+        return false;
+    }
+    if (incoming_result.slot != wg_index_slot::CurrentKeypair ||
+        incoming_result.decrypt.header.receiver_index != initiator->current_keypair.remote_index ||
+        incoming_result.decrypt.header.counter != initiator->current_keypair.send_counter ||
+        incoming_result.decrypt.payload_size != 8 ||
+        std::memcmp(
+            g_core_self_test_storage.payload_plaintext,
+            g_core_self_test_storage.decrypted_payload,
+            incoming_result.decrypt.payload_size) != 0) {
+        return false;
+    }
+
     return initiator->current_keypair.valid &&
            responder->current_keypair.valid &&
            initiator->handshake.state == HandshakeState::SessionDerived &&

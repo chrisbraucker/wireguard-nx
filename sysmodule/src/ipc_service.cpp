@@ -131,6 +131,7 @@ constexpr inline std::size_t DebugIcmpHeaderSize = 8;
 constexpr inline std::size_t DebugIcmpPayloadSize = 16;
 constexpr inline std::size_t DebugIcmpPacketSize =
     DebugIpv4HeaderSize + DebugIcmpHeaderSize + DebugIcmpPayloadSize;
+constinit std::array<std::uint8_t, MaxTransportPayloadSize> g_receive_payload_buffer = {};
 
 bool IsSupportedDebugTriggerAction(wgnx::DebugTriggerAction action) {
     switch (action) {
@@ -287,6 +288,209 @@ std::size_t BuildDebugIcmpEchoRequest(
     StoreBigEndian16(icmp + 2, ComputeInternetChecksum(icmp, DebugIcmpHeaderSize + DebugIcmpPayloadSize));
 
     return DebugIcmpPacketSize;
+}
+
+const char *GetIndexSlotName(wgnx::wireguard::wg_index_slot slot) {
+    switch (slot) {
+        case wgnx::wireguard::wg_index_slot::None:
+            return "none";
+        case wgnx::wireguard::wg_index_slot::Handshake:
+            return "handshake";
+        case wgnx::wireguard::wg_index_slot::CurrentKeypair:
+            return "current";
+        case wgnx::wireguard::wg_index_slot::NextKeypair:
+            return "next";
+        case wgnx::wireguard::wg_index_slot::PreviousKeypair:
+            return "previous";
+    }
+
+    return "unknown";
+}
+
+std::size_t GetEndpointAddressSize(wgnx::platform::address_family family) {
+    switch (family) {
+        case wgnx::platform::address_family::inet:
+            return 4;
+        case wgnx::platform::address_family::inet6:
+            return 16;
+        case wgnx::platform::address_family::unspecified:
+            break;
+    }
+
+    return 0;
+}
+
+bool EndpointsEqual(const wgnx::platform::endpoint &lhs, const wgnx::platform::endpoint &rhs) {
+    if (lhs.family != rhs.family || lhs.port != rhs.port) {
+        return false;
+    }
+
+    const std::size_t address_size = GetEndpointAddressSize(lhs.family);
+    return address_size != 0 && std::memcmp(lhs.address, rhs.address, address_size) == 0;
+}
+
+void FormatEndpointText(
+    const wgnx::platform::endpoint &endpoint,
+    char *out_text,
+    std::size_t out_text_size) {
+    if (out_text == nullptr || out_text_size == 0) {
+        return;
+    }
+
+    if (!wgnx::platform::endpoint_to_string(&endpoint, out_text, out_text_size)) {
+        std::snprintf(out_text, out_text_size, "<invalid>");
+    }
+}
+
+enum class DebugIcmpReplyValidation : std::uint8_t {
+    NotDebugReply = 0,
+    InvalidIpv4,
+    InvalidIcmp,
+    InvalidAction,
+    ActivationMismatch,
+    PeerMismatch,
+    DestinationMismatch,
+    SourceMismatch,
+    Valid,
+};
+
+struct DebugIcmpReplyInfo {
+    wgnx::DebugTriggerAction action{wgnx::DebugTriggerAction::None};
+    std::uint32_t activation_generation{0};
+    std::uint32_t peer_index{0};
+    std::uint16_t sequence{0};
+    std::uint8_t source_ipv4[4]{};
+    std::uint8_t destination_ipv4[4]{};
+};
+
+const char *GetDebugIcmpReplyValidationName(DebugIcmpReplyValidation validation) {
+    switch (validation) {
+        case DebugIcmpReplyValidation::NotDebugReply:
+            return "not_debug_reply";
+        case DebugIcmpReplyValidation::InvalidIpv4:
+            return "invalid_ipv4";
+        case DebugIcmpReplyValidation::InvalidIcmp:
+            return "invalid_icmp";
+        case DebugIcmpReplyValidation::InvalidAction:
+            return "invalid_action";
+        case DebugIcmpReplyValidation::ActivationMismatch:
+            return "activation_mismatch";
+        case DebugIcmpReplyValidation::PeerMismatch:
+            return "peer_mismatch";
+        case DebugIcmpReplyValidation::DestinationMismatch:
+            return "destination_mismatch";
+        case DebugIcmpReplyValidation::SourceMismatch:
+            return "source_mismatch";
+        case DebugIcmpReplyValidation::Valid:
+            return "valid";
+    }
+
+    return "unknown";
+}
+
+DebugIcmpReplyValidation ValidateDebugIcmpEchoReply(
+    const std::uint8_t *payload,
+    std::size_t payload_size,
+    const char *local_address_text,
+    std::size_t expected_peer_index,
+    std::uint32_t expected_activation_generation,
+    DebugIcmpReplyInfo *out_info) {
+    if (out_info != nullptr) {
+        *out_info = {};
+    }
+    if (payload == nullptr || payload_size < (DebugIpv4HeaderSize + DebugIcmpHeaderSize)) {
+        return DebugIcmpReplyValidation::NotDebugReply;
+    }
+
+    const std::uint8_t version = payload[0] >> 4;
+    const std::size_t ihl = static_cast<std::size_t>(payload[0] & 0x0Fu) * 4;
+    if (version != 4) {
+        return DebugIcmpReplyValidation::NotDebugReply;
+    }
+    if (ihl < DebugIpv4HeaderSize || payload_size < ihl ||
+        ComputeInternetChecksum(payload, ihl) != 0) {
+        return DebugIcmpReplyValidation::InvalidIpv4;
+    }
+
+    const std::uint16_t total_length =
+        (static_cast<std::uint16_t>(payload[2]) << 8) |
+        static_cast<std::uint16_t>(payload[3]);
+    if (total_length < (ihl + DebugIcmpHeaderSize) || total_length > payload_size) {
+        return DebugIcmpReplyValidation::InvalidIpv4;
+    }
+    if (payload[9] != 1) {
+        return DebugIcmpReplyValidation::NotDebugReply;
+    }
+
+    const std::uint8_t *icmp = payload + ihl;
+    const std::size_t icmp_size = total_length - ihl;
+    if (icmp_size < (DebugIcmpHeaderSize + DebugIcmpPayloadSize) ||
+        ComputeInternetChecksum(icmp, icmp_size) != 0) {
+        return DebugIcmpReplyValidation::InvalidIcmp;
+    }
+    if (icmp[0] != 0 || icmp[1] != 0) {
+        return DebugIcmpReplyValidation::NotDebugReply;
+    }
+
+    const std::uint8_t *icmp_payload = icmp + DebugIcmpHeaderSize;
+    if (std::memcmp(icmp_payload, "WGNX", 4) != 0) {
+        return DebugIcmpReplyValidation::NotDebugReply;
+    }
+
+    const std::uint32_t encoded_action =
+        (static_cast<std::uint32_t>(icmp_payload[4]) << 24) |
+        (static_cast<std::uint32_t>(icmp_payload[5]) << 16) |
+        (static_cast<std::uint32_t>(icmp_payload[6]) << 8) |
+        static_cast<std::uint32_t>(icmp_payload[7]);
+    const auto action = static_cast<wgnx::DebugTriggerAction>(encoded_action);
+    if (!IsSupportedDebugTriggerAction(action)) {
+        return DebugIcmpReplyValidation::InvalidAction;
+    }
+
+    const std::uint32_t activation_generation =
+        (static_cast<std::uint32_t>(icmp_payload[8]) << 24) |
+        (static_cast<std::uint32_t>(icmp_payload[9]) << 16) |
+        (static_cast<std::uint32_t>(icmp_payload[10]) << 8) |
+        static_cast<std::uint32_t>(icmp_payload[11]);
+    if (activation_generation != expected_activation_generation) {
+        return DebugIcmpReplyValidation::ActivationMismatch;
+    }
+
+    const std::uint32_t peer_index =
+        (static_cast<std::uint32_t>(icmp_payload[12]) << 24) |
+        (static_cast<std::uint32_t>(icmp_payload[13]) << 16) |
+        (static_cast<std::uint32_t>(icmp_payload[14]) << 8) |
+        static_cast<std::uint32_t>(icmp_payload[15]);
+    if (peer_index != expected_peer_index) {
+        return DebugIcmpReplyValidation::PeerMismatch;
+    }
+
+    std::uint8_t expected_destination[4] = {};
+    if (!ParseIpv4InterfaceAddress(expected_destination, local_address_text)) {
+        return DebugIcmpReplyValidation::DestinationMismatch;
+    }
+    if (std::memcmp(payload + 16, expected_destination, sizeof(expected_destination)) != 0) {
+        return DebugIcmpReplyValidation::DestinationMismatch;
+    }
+
+    std::uint8_t expected_source[4] = {};
+    CopyDebugTargetIpv4(action, expected_source);
+    if (std::memcmp(payload + 12, expected_source, sizeof(expected_source)) != 0) {
+        return DebugIcmpReplyValidation::SourceMismatch;
+    }
+
+    if (out_info != nullptr) {
+        out_info->action = action;
+        out_info->activation_generation = activation_generation;
+        out_info->peer_index = peer_index;
+        out_info->sequence =
+            (static_cast<std::uint16_t>(icmp[6]) << 8) |
+            static_cast<std::uint16_t>(icmp[7]);
+        std::memcpy(out_info->source_ipv4, payload + 12, sizeof(out_info->source_ipv4));
+        std::memcpy(out_info->destination_ipv4, payload + 16, sizeof(out_info->destination_ipv4));
+    }
+
+    return DebugIcmpReplyValidation::Valid;
 }
 
 wgnx::platform::ktime_t GetRuntimeNowNs() {
@@ -1222,6 +1426,108 @@ void CommitReceivedPacket(
     wgnx::wireguard::wg_peer *peer = GetProtocolPeer(peer_index);
     if (peer == nullptr) {
         SetPeerError(peer_index, wgnx::PeerErrorStage::Internal, wgnx::PeerErrorCode::InternalFailure);
+        return;
+    }
+
+    wgnx::wireguard::MessageType type = wgnx::wireguard::MessageType::Invalid;
+    const wgnx::wireguard::ParseResult type_result = wgnx::wireguard::InspectMessageType(packet, &type);
+    if (!type_result.success) {
+        logger::Log(
+            "Rejected UDP packet for peer %zu bytes=%zu source_family=%s inspect_err=%s",
+            peer_index,
+            packet->len,
+            wgnx::GetPeerResolvedFamilyName(static_cast<wgnx::PeerResolvedFamily>(source.family)),
+            wgnx::wireguard::GetParseErrorName(type_result.error));
+        return;
+    }
+
+    if (type == wgnx::wireguard::MessageType::TransportData) {
+        char source_text[sizeof(wgnx::PeerInfo::resolved_endpoint)] = {};
+        char expected_text[sizeof(wgnx::PeerInfo::resolved_endpoint)] = {};
+        FormatEndpointText(source, source_text, sizeof(source_text));
+        FormatEndpointText(runtime.resolved_endpoint, expected_text, sizeof(expected_text));
+
+        if (!runtime.has_resolved_endpoint || !EndpointsEqual(source, runtime.resolved_endpoint)) {
+            logger::Log(
+                "Rejected WG transport data for peer %zu bytes=%zu source=%s expected=%s reason=source_mismatch",
+                peer_index,
+                packet->len,
+                source_text,
+                expected_text);
+            return;
+        }
+
+        wgnx::wireguard::IncomingTransportDataResult decrypt_result{};
+        const wgnx::wireguard::TransportDataError decrypt_error =
+            wgnx::wireguard::noise_consume_incoming_transport_data_packet(
+                packet,
+                std::addressof(g_state.protocol[peer_index].device),
+                peer,
+                g_receive_payload_buffer.data(),
+                g_receive_payload_buffer.size(),
+                std::addressof(decrypt_result));
+        if (decrypt_error != wgnx::wireguard::TransportDataError::None) {
+            logger::Log(
+                "Rejected WG transport data for peer %zu bytes=%zu source=%s slot=%s err=%s",
+                peer_index,
+                packet->len,
+                source_text,
+                GetIndexSlotName(decrypt_result.slot),
+                wgnx::wireguard::GetTransportDataErrorName(decrypt_error));
+            return;
+        }
+
+        logger::Log(
+            "Accepted WG transport data for peer %zu bytes=%zu payload=%zu source=%s slot=%s counter=%llu",
+            peer_index,
+            packet->len,
+            decrypt_result.decrypt.payload_size,
+            source_text,
+            GetIndexSlotName(decrypt_result.slot),
+            static_cast<unsigned long long>(decrypt_result.decrypt.header.counter));
+
+        if (decrypt_result.decrypt.payload_size == 0) {
+            logger::Log("Accepted WG keepalive payload for peer %zu", peer_index);
+            return;
+        }
+
+        DebugIcmpReplyInfo reply_info{};
+        const DebugIcmpReplyValidation reply_validation = ValidateDebugIcmpEchoReply(
+            g_receive_payload_buffer.data(),
+            decrypt_result.decrypt.payload_size,
+            g_state.configured_peers[peer_index].address,
+            peer_index,
+            activation_generation,
+            std::addressof(reply_info));
+        if (reply_validation == DebugIcmpReplyValidation::Valid) {
+            char inner_source[16] = {};
+            char inner_destination[16] = {};
+            FormatIpv4Text(reply_info.source_ipv4, inner_source, sizeof(inner_source));
+            FormatIpv4Text(reply_info.destination_ipv4, inner_destination, sizeof(inner_destination));
+            logger::Log(
+                "Validated debug ICMP reply for peer %zu action=%s source=%s destination=%s seq=%u activation=%u",
+                peer_index,
+                wgnx::GetDebugTriggerActionName(reply_info.action),
+                inner_source,
+                inner_destination,
+                static_cast<unsigned int>(reply_info.sequence),
+                reply_info.activation_generation);
+            return;
+        }
+
+        if (reply_validation != DebugIcmpReplyValidation::NotDebugReply) {
+            logger::Log(
+                "Rejected debug ICMP reply metadata for peer %zu validation=%s payload=%zu",
+                peer_index,
+                GetDebugIcmpReplyValidationName(reply_validation),
+                decrypt_result.decrypt.payload_size);
+            return;
+        }
+
+        logger::Log(
+            "Delivered non-debug decrypted payload for peer %zu bytes=%zu",
+            peer_index,
+            decrypt_result.decrypt.payload_size);
         return;
     }
 

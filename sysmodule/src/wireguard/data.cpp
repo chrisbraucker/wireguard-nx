@@ -1,6 +1,7 @@
 #include "wireguard/data.hpp"
 
 #include "wireguard/crypto/primitives.hpp"
+#include "wireguard/device.hpp"
 #include "wireguard/endian.hpp"
 
 #include <cstring>
@@ -240,6 +241,50 @@ TransportDataError noise_consume_transport_data_packet(
     if (out_result != nullptr) {
         out_result->header = header;
         out_result->payload_size = payload_size;
+    }
+    return TransportDataError::None;
+}
+
+TransportDataError noise_consume_incoming_transport_data_packet(
+    const wgnx::platform::packet_buffer *packet,
+    const wg_device *device,
+    wg_peer *peer,
+    std::uint8_t *out_payload,
+    std::size_t out_payload_capacity,
+    IncomingTransportDataResult *out_result) {
+    if (out_result != nullptr) {
+        *out_result = {};
+    }
+    if (packet == nullptr || device == nullptr || peer == nullptr) {
+        return TransportDataError::InvalidArgument;
+    }
+
+    message_transport_data header{};
+    const ParseResult parse_result = ParseTransportDataHeader(packet, &header);
+    if (!parse_result.success) {
+        return TransportDataError::InvalidPacket;
+    }
+
+    const wg_index_slot slot = wg_device_lookup_index_slot(device, header.receiver_index);
+    noise_keypair *keypair = wg_peer_keypair_for_slot(peer, slot);
+    if (keypair == nullptr) {
+        return TransportDataError::ReceiverIndexMismatch;
+    }
+
+    TransportDataDecryptResult decrypt{};
+    const TransportDataError error = noise_consume_transport_data_packet(
+        packet,
+        keypair,
+        out_payload,
+        out_payload_capacity,
+        &decrypt);
+    if (error != TransportDataError::None) {
+        return error;
+    }
+
+    if (out_result != nullptr) {
+        out_result->slot = slot;
+        out_result->decrypt = decrypt;
     }
     return TransportDataError::None;
 }
