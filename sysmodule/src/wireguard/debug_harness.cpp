@@ -17,7 +17,36 @@ namespace wgnx::wireguard {
 
 namespace {
 
+/*
+ * Harness key fixture notes:
+ *
+ * These constants are just deterministic test fixtures. The current pair was
+ * originally seeded from fixed 32-byte values during bring-up, and the public
+ * keys were then derived from the private keys via X25519 so the harness could
+ * verify real WireGuard key parsing and handshake behavior without any device-
+ * side dependency on external tooling.
+ *
+ * To replace them manually with fresh values, the simplest path is the normal
+ * WireGuard tooling:
+ *
+ *   wg genkey | tee local.key | wg pubkey > local.pub
+ *   wg genkey | tee remote.key | wg pubkey > remote.pub
+ *   wg genpsk > psk.key
+ *
+ * Then copy:
+ * - the contents of `local.key` into `HarnessLocalPrivateKey`
+ * - the contents of `local.pub` into `HarnessLocalPublicKey`
+ * - the contents of `remote.key` into `HarnessRemotePrivateKey`
+ * - the contents of `remote.pub` into `HarnessRemotePublicKey`
+ * - the contents of `psk.key` into `HarnessPresharedKey`
+ *
+ * If `wg` tooling is unavailable, any method that produces valid WireGuard
+ * base64-encoded X25519 private/public keypairs and a 32-byte preshared key is
+ * sufficient. `wg` is preferred because it guarantees the exact expected
+ * encoding and clamping behavior.
+ */
 constexpr char HarnessLocalPrivateKey[] = "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=";
+constexpr char HarnessRemotePrivateKey[] = "ZWZnaGlqa2xtbm9wcXJzdHV2d3h5ent8fX5/gIGCg4Q=";
 constexpr char HarnessRemotePublicKey[] = "VxR2nRFr92Q2rnS8eT0sMK0ZA8WaxSc4BcfiaYtBDDY=";
 constexpr char HarnessPresharedKey[] = "ycrLzM3Oz9DR0tPU1dbX2Nna29zd3t/g4eLj5OXm5+g=";
 constexpr char HarnessLocalPublicKey[] = "B6N8vBQgk8i3VdwbEOhstCY3StFqqFPtC9/AsrhtHHw=";
@@ -407,6 +436,99 @@ bool TestHandshakeInitiationCreation() {
            std::memcmp(parsed.macs.mac2, zero_mac, sizeof(parsed.macs.mac2)) == 0;
 }
 
+bool TestHandshakeResponseAndSessionDerivation() {
+    ResetCoreSelfTestStorage();
+    wgnx::PeerConfigEntry &initiator_config = g_core_self_test_storage.config;
+    std::snprintf(initiator_config.name, sizeof(initiator_config.name), "%s", "initiator-peer");
+    std::snprintf(initiator_config.address, sizeof(initiator_config.address), "%s", "10.66.66.2/32");
+    std::snprintf(initiator_config.endpoint, sizeof(initiator_config.endpoint), "%s", "vpn.example.test:51820");
+    std::snprintf(initiator_config.private_key, sizeof(initiator_config.private_key), "%s", HarnessLocalPrivateKey);
+    std::snprintf(initiator_config.public_key, sizeof(initiator_config.public_key), "%s", HarnessRemotePublicKey);
+    std::snprintf(initiator_config.preshared_key, sizeof(initiator_config.preshared_key), "%s", HarnessPresharedKey);
+    std::snprintf(initiator_config.allowed_ips, sizeof(initiator_config.allowed_ips), "%s", "0.0.0.0/0, ::/0");
+
+    wg_device &initiator_device = g_core_self_test_storage.device;
+    if (!wg_device_init_from_config_entry(&initiator_device, initiator_config)) {
+        return false;
+    }
+    wg_peer *initiator = wg_device_first_peer(&initiator_device);
+    if (initiator == nullptr) {
+        return false;
+    }
+
+    wgnx::PeerConfigEntry responder_config{};
+    std::snprintf(responder_config.name, sizeof(responder_config.name), "%s", "responder-peer");
+    std::snprintf(responder_config.address, sizeof(responder_config.address), "%s", "10.66.66.1/32");
+    std::snprintf(responder_config.endpoint, sizeof(responder_config.endpoint), "%s", "0.0.0.0:0");
+    std::snprintf(responder_config.private_key, sizeof(responder_config.private_key), "%s", HarnessRemotePrivateKey);
+    std::snprintf(responder_config.public_key, sizeof(responder_config.public_key), "%s", HarnessLocalPublicKey);
+    std::snprintf(responder_config.preshared_key, sizeof(responder_config.preshared_key), "%s", HarnessPresharedKey);
+    std::snprintf(responder_config.allowed_ips, sizeof(responder_config.allowed_ips), "%s", "10.66.66.2/32");
+
+    wg_device responder_device{};
+    if (!wg_device_init_from_config_entry(&responder_device, responder_config)) {
+        return false;
+    }
+    wg_peer *responder = wg_device_first_peer(&responder_device);
+    if (responder == nullptr) {
+        return false;
+    }
+
+    noise_handshake_set_local_index(&initiator->handshake, 0x01020304U);
+    noise_handshake_set_local_index(&responder->handshake, 0xA1A2A3A4U);
+
+    message_handshake_initiation initiation{};
+    if (!noise_handshake_create_initiation(&initiation, initiator)) {
+        return false;
+    }
+    if (!noise_handshake_consume_initiation(&initiation, responder)) {
+        return false;
+    }
+
+    message_handshake_response response{};
+    if (!noise_handshake_create_response(&response, responder)) {
+        return false;
+    }
+
+    wg_peer initiator_copy = *initiator;
+    const message_handshake_response tampered_response = [&response] {
+        message_handshake_response tampered = response;
+        tampered.encrypted_nothing[0] ^= 0x80U;
+        return tampered;
+    }();
+    if (noise_handshake_consume_response(&tampered_response, &initiator_copy)) {
+        return false;
+    }
+    if (!noise_handshake_consume_response(&response, initiator)) {
+        return false;
+    }
+
+    if (!noise_handshake_begin_session(initiator) || !noise_handshake_begin_session(responder)) {
+        return false;
+    }
+
+    return initiator->current_keypair.valid &&
+           responder->current_keypair.valid &&
+           initiator->handshake.state == HandshakeState::SessionDerived &&
+           responder->handshake.state == HandshakeState::SessionDerived &&
+           initiator->current_keypair.local_index == 0x01020304U &&
+           initiator->current_keypair.remote_index == 0xA1A2A3A4U &&
+           responder->current_keypair.local_index == 0xA1A2A3A4U &&
+           responder->current_keypair.remote_index == 0x01020304U &&
+           initiator->current_keypair.sending_key.valid &&
+           initiator->current_keypair.receiving_key.valid &&
+           responder->current_keypair.sending_key.valid &&
+           responder->current_keypair.receiving_key.valid &&
+           std::memcmp(
+               initiator->current_keypair.sending_key.bytes,
+               responder->current_keypair.receiving_key.bytes,
+               sizeof(initiator->current_keypair.sending_key.bytes)) == 0 &&
+           std::memcmp(
+               initiator->current_keypair.receiving_key.bytes,
+               responder->current_keypair.sending_key.bytes,
+               sizeof(initiator->current_keypair.receiving_key.bytes)) == 0;
+}
+
 } // namespace
 
 bool RunMessageSelfTest() {
@@ -445,7 +567,8 @@ bool RunCoreSelfTest() {
     const bool ok =
         TestDeviceAndPeerSkeleton() &&
         TestStaticIdentityParsing() &&
-        TestHandshakeInitiationCreation();
+        TestHandshakeInitiationCreation() &&
+        TestHandshakeResponseAndSessionDerivation();
     ResetCoreSelfTestStorage();
 
     if (ok) {

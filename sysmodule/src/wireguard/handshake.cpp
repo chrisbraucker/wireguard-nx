@@ -247,21 +247,43 @@ bool MixPrecomputedDh(
     return true;
 }
 
+void MixPsk(
+    std::uint8_t chaining_key[NoiseHashSize],
+    std::uint8_t hash[NoiseHashSize],
+    std::uint8_t key[NoiseSymmetricKeySize],
+    const std::uint8_t preshared_key[NoiseSymmetricKeySize]) {
+    std::uint8_t temp_hash[NoiseHashSize]{};
+    Kdf(
+        chaining_key,
+        NoiseHashSize,
+        temp_hash,
+        NoiseHashSize,
+        key,
+        NoiseSymmetricKeySize,
+        preshared_key,
+        NoiseSymmetricKeySize,
+        chaining_key);
+    MixHash(hash, temp_hash, sizeof(temp_hash));
+    crypto::secure_clear(temp_hash, sizeof(temp_hash));
+}
+
 bool MessageEncrypt(
     std::uint8_t *dst_ciphertext,
     const std::uint8_t *src_plaintext,
     std::size_t src_size,
     std::uint8_t key[NoiseSymmetricKeySize],
     std::uint8_t hash[NoiseHashSize]) {
-    if (dst_ciphertext == nullptr || src_plaintext == nullptr) {
+    if (dst_ciphertext == nullptr || (src_plaintext == nullptr && src_size != 0)) {
         return false;
     }
 
     std::uint8_t tag[NoiseTagSize]{};
+    std::uint8_t empty_plaintext = 0;
+    const std::uint8_t *plaintext_src = src_plaintext != nullptr ? src_plaintext : &empty_plaintext;
     if (!crypto::chacha20poly1305_encrypt(
             dst_ciphertext,
             tag,
-            src_plaintext,
+            plaintext_src,
             src_size,
             hash,
             NoiseHashSize,
@@ -273,6 +295,45 @@ bool MessageEncrypt(
     std::memcpy(dst_ciphertext + src_size, tag, sizeof(tag));
     MixHash(hash, dst_ciphertext, src_size + sizeof(tag));
     crypto::secure_clear(tag, sizeof(tag));
+    return true;
+}
+
+bool MessageDecrypt(
+    std::uint8_t *dst_plaintext,
+    const std::uint8_t *src_ciphertext,
+    std::size_t src_size,
+    std::uint8_t key[NoiseSymmetricKeySize],
+    std::uint8_t hash[NoiseHashSize]) {
+    if (src_ciphertext == nullptr || src_size < NoiseTagSize) {
+        return false;
+    }
+
+    const std::size_t plaintext_size = src_size - NoiseTagSize;
+    std::uint8_t empty_plaintext = 0;
+    std::uint8_t *plaintext_dst = dst_plaintext;
+    if (plaintext_dst == nullptr) {
+        if (plaintext_size != 0) {
+            return false;
+        }
+        plaintext_dst = &empty_plaintext;
+    }
+
+    const bool ok = crypto::chacha20poly1305_decrypt(
+        plaintext_dst,
+        src_ciphertext,
+        plaintext_size,
+        src_ciphertext + plaintext_size,
+        hash,
+        NoiseHashSize,
+        key,
+        ZeroNonce);
+    if (!ok) {
+        crypto::secure_clear(&empty_plaintext, sizeof(empty_plaintext));
+        return false;
+    }
+
+    MixHash(hash, src_ciphertext, src_size);
+    crypto::secure_clear(&empty_plaintext, sizeof(empty_plaintext));
     return true;
 }
 
@@ -329,6 +390,72 @@ void ComputeMac1(message_handshake_initiation *message, const noise_public_key &
         mac1_key,
         sizeof(mac1_key)));
     crypto::secure_clear(mac1_key, sizeof(mac1_key));
+}
+
+void ComputeMac1(message_handshake_response *message, const noise_public_key &remote_static) {
+    std::uint8_t mac1_key[NoiseSymmetricKeySize]{};
+    crypto::blake2s_state state{};
+    static_cast<void>(crypto::blake2s_init(&state, sizeof(mac1_key), nullptr, 0));
+    crypto::blake2s_update(&state, Mac1KeyLabel, sizeof(Mac1KeyLabel) - 1);
+    crypto::blake2s_update(&state, remote_static.bytes, sizeof(remote_static.bytes));
+    static_cast<void>(crypto::blake2s_final(&state, mac1_key, sizeof(mac1_key)));
+
+    const std::size_t mac1_input_size =
+        sizeof(*message) - sizeof(message->macs) + offsetof(message_macs, mac1);
+    static_cast<void>(crypto::blake2s(
+        message->macs.mac1,
+        sizeof(message->macs.mac1),
+        message,
+        mac1_input_size,
+        mac1_key,
+        sizeof(mac1_key)));
+    crypto::secure_clear(mac1_key, sizeof(mac1_key));
+}
+
+void ClearHandshakeTranscript(wg_peer *peer) {
+    if (peer == nullptr) {
+        return;
+    }
+
+    crypto::secure_clear(
+        peer->handshake_material.ephemeral_private.bytes,
+        sizeof(peer->handshake_material.ephemeral_private.bytes));
+    peer->handshake_material.ephemeral_private.valid = false;
+    crypto::secure_clear(
+        peer->handshake_material.ephemeral_public.bytes,
+        sizeof(peer->handshake_material.ephemeral_public.bytes));
+    peer->handshake_material.ephemeral_public.valid = false;
+    crypto::secure_clear(
+        peer->handshake_material.remote_ephemeral.bytes,
+        sizeof(peer->handshake_material.remote_ephemeral.bytes));
+    peer->handshake_material.remote_ephemeral.valid = false;
+    crypto::secure_clear(peer->handshake_material.chaining_key.bytes, sizeof(peer->handshake_material.chaining_key.bytes));
+    peer->handshake_material.chaining_key.valid = false;
+    crypto::secure_clear(peer->handshake_material.hash.bytes, sizeof(peer->handshake_material.hash.bytes));
+    peer->handshake_material.hash.valid = false;
+    peer->handshake.remote_index = 0;
+}
+
+void DeriveSessionKeys(
+    noise_symmetric_key *first_dst,
+    noise_symmetric_key *second_dst,
+    const std::uint8_t chaining_key[NoiseHashSize]) {
+    if (first_dst == nullptr || second_dst == nullptr) {
+        return;
+    }
+
+    Kdf(
+        first_dst->bytes,
+        sizeof(first_dst->bytes),
+        second_dst->bytes,
+        sizeof(second_dst->bytes),
+        nullptr,
+        0,
+        nullptr,
+        0,
+        chaining_key);
+    first_dst->valid = true;
+    second_dst->valid = true;
 }
 
 } // namespace
@@ -504,6 +631,274 @@ bool noise_handshake_create_initiation(message_handshake_initiation *dst, wg_pee
     crypto::secure_clear(ephemeral_private, sizeof(ephemeral_private));
     crypto::secure_clear(key, sizeof(key));
     crypto::secure_clear(timestamp, sizeof(timestamp));
+    return true;
+}
+
+bool noise_handshake_consume_initiation(const message_handshake_initiation *src, wg_peer *peer) {
+    if (src == nullptr || peer == nullptr || !peer->static_identity.static_private.valid ||
+        !peer->static_identity.static_public.valid || !peer->static_identity.remote_static.valid ||
+        !peer->handshake_material.precomputed_static_static.valid || peer->handshake.local_index == 0) {
+        return false;
+    }
+
+    /*
+     * Deliberate Milestone 5 scope note:
+     * This responder-side path exists primarily to let the deterministic
+     * harness create a valid response packet for initiator-side verification.
+     * Replay and flood checks are deferred to Increment 4.
+     */
+    std::uint8_t key[NoiseSymmetricKeySize]{};
+    std::uint8_t chaining_key[NoiseHashSize]{};
+    std::uint8_t hash[NoiseHashSize]{};
+    std::uint8_t remote_ephemeral[NoisePublicKeySize]{};
+    std::uint8_t remote_static[NoisePublicKeySize]{};
+    std::uint8_t timestamp[TAI64NTimestampSize]{};
+    bool ok = false;
+
+    if (GetMessageType(src->type) != MessageType::HandshakeInitiation) {
+        wgnx::sysmodule::logger::Log("WG handshake peer='%s': rejected initiation with wrong message type", peer->name);
+        goto out;
+    }
+
+    HandshakeInit(chaining_key, hash, peer->static_identity.static_public);
+    MessageEphemeral(remote_ephemeral, src->unencrypted_ephemeral, chaining_key, hash);
+    if (!MixDh(chaining_key, key, peer->static_identity.static_private.bytes, remote_ephemeral)) {
+        wgnx::sysmodule::logger::Log("WG handshake peer='%s': initiation es DH failed", peer->name);
+        goto out;
+    }
+    if (!MessageDecrypt(remote_static, src->encrypted_static, sizeof(src->encrypted_static), key, hash)) {
+        wgnx::sysmodule::logger::Log("WG handshake peer='%s': initiation static decrypt failed", peer->name);
+        goto out;
+    }
+    if (!crypto::secure_equal(
+            remote_static,
+            peer->static_identity.remote_static.bytes,
+            sizeof(remote_static))) {
+        wgnx::sysmodule::logger::Log("WG handshake peer='%s': initiation remote static mismatch", peer->name);
+        goto out;
+    }
+    if (!MixPrecomputedDh(chaining_key, key, peer->handshake_material.precomputed_static_static)) {
+        wgnx::sysmodule::logger::Log("WG handshake peer='%s': initiation static-static DH failed", peer->name);
+        goto out;
+    }
+    if (!MessageDecrypt(timestamp, src->encrypted_timestamp, sizeof(src->encrypted_timestamp), key, hash)) {
+        wgnx::sysmodule::logger::Log("WG handshake peer='%s': initiation timestamp decrypt failed", peer->name);
+        goto out;
+    }
+
+    std::memcpy(peer->handshake_material.remote_ephemeral.bytes, remote_ephemeral, sizeof(remote_ephemeral));
+    peer->handshake_material.remote_ephemeral.valid = true;
+    std::memcpy(peer->handshake_material.hash.bytes, hash, sizeof(hash));
+    peer->handshake_material.hash.valid = true;
+    std::memcpy(peer->handshake_material.chaining_key.bytes, chaining_key, sizeof(chaining_key));
+    peer->handshake_material.chaining_key.valid = true;
+    peer->handshake.remote_index = src->sender_index;
+    static_cast<void>(noise_handshake_transition(
+        &peer->handshake,
+        HandshakeState::InitiationReceived,
+        peer->name,
+        "consumed real handshake initiation"));
+    ok = true;
+
+out:
+    crypto::secure_clear(key, sizeof(key));
+    crypto::secure_clear(chaining_key, sizeof(chaining_key));
+    crypto::secure_clear(hash, sizeof(hash));
+    crypto::secure_clear(remote_ephemeral, sizeof(remote_ephemeral));
+    crypto::secure_clear(remote_static, sizeof(remote_static));
+    crypto::secure_clear(timestamp, sizeof(timestamp));
+    return ok;
+}
+
+bool noise_handshake_create_response(message_handshake_response *dst, wg_peer *peer) {
+    if (dst == nullptr || peer == nullptr || !peer->static_identity.remote_static.valid ||
+        !peer->handshake_material.remote_ephemeral.valid || peer->handshake.local_index == 0 ||
+        peer->handshake.state != HandshakeState::InitiationReceived) {
+        return false;
+    }
+
+    std::uint8_t key[NoiseSymmetricKeySize]{};
+    std::uint8_t ephemeral_private[NoisePublicKeySize]{};
+
+    *dst = {};
+    SetMessageType(&dst->type, MessageType::HandshakeResponse);
+    dst->receiver_index = peer->handshake.remote_index;
+
+    wgnx::platform::get_random_bytes(ephemeral_private, sizeof(ephemeral_private));
+    ephemeral_private[0] &= 248U;
+    ephemeral_private[31] &= 127U;
+    ephemeral_private[31] |= 64U;
+    std::memcpy(peer->handshake_material.ephemeral_private.bytes, ephemeral_private, sizeof(ephemeral_private));
+    peer->handshake_material.ephemeral_private.valid = true;
+
+    if (!crypto::x25519_public_key(
+            peer->handshake_material.ephemeral_public.bytes,
+            peer->handshake_material.ephemeral_private.bytes)) {
+        crypto::secure_clear(ephemeral_private, sizeof(ephemeral_private));
+        return false;
+    }
+    peer->handshake_material.ephemeral_public.valid = true;
+
+    MessageEphemeral(
+        dst->unencrypted_ephemeral,
+        peer->handshake_material.ephemeral_public.bytes,
+        peer->handshake_material.chaining_key.bytes,
+        peer->handshake_material.hash.bytes);
+    if (!MixDh(
+            peer->handshake_material.chaining_key.bytes,
+            nullptr,
+            peer->handshake_material.ephemeral_private.bytes,
+            peer->handshake_material.remote_ephemeral.bytes)) {
+        wgnx::sysmodule::logger::Log("WG handshake peer='%s': response ee DH failed", peer->name);
+        crypto::secure_clear(ephemeral_private, sizeof(ephemeral_private));
+        return false;
+    }
+    if (!MixDh(
+            peer->handshake_material.chaining_key.bytes,
+            nullptr,
+            peer->handshake_material.ephemeral_private.bytes,
+            peer->static_identity.remote_static.bytes)) {
+        wgnx::sysmodule::logger::Log("WG handshake peer='%s': response se DH failed", peer->name);
+        crypto::secure_clear(ephemeral_private, sizeof(ephemeral_private));
+        return false;
+    }
+
+    MixPsk(
+        peer->handshake_material.chaining_key.bytes,
+        peer->handshake_material.hash.bytes,
+        key,
+        peer->static_identity.preshared_key.bytes);
+    if (!MessageEncrypt(
+            dst->encrypted_nothing,
+            nullptr,
+            0,
+            key,
+            peer->handshake_material.hash.bytes)) {
+        wgnx::sysmodule::logger::Log("WG handshake peer='%s': response payload encrypt failed", peer->name);
+        crypto::secure_clear(ephemeral_private, sizeof(ephemeral_private));
+        crypto::secure_clear(key, sizeof(key));
+        return false;
+    }
+
+    std::memset(&dst->macs, 0, sizeof(dst->macs));
+    dst->sender_index = peer->handshake.local_index;
+    ComputeMac1(dst, peer->static_identity.remote_static);
+    static_cast<void>(noise_handshake_transition(
+        &peer->handshake,
+        HandshakeState::ResponseCreated,
+        peer->name,
+        "created real handshake response"));
+    crypto::secure_clear(ephemeral_private, sizeof(ephemeral_private));
+    crypto::secure_clear(key, sizeof(key));
+    return true;
+}
+
+bool noise_handshake_consume_response(const message_handshake_response *src, wg_peer *peer) {
+    if (src == nullptr || peer == nullptr || !peer->static_identity.static_private.valid ||
+        !peer->handshake_material.ephemeral_private.valid || peer->handshake.state != HandshakeState::InitiationCreated) {
+        return false;
+    }
+
+    std::uint8_t key[NoiseSymmetricKeySize]{};
+    std::uint8_t hash[NoiseHashSize]{};
+    std::uint8_t chaining_key[NoiseHashSize]{};
+    std::uint8_t remote_ephemeral[NoisePublicKeySize]{};
+    bool ok = false;
+
+    if (GetMessageType(src->type) != MessageType::HandshakeResponse) {
+        wgnx::sysmodule::logger::Log("WG handshake peer='%s': rejected response with wrong message type", peer->name);
+        goto out;
+    }
+    if (src->receiver_index != peer->handshake.local_index) {
+        wgnx::sysmodule::logger::Log(
+            "WG handshake peer='%s': response receiver index mismatch local=0x%08x got=0x%08x",
+            peer->name,
+            peer->handshake.local_index,
+            src->receiver_index);
+        goto out;
+    }
+
+    std::memcpy(hash, peer->handshake_material.hash.bytes, sizeof(hash));
+    std::memcpy(chaining_key, peer->handshake_material.chaining_key.bytes, sizeof(chaining_key));
+
+    MessageEphemeral(remote_ephemeral, src->unencrypted_ephemeral, chaining_key, hash);
+    if (!MixDh(chaining_key, nullptr, peer->handshake_material.ephemeral_private.bytes, remote_ephemeral)) {
+        wgnx::sysmodule::logger::Log("WG handshake peer='%s': response ee DH failed", peer->name);
+        goto out;
+    }
+    if (!MixDh(chaining_key, nullptr, peer->static_identity.static_private.bytes, remote_ephemeral)) {
+        wgnx::sysmodule::logger::Log("WG handshake peer='%s': response se DH failed", peer->name);
+        goto out;
+    }
+    MixPsk(chaining_key, hash, key, peer->static_identity.preshared_key.bytes);
+    if (!MessageDecrypt(nullptr, src->encrypted_nothing, sizeof(src->encrypted_nothing), key, hash)) {
+        wgnx::sysmodule::logger::Log("WG handshake peer='%s': response payload decrypt failed", peer->name);
+        goto out;
+    }
+
+    std::memcpy(peer->handshake_material.remote_ephemeral.bytes, remote_ephemeral, sizeof(remote_ephemeral));
+    peer->handshake_material.remote_ephemeral.valid = true;
+    std::memcpy(peer->handshake_material.hash.bytes, hash, sizeof(hash));
+    peer->handshake_material.hash.valid = true;
+    std::memcpy(peer->handshake_material.chaining_key.bytes, chaining_key, sizeof(chaining_key));
+    peer->handshake_material.chaining_key.valid = true;
+    peer->handshake.remote_index = src->sender_index;
+    static_cast<void>(noise_handshake_transition(
+        &peer->handshake,
+        HandshakeState::ResponseReceived,
+        peer->name,
+        "consumed real handshake response"));
+    ok = true;
+
+out:
+    crypto::secure_clear(key, sizeof(key));
+    crypto::secure_clear(hash, sizeof(hash));
+    crypto::secure_clear(chaining_key, sizeof(chaining_key));
+    crypto::secure_clear(remote_ephemeral, sizeof(remote_ephemeral));
+    return ok;
+}
+
+bool noise_handshake_begin_session(wg_peer *peer) {
+    if (peer == nullptr) {
+        return false;
+    }
+
+    const HandshakeState state = peer->handshake.state;
+    if (state != HandshakeState::ResponseCreated && state != HandshakeState::ResponseReceived) {
+        return false;
+    }
+    if (!peer->handshake_material.chaining_key.valid) {
+        return false;
+    }
+
+    noise_keypair new_keypair{};
+    new_keypair.valid = true;
+    new_keypair.local_index = peer->handshake.local_index;
+    new_keypair.remote_index = peer->handshake.remote_index;
+    new_keypair.send_counter = 0;
+    new_keypair.birthdate_ns = wgnx::platform::ktime_get_coarse_boottime_ns();
+
+    if (state == HandshakeState::ResponseReceived) {
+        DeriveSessionKeys(
+            &new_keypair.sending_key,
+            &new_keypair.receiving_key,
+            peer->handshake_material.chaining_key.bytes);
+    } else {
+        DeriveSessionKeys(
+            &new_keypair.receiving_key,
+            &new_keypair.sending_key,
+            peer->handshake_material.chaining_key.bytes);
+    }
+
+    peer->current_keypair = new_keypair;
+    noise_keypair_reset(&peer->next_keypair);
+    noise_keypair_reset(&peer->previous_keypair);
+    static_cast<void>(noise_handshake_transition(
+        &peer->handshake,
+        HandshakeState::SessionDerived,
+        peer->name,
+        "derived real session keys"));
+    ClearHandshakeTranscript(peer);
     return true;
 }
 

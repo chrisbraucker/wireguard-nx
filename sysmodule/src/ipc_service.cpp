@@ -196,6 +196,12 @@ void MarkProtocolPeerActive(std::size_t peer_index) {
         return;
     }
 
+    if (peer->handshake_material.remote_ephemeral.valid &&
+        peer->handshake_material.chaining_key.valid &&
+        wgnx::wireguard::noise_handshake_begin_session(peer)) {
+        return;
+    }
+
     static_cast<void>(wgnx::wireguard::noise_handshake_transition(
         std::addressof(peer->handshake),
         wgnx::wireguard::HandshakeState::SessionDerived,

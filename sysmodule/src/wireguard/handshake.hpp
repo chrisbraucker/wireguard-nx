@@ -39,5 +39,9 @@ bool noise_handshake_transition(
 void noise_handshake_set_local_index(noise_handshake *handshake, std::uint32_t local_index);
 void noise_handshake_set_remote_index(noise_handshake *handshake, std::uint32_t remote_index);
 bool noise_handshake_create_initiation(message_handshake_initiation *dst, wg_peer *peer);
+bool noise_handshake_consume_initiation(const message_handshake_initiation *src, wg_peer *peer);
+bool noise_handshake_create_response(message_handshake_response *dst, wg_peer *peer);
+bool noise_handshake_consume_response(const message_handshake_response *src, wg_peer *peer);
+bool noise_handshake_begin_session(wg_peer *peer);
 
 } // namespace wgnx::wireguard
