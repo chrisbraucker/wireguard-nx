@@ -1101,25 +1101,28 @@ bool noise_create_keepalive_packet(wgnx::platform::packet_buffer *packet, const 
     }
 
     std::uint8_t nonce[crypto::ChaCha20NonceSize]{};
+    std::uint8_t tag[crypto::Poly1305TagSize]{};
     StoreLe64(nonce + sizeof(std::uint32_t), header.counter);
 
     std::uint8_t *ciphertext = packet->data + TransportDataHeaderSize;
-    std::uint8_t *tag = ciphertext;
     if (!crypto::chacha20poly1305_encrypt(
             ciphertext,
             tag,
-            packet->data + packet->len,
+            nullptr,
             0,
             nullptr,
             0,
             keypair.sending_key.bytes,
             nonce)) {
         crypto::secure_clear(nonce, sizeof(nonce));
+        crypto::secure_clear(tag, sizeof(tag));
         return false;
     }
 
+    std::memcpy(ciphertext, tag, sizeof(tag));
     packet->len = KeepalivePacketSize;
     crypto::secure_clear(nonce, sizeof(nonce));
+    crypto::secure_clear(tag, sizeof(tag));
     return true;
 }
 

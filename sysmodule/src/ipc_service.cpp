@@ -955,6 +955,11 @@ void CommitReceivedPacket(
                 SetPeerError(peer_index, wgnx::PeerErrorStage::Handshake, session_error);
                 return;
             }
+            const wgnx::PeerErrorCode keepalive_error = SendProtocolPeerKeepalive(peer_index);
+            if (keepalive_error != wgnx::PeerErrorCode::None) {
+                SetPeerError(peer_index, wgnx::PeerErrorStage::Transport, keepalive_error);
+                return;
+            }
             SetPeerActive(peer_index);
             return;
         }

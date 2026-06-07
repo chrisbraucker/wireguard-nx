@@ -619,6 +619,39 @@ bool TestHandshakeResponseAndSessionDerivation() {
         return false;
     }
 
+    wgnx::platform::static_packet_buffer<TransportDataHeaderSize + NoiseMacSize> keepalive_buffer;
+    if (!noise_create_keepalive_packet(&keepalive_buffer.packet, initiator->current_keypair)) {
+        return false;
+    }
+
+    message_transport_data keepalive_header{};
+    if (!ParseTransportDataHeader(&keepalive_buffer.packet, &keepalive_header).success) {
+        return false;
+    }
+    if (keepalive_buffer.packet.len != (TransportDataHeaderSize + NoiseMacSize) ||
+        keepalive_header.receiver_index != initiator->current_keypair.remote_index ||
+        keepalive_header.counter != initiator->current_keypair.send_counter) {
+        return false;
+    }
+
+    std::uint8_t nonce[crypto::ChaCha20NonceSize]{};
+    std::uint8_t decrypted_empty = 0;
+    StoreLe64(nonce + sizeof(std::uint32_t), keepalive_header.counter);
+    const bool keepalive_decrypted = crypto::chacha20poly1305_decrypt(
+        &decrypted_empty,
+        keepalive_buffer.packet.data + TransportDataHeaderSize,
+        0,
+        keepalive_buffer.packet.data + TransportDataHeaderSize,
+        nullptr,
+        0,
+        responder->current_keypair.receiving_key.bytes,
+        nonce);
+    crypto::secure_clear(nonce, sizeof(nonce));
+    crypto::secure_clear(&decrypted_empty, sizeof(decrypted_empty));
+    if (!keepalive_decrypted) {
+        return false;
+    }
+
     return initiator->current_keypair.valid &&
            responder->current_keypair.valid &&
            initiator->handshake.state == HandshakeState::SessionDerived &&
