@@ -222,6 +222,10 @@ Send and receive real WireGuard packets over the network without full tunnel int
 - process cookie replies and retransmit handshake packets with cookie state
 - receive handshake/session packets
 - maintain keepalive/retry/rekey timers
+- tighten the current receive loop bring-up compromises:
+  - replace best-effort source decoding with explicit source-endpoint handling once live receive behavior is stable
+  - verify whether timeout-driven receive wakeups and `socket_errno == 0` are proper Horizon socket semantics or only an implementation workaround
+  - keep `Shutdown+Close` teardown semantics unless a cleaner Atmosphere-native cancellation model supersedes them
 
 ### Success Criteria
 
@@ -241,6 +245,7 @@ Prove the engine works by sending encrypted application-owned data over the esta
 - encrypt and send through the WireGuard session
 - receive and decrypt replies
 - expose counters and last activity through IPC
+- extend receive-side validation beyond the current handshake-only path so source-address interpretation and session packet handling are no longer best-effort
 
 ### Rationale
 
@@ -267,6 +272,7 @@ Make start/stop/reconnect behavior robust enough for normal use during testing.
 - backoff/rekey behavior
 - error recovery after network loss
 - autostart behavior on sysmodule boot
+- review and remove any remaining transport bring-up workarounds that are no longer justified once live UDP/session traffic is well-characterized
 
 ### Success Criteria
 

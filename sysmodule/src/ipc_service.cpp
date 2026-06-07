@@ -152,6 +152,7 @@ wgnx::PeerErrorCode InstantiateProtocolPeer(std::size_t peer_index, std::uint32_
     if (wgnx::wireguard::wg_peer *peer = GetProtocolPeer(peer_index)) {
         const std::uint32_t local_index = wgnx::wireguard::wg_device_allocate_index(std::addressof(protocol.device));
         wgnx::wireguard::noise_handshake_set_local_index(std::addressof(peer->handshake), local_index);
+        wgnx::wireguard::wg_device_register_handshake_index(std::addressof(protocol.device), local_index);
         logger::Log(
             "Instantiated WG protocol peer '%s' activation=%u local_index=0x%08x",
             peer->name,
@@ -298,7 +299,7 @@ wgnx::PeerErrorCode BeginProtocolPeerSession(std::size_t peer_index) {
         return wgnx::PeerErrorCode::InternalFailure;
     }
 
-    if (!wgnx::wireguard::noise_handshake_begin_session(peer)) {
+    if (!wgnx::wireguard::noise_handshake_begin_session(std::addressof(g_state.protocol[peer_index].device), peer)) {
         return wgnx::PeerErrorCode::InternalFailure;
     }
 
@@ -319,6 +320,7 @@ void FailProtocolPeer(std::size_t peer_index, const char *reason) {
         reason));
     wgnx::wireguard::wg_timers_cancel_all(std::addressof(peer->timers), peer->name);
     wgnx::wireguard::wg_peer_scrub_transient_state(peer);
+    wgnx::wireguard::wg_device_clear_index_registry(std::addressof(g_state.protocol[peer_index].device));
 }
 
 void ResetRuntimeMetrics(DaemonState::PeerRuntimeInfo *runtime) {
@@ -742,7 +744,10 @@ void CommitReceivedPacket(
         return;
     }
 
-    const auto outcome = wgnx::wireguard::noise_handshake_consume_incoming_packet(packet, peer);
+    const auto outcome = wgnx::wireguard::noise_handshake_consume_incoming_packet(
+        packet,
+        std::addressof(g_state.protocol[peer_index].device),
+        peer);
     logger::Log(
         "Received UDP packet for peer %zu bytes=%zu source_family=%s outcome=%s",
         peer_index,
@@ -825,6 +830,9 @@ void ReceiveWorkMain(wgnx::platform::work_struct *) {
         if (receive_error != wgnx::platform::socket_error::none) {
             CommitReceiveFailure(peer_index, activation_generation, socket, receive_error);
             return;
+        }
+        if (received == 0) {
+            continue;
         }
 
         static_cast<void>(wgnx::platform::packet_set_len(std::addressof(packet.packet), received));

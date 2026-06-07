@@ -4,6 +4,50 @@
 
 namespace wgnx::wireguard {
 
+namespace {
+
+wg_index_registry_entry *GetRegistryEntry(wg_index_registry *registry, wg_index_slot slot) {
+    if (registry == nullptr) {
+        return nullptr;
+    }
+
+    switch (slot) {
+        case wg_index_slot::Handshake:
+            return &registry->handshake;
+        case wg_index_slot::CurrentKeypair:
+            return &registry->current_keypair;
+        case wg_index_slot::NextKeypair:
+            return &registry->next_keypair;
+        case wg_index_slot::PreviousKeypair:
+            return &registry->previous_keypair;
+        case wg_index_slot::None:
+            return nullptr;
+    }
+
+    return nullptr;
+}
+
+const wg_index_registry_entry *GetRegistryEntry(const wg_index_registry *registry, wg_index_slot slot) {
+    return GetRegistryEntry(const_cast<wg_index_registry *>(registry), slot);
+}
+
+bool IsRegisteredIndex(const wg_device *device, std::uint32_t index) {
+    return wg_device_lookup_index_slot(device, index) != wg_index_slot::None;
+}
+
+void SetRegistryEntry(wg_device *device, wg_index_slot slot, std::uint32_t index) {
+    if (device == nullptr) {
+        return;
+    }
+
+    if (wg_index_registry_entry *entry = GetRegistryEntry(&device->index_registry, slot)) {
+        entry->index = index;
+        entry->active = index != 0;
+    }
+}
+
+} // namespace
+
 bool wg_device_init_from_config_entry(wg_device *device, const wgnx::PeerConfigEntry &config) {
     if (device == nullptr) {
         return false;
@@ -19,6 +63,7 @@ bool wg_device_init_from_config_entry(wg_device *device, const wgnx::PeerConfigE
     device->has_private_key = config.private_key[0] != '\0';
     device->has_dns = config.dns[0] != '\0';
     wg_index_allocator_init(&device->index_allocator);
+    wg_device_clear_index_registry(device);
 
     wg_peer_init_from_config(&device->peers[0], config);
     if (!wg_peer_prepare_static_identity(&device->peers[0], config.private_key)) {
@@ -42,7 +87,80 @@ std::uint32_t wg_device_allocate_index(wg_device *device) {
         return 0;
     }
 
-    return wg_index_allocator_next(&device->index_allocator);
+    for (int attempt = 0; attempt < 32; ++attempt) {
+        const std::uint32_t candidate = wg_index_allocator_next(&device->index_allocator);
+        if (candidate != 0 && !IsRegisteredIndex(device, candidate)) {
+            return candidate;
+        }
+    }
+
+    return 0;
+}
+
+void wg_device_clear_index_registry(wg_device *device) {
+    if (device == nullptr) {
+        return;
+    }
+
+    device->index_registry = {};
+}
+
+void wg_device_register_handshake_index(wg_device *device, std::uint32_t index) {
+    SetRegistryEntry(device, wg_index_slot::Handshake, index);
+}
+
+void wg_device_refresh_keypair_indices(wg_device *device, const wg_peer *peer) {
+    if (device == nullptr) {
+        return;
+    }
+
+    SetRegistryEntry(device, wg_index_slot::Handshake, 0);
+    SetRegistryEntry(
+        device,
+        wg_index_slot::CurrentKeypair,
+        peer != nullptr && peer->current_keypair.valid ? peer->current_keypair.local_index : 0);
+    SetRegistryEntry(
+        device,
+        wg_index_slot::NextKeypair,
+        peer != nullptr && peer->next_keypair.valid ? peer->next_keypair.local_index : 0);
+    SetRegistryEntry(
+        device,
+        wg_index_slot::PreviousKeypair,
+        peer != nullptr && peer->previous_keypair.valid ? peer->previous_keypair.local_index : 0);
+}
+
+wg_index_slot wg_device_lookup_index_slot(const wg_device *device, std::uint32_t index) {
+    if (device == nullptr || index == 0) {
+        return wg_index_slot::None;
+    }
+
+    constexpr wg_index_slot Slots[] = {
+        wg_index_slot::Handshake,
+        wg_index_slot::CurrentKeypair,
+        wg_index_slot::NextKeypair,
+        wg_index_slot::PreviousKeypair,
+    };
+    for (const wg_index_slot slot : Slots) {
+        if (const wg_index_registry_entry *entry = GetRegistryEntry(&device->index_registry, slot);
+            entry != nullptr && entry->active && entry->index == index) {
+            return slot;
+        }
+    }
+
+    return wg_index_slot::None;
+}
+
+bool wg_device_index_matches_slot(const wg_device *device, wg_index_slot slot, std::uint32_t index) {
+    if (device == nullptr || index == 0) {
+        return false;
+    }
+
+    if (const wg_index_registry_entry *entry = GetRegistryEntry(&device->index_registry, slot);
+        entry != nullptr && entry->active) {
+        return entry->index == index;
+    }
+
+    return false;
 }
 
 wg_peer *wg_device_first_peer(wg_device *device) {

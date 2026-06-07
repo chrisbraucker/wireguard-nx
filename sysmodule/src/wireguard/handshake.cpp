@@ -1,6 +1,7 @@
 #include "wireguard/handshake.hpp"
 
 #include "wireguard/crypto/primitives.hpp"
+#include "wireguard/device.hpp"
 #include "wireguard/endian.hpp"
 #include "wireguard/peer.hpp"
 #include "wgnx/platform/random.hpp"
@@ -460,15 +461,17 @@ void ComputeMac2(
         CookieValueSize));
 }
 
-bool MatchesCookieReceiverIndex(const wg_peer *peer, std::uint32_t receiver_index) {
-    if (peer == nullptr || receiver_index == 0) {
+bool MatchesCookieReceiverIndex(const wg_device *device, std::uint32_t receiver_index) {
+    if (device == nullptr || receiver_index == 0) {
         return false;
     }
 
-    return receiver_index == peer->handshake.local_index ||
-           (peer->current_keypair.valid && receiver_index == peer->current_keypair.local_index) ||
-           (peer->next_keypair.valid && receiver_index == peer->next_keypair.local_index) ||
-           (peer->previous_keypair.valid && receiver_index == peer->previous_keypair.local_index);
+    const ::wgnx::wireguard::wg_index_slot slot =
+        ::wgnx::wireguard::wg_device_lookup_index_slot(device, receiver_index);
+    return slot == ::wgnx::wireguard::wg_index_slot::Handshake ||
+           slot == ::wgnx::wireguard::wg_index_slot::CurrentKeypair ||
+           slot == ::wgnx::wireguard::wg_index_slot::NextKeypair ||
+           slot == ::wgnx::wireguard::wg_index_slot::PreviousKeypair;
 }
 
 template <typename T>
@@ -891,8 +894,8 @@ bool noise_handshake_create_response(message_handshake_response *dst, wg_peer *p
     return true;
 }
 
-bool noise_handshake_consume_response(const message_handshake_response *src, wg_peer *peer) {
-    if (src == nullptr || peer == nullptr || !peer->static_identity.static_private.valid ||
+bool noise_handshake_consume_response(const message_handshake_response *src, const wg_device *device, wg_peer *peer) {
+    if (src == nullptr || device == nullptr || peer == nullptr || !peer->static_identity.static_private.valid ||
         !peer->handshake_material.ephemeral_private.valid || peer->handshake.state != HandshakeState::InitiationCreated) {
         return false;
     }
@@ -915,7 +918,10 @@ bool noise_handshake_consume_response(const message_handshake_response *src, wg_
         wgnx::sysmodule::logger::Log("WG handshake peer='%s': rejected response reusing local sender index", peer->name);
         goto out;
     }
-    if (src->receiver_index != peer->handshake.local_index) {
+    if (!::wgnx::wireguard::wg_device_index_matches_slot(
+            device,
+            ::wgnx::wireguard::wg_index_slot::Handshake,
+            src->receiver_index)) {
         wgnx::sysmodule::logger::Log(
             "WG handshake peer='%s': response receiver index mismatch local=0x%08x got=0x%08x",
             peer->name,
@@ -971,8 +977,8 @@ out:
     return ok;
 }
 
-bool noise_handshake_consume_cookie_reply(const message_handshake_cookie *src, wg_peer *peer) {
-    if (src == nullptr || peer == nullptr || !peer->static_identity.remote_static.valid) {
+bool noise_handshake_consume_cookie_reply(const message_handshake_cookie *src, const wg_device *device, wg_peer *peer) {
+    if (src == nullptr || device == nullptr || peer == nullptr || !peer->static_identity.remote_static.valid) {
         return false;
     }
 
@@ -984,7 +990,7 @@ bool noise_handshake_consume_cookie_reply(const message_handshake_cookie *src, w
         wgnx::sysmodule::logger::Log("WG handshake peer='%s': rejected cookie reply with wrong message type", peer->name);
         goto out;
     }
-    if (!MatchesCookieReceiverIndex(peer, src->receiver_index)) {
+    if (!MatchesCookieReceiverIndex(device, src->receiver_index)) {
         wgnx::sysmodule::logger::Log(
             "WG handshake peer='%s': rejected cookie reply receiver mismatch local=0x%08x got=0x%08x",
             peer->name,
@@ -1031,8 +1037,8 @@ out:
     return ok;
 }
 
-bool noise_handshake_begin_session(wg_peer *peer) {
-    if (peer == nullptr) {
+bool noise_handshake_begin_session(wg_device *device, wg_peer *peer) {
+    if (device == nullptr || peer == nullptr) {
         return false;
     }
 
@@ -1066,6 +1072,7 @@ bool noise_handshake_begin_session(wg_peer *peer) {
     peer->current_keypair = new_keypair;
     noise_keypair_reset(&peer->next_keypair);
     noise_keypair_reset(&peer->previous_keypair);
+    ::wgnx::wireguard::wg_device_refresh_keypair_indices(device, peer);
     static_cast<void>(noise_handshake_transition(
         &peer->handshake,
         HandshakeState::SessionDerived,
@@ -1077,8 +1084,9 @@ bool noise_handshake_begin_session(wg_peer *peer) {
 
 HandshakePacketOutcome noise_handshake_consume_incoming_packet(
     const wgnx::platform::packet_buffer *packet,
+    const wg_device *device,
     wg_peer *peer) {
-    if (packet == nullptr || peer == nullptr) {
+    if (packet == nullptr || device == nullptr || peer == nullptr) {
         return HandshakePacketOutcome::Invalid;
     }
 
@@ -1103,7 +1111,7 @@ HandshakePacketOutcome noise_handshake_consume_incoming_packet(
                     GetParseErrorName(parse_result.error));
                 return HandshakePacketOutcome::Invalid;
             }
-            return noise_handshake_consume_response(&response, peer)
+            return noise_handshake_consume_response(&response, device, peer)
                 ? HandshakePacketOutcome::ResponseConsumed
                 : HandshakePacketOutcome::Invalid;
         }
@@ -1117,7 +1125,7 @@ HandshakePacketOutcome noise_handshake_consume_incoming_packet(
                     GetParseErrorName(parse_result.error));
                 return HandshakePacketOutcome::Invalid;
             }
-            return noise_handshake_consume_cookie_reply(&cookie, peer)
+            return noise_handshake_consume_cookie_reply(&cookie, device, peer)
                 ? HandshakePacketOutcome::CookieReplyConsumed
                 : HandshakePacketOutcome::Invalid;
         }

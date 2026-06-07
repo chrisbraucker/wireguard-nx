@@ -19,6 +19,8 @@ namespace {
 using SocketConfigType = ams::socket::SystemConfigLightDefault;
 
 constexpr inline size_t SocketAllocatorSize = 128 * 1024;
+constexpr inline long ReceiveTimeoutSeconds = 1;
+constexpr inline long ReceiveTimeoutMicroseconds = 0;
 constexpr inline size_t SocketMemoryPoolSize = ams::util::AlignUp(
     SocketConfigType::PerTcpSocketWorstCaseMemoryPoolSize + SocketConfigType::PerUdpSocketWorstCaseMemoryPoolSize,
     ams::os::MemoryPageSize);
@@ -145,6 +147,24 @@ bool DecodeEndpointToSockaddr(sockaddr_storage *out_address, socklen_t *out_leng
 
 namespace wgnx::platform {
 
+namespace {
+
+bool SetReceiveTimeout(socket_handle socket) {
+    const ams::socket::TimeVal timeout = {
+        .tv_sec = wgnx::sysmodule::platform::horizon::internal::ReceiveTimeoutSeconds,
+        .tv_usec = wgnx::sysmodule::platform::horizon::internal::ReceiveTimeoutMicroseconds,
+    };
+
+    return ams::socket::SetSockOpt(
+               socket,
+               ams::socket::Level::Sol_Socket,
+               ams::socket::Option::So_RcvTimeo,
+               std::addressof(timeout),
+               sizeof(timeout)) == 0;
+}
+
+} // namespace
+
 bool endpoint_to_string(const endpoint *endpoint, char *out_text, std::size_t out_text_size) {
     if (endpoint == nullptr || out_text == nullptr || out_text_size == 0) {
         return false;
@@ -209,6 +229,16 @@ socket_error udp_open(socket_handle *out_socket, address_family family) {
     }
 
     *out_socket = socket_fd;
+    if (!SetReceiveTimeout(*out_socket)) {
+        const auto socket_errno = ams::socket::GetLastError();
+        wgnx::sysmodule::logger::Log(
+            "udp_open SetSockOpt(SO_RCVTIMEO) failed socket_errno=%u",
+            static_cast<unsigned int>(socket_errno));
+        static_cast<void>(ams::socket::Shutdown(*out_socket, ams::socket::ShutdownMethod::Shut_RdWr));
+        static_cast<void>(ams::socket::Close(*out_socket));
+        *out_socket = InvalidSocket;
+        return socket_error::open_failed;
+    }
     return socket_error::none;
 }
 
@@ -217,6 +247,7 @@ void udp_close(socket_handle socket) {
         return;
     }
 
+    static_cast<void>(ams::socket::Shutdown(socket, ams::socket::ShutdownMethod::Shut_RdWr));
     static_cast<void>(ams::socket::Close(socket));
 }
 
@@ -267,9 +298,24 @@ socket_error udp_receive(socket_handle socket, void *buffer, std::size_t capacit
         reinterpret_cast<ams::socket::SockAddr *>(std::addressof(native_address)),
         std::addressof(native_length));
     if (rc < 0) {
+        const auto socket_errno = ams::socket::GetLastError();
+        if (socket_errno == ams::socket::Errno::ESuccess ||
+            socket_errno == ams::socket::Errno::EAgain ||
+            socket_errno == ams::socket::Errno::EWouldBlock ||
+            socket_errno == ams::socket::Errno::ETimedOut ||
+            socket_errno == ams::socket::Errno::EIntr) {
+            if (out_received != nullptr) {
+                *out_received = 0;
+            }
+            if (out_source != nullptr) {
+                *out_source = {};
+            }
+            return socket_error::none;
+        }
+
         wgnx::sysmodule::logger::Log(
             "udp_receive failed socket_errno=%u",
-            static_cast<unsigned int>(ams::socket::GetLastError()));
+            static_cast<unsigned int>(socket_errno));
         return socket_error::receive_failed;
     }
 

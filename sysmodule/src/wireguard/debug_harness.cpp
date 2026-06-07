@@ -561,6 +561,8 @@ bool TestHandshakeResponseAndSessionDerivation() {
 
     noise_handshake_set_local_index(&initiator->handshake, 0x01020304U);
     noise_handshake_set_local_index(&responder->handshake, 0xA1A2A3A4U);
+    wg_device_register_handshake_index(&initiator_device, initiator->handshake.local_index);
+    wg_device_register_handshake_index(&responder_device, responder->handshake.local_index);
 
     message_handshake_initiation initiation{};
     if (!noise_handshake_create_initiation(&initiation, initiator)) {
@@ -584,7 +586,7 @@ bool TestHandshakeResponseAndSessionDerivation() {
     if (SerializeHandshakeResponse(&tampered_buffer.packet, tampered_response) != ParseError::None) {
         return false;
     }
-    if (noise_handshake_consume_incoming_packet(&tampered_buffer.packet, &initiator_copy) != HandshakePacketOutcome::Invalid) {
+    if (noise_handshake_consume_incoming_packet(&tampered_buffer.packet, &initiator_device, &initiator_copy) != HandshakePacketOutcome::Invalid) {
         return false;
     }
 
@@ -592,15 +594,16 @@ bool TestHandshakeResponseAndSessionDerivation() {
     if (SerializeHandshakeResponse(&response_buffer.packet, response) != ParseError::None) {
         return false;
     }
-    if (noise_handshake_consume_incoming_packet(&response_buffer.packet, initiator) != HandshakePacketOutcome::ResponseConsumed) {
+    if (noise_handshake_consume_incoming_packet(&response_buffer.packet, &initiator_device, initiator) != HandshakePacketOutcome::ResponseConsumed) {
         return false;
     }
 
-    if (!noise_handshake_begin_session(initiator) || !noise_handshake_begin_session(responder)) {
+    if (!noise_handshake_begin_session(&initiator_device, initiator) ||
+        !noise_handshake_begin_session(&responder_device, responder)) {
         return false;
     }
 
-    if (noise_handshake_consume_incoming_packet(&response_buffer.packet, initiator) != HandshakePacketOutcome::Invalid) {
+    if (noise_handshake_consume_incoming_packet(&response_buffer.packet, &initiator_device, initiator) != HandshakePacketOutcome::Invalid) {
         return false;
     }
 
@@ -612,7 +615,7 @@ bool TestHandshakeResponseAndSessionDerivation() {
     if (SerializeHandshakeCookie(&cookie_buffer.packet, cookie) != ParseError::None) {
         return false;
     }
-    if (noise_handshake_consume_incoming_packet(&cookie_buffer.packet, initiator) != HandshakePacketOutcome::CookieReplyConsumed) {
+    if (noise_handshake_consume_incoming_packet(&cookie_buffer.packet, &initiator_device, initiator) != HandshakePacketOutcome::CookieReplyConsumed) {
         return false;
     }
 
