@@ -5,6 +5,7 @@
 #include "wgnx/platform/clock.hpp"
 #include "wgnx/platform/udp.hpp"
 #include "wgnx/platform/work.hpp"
+#include "wireguard/data.hpp"
 #include "wireguard/device.hpp"
 #include "wireguard/handshake.hpp"
 #include "wireguard/session.hpp"

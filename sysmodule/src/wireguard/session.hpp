@@ -57,9 +57,22 @@ struct noise_keypair {
     std::uint32_t local_index{0};
     std::uint32_t remote_index{0};
     std::uint64_t send_counter{0};
+    /*
+     * Deviation from Linux:
+     * Replay tracking is currently compressed to a 64-packet window instead of
+     * the larger upstream bitmap. The current sysmodule shape is single-active-
+     * peer and memory-sensitive, so this keeps per-keypair state compact while
+     * still making duplicate and stale transport-data packets fail
+     * deterministically. The implication is that packets arriving more than 63
+     * counters behind the highest accepted value are rejected earlier than they
+     * would be upstream.
+     */
+    std::uint64_t receive_counter{0};
+    std::uint64_t replay_window{0};
     wgnx::platform::ktime_t birthdate_ns{0};
     noise_symmetric_key sending_key{};
     noise_symmetric_key receiving_key{};
+    bool has_receive_counter{false};
 };
 
 void noise_cookie_reset(noise_cookie *cookie);

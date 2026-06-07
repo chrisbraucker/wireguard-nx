@@ -1,5 +1,6 @@
 #include "wireguard/debug_harness.hpp"
 
+#include "wireguard/data.hpp"
 #include "wireguard/device.hpp"
 #include "wireguard/dispatch.hpp"
 #include "wireguard/endian.hpp"
@@ -65,12 +66,19 @@ struct CoreSelfTestStorage {
     wgnx::PeerConfigEntry secondary_config{};
     wg_device secondary_device{};
     wg_peer peer_copy{};
+    wg_peer responder_copy{};
     message_handshake_response response{};
     message_handshake_response tampered_response{};
     message_handshake_cookie cookie{};
     wgnx::platform::static_packet_buffer<HandshakeResponseSize> response_buffer{};
     wgnx::platform::static_packet_buffer<HandshakeResponseSize> tampered_buffer{};
     wgnx::platform::static_packet_buffer<HandshakeCookieSize> cookie_buffer{};
+    wgnx::platform::static_packet_buffer<TransportDataHeaderSize + NoiseTagSize> keepalive_buffer{};
+    wgnx::platform::static_packet_buffer<256> payload_buffer{};
+    wgnx::platform::static_packet_buffer<256> mismatch_buffer{};
+    wgnx::platform::static_packet_buffer<256> tampered_payload_buffer{};
+    std::uint8_t payload_plaintext[128]{};
+    std::uint8_t decrypted_payload[128]{};
 };
 
 CoreSelfTestStorage g_core_self_test_storage{};
@@ -89,6 +97,22 @@ void ResetCoreSelfTestStorage() {
         &g_core_self_test_storage.cookie_buffer.packet,
         g_core_self_test_storage.cookie_buffer.storage.data(),
         g_core_self_test_storage.cookie_buffer.storage.size());
+    wgnx::platform::packet_init(
+        &g_core_self_test_storage.keepalive_buffer.packet,
+        g_core_self_test_storage.keepalive_buffer.storage.data(),
+        g_core_self_test_storage.keepalive_buffer.storage.size());
+    wgnx::platform::packet_init(
+        &g_core_self_test_storage.payload_buffer.packet,
+        g_core_self_test_storage.payload_buffer.storage.data(),
+        g_core_self_test_storage.payload_buffer.storage.size());
+    wgnx::platform::packet_init(
+        &g_core_self_test_storage.mismatch_buffer.packet,
+        g_core_self_test_storage.mismatch_buffer.storage.data(),
+        g_core_self_test_storage.mismatch_buffer.storage.size());
+    wgnx::platform::packet_init(
+        &g_core_self_test_storage.tampered_payload_buffer.packet,
+        g_core_self_test_storage.tampered_payload_buffer.storage.data(),
+        g_core_self_test_storage.tampered_payload_buffer.storage.size());
 }
 
 bool ComputeHarnessCookieKey(
@@ -619,36 +643,108 @@ bool TestHandshakeResponseAndSessionDerivation() {
         return false;
     }
 
-    wgnx::platform::static_packet_buffer<TransportDataHeaderSize + NoiseMacSize> keepalive_buffer;
+    auto &keepalive_buffer = g_core_self_test_storage.keepalive_buffer;
     if (!noise_create_keepalive_packet(&keepalive_buffer.packet, initiator->current_keypair)) {
         return false;
     }
 
-    message_transport_data keepalive_header{};
-    if (!ParseTransportDataHeader(&keepalive_buffer.packet, &keepalive_header).success) {
+    TransportDataDecryptResult keepalive_result{};
+    const TransportDataError keepalive_error = noise_consume_transport_data_packet(
+        &keepalive_buffer.packet,
+        &responder->current_keypair,
+        nullptr,
+        0,
+        &keepalive_result);
+    if (keepalive_error != TransportDataError::None) {
         return false;
     }
     if (keepalive_buffer.packet.len != (TransportDataHeaderSize + NoiseMacSize) ||
-        keepalive_header.receiver_index != initiator->current_keypair.remote_index ||
-        keepalive_header.counter != initiator->current_keypair.send_counter) {
+        keepalive_result.header.receiver_index != initiator->current_keypair.remote_index ||
+        keepalive_result.header.counter != initiator->current_keypair.send_counter ||
+        keepalive_result.payload_size != 0) {
+        return false;
+    }
+    ++initiator->current_keypair.send_counter;
+
+    for (std::size_t i = 0; i < sizeof(g_core_self_test_storage.payload_plaintext); ++i) {
+        g_core_self_test_storage.payload_plaintext[i] = static_cast<std::uint8_t>(0x30U + i);
+    }
+
+    auto &payload_buffer = g_core_self_test_storage.payload_buffer;
+    if (noise_create_transport_data_packet(
+            &payload_buffer.packet,
+            initiator->current_keypair,
+            g_core_self_test_storage.payload_plaintext,
+            sizeof(g_core_self_test_storage.payload_plaintext)) != TransportDataError::None) {
         return false;
     }
 
-    std::uint8_t nonce[crypto::ChaCha20NonceSize]{};
-    std::uint8_t decrypted_empty = 0;
-    StoreLe64(nonce + sizeof(std::uint32_t), keepalive_header.counter);
-    const bool keepalive_decrypted = crypto::chacha20poly1305_decrypt(
-        &decrypted_empty,
-        keepalive_buffer.packet.data + TransportDataHeaderSize,
-        0,
-        keepalive_buffer.packet.data + TransportDataHeaderSize,
-        nullptr,
-        0,
-        responder->current_keypair.receiving_key.bytes,
-        nonce);
-    crypto::secure_clear(nonce, sizeof(nonce));
-    crypto::secure_clear(&decrypted_empty, sizeof(decrypted_empty));
-    if (!keepalive_decrypted) {
+    g_core_self_test_storage.responder_copy = *responder;
+
+    TransportDataDecryptResult payload_result{};
+    const TransportDataError payload_error = noise_consume_transport_data_packet(
+        &payload_buffer.packet,
+        &responder->current_keypair,
+        g_core_self_test_storage.decrypted_payload,
+        sizeof(g_core_self_test_storage.decrypted_payload),
+        &payload_result);
+    if (payload_error != TransportDataError::None) {
+        return false;
+    }
+    if (payload_result.header.receiver_index != initiator->current_keypair.remote_index ||
+        payload_result.header.counter != initiator->current_keypair.send_counter ||
+        payload_result.payload_size != sizeof(g_core_self_test_storage.payload_plaintext) ||
+        std::memcmp(
+            g_core_self_test_storage.payload_plaintext,
+            g_core_self_test_storage.decrypted_payload,
+            sizeof(g_core_self_test_storage.payload_plaintext)) != 0) {
+        return false;
+    }
+    ++initiator->current_keypair.send_counter;
+
+    const TransportDataError replay_error = noise_consume_transport_data_packet(
+        &payload_buffer.packet,
+        &responder->current_keypair,
+        g_core_self_test_storage.decrypted_payload,
+        sizeof(g_core_self_test_storage.decrypted_payload),
+        nullptr);
+    if (replay_error != TransportDataError::ReplayRejected) {
+        return false;
+    }
+
+    auto &mismatch_buffer = g_core_self_test_storage.mismatch_buffer;
+    std::memcpy(
+        mismatch_buffer.packet.data,
+        payload_buffer.packet.data,
+        payload_buffer.packet.len);
+    mismatch_buffer.packet.len = payload_buffer.packet.len;
+    StoreLe32(
+        mismatch_buffer.packet.data + sizeof(std::uint32_t),
+        g_core_self_test_storage.responder_copy.current_keypair.local_index ^ 0x00FF00FFU);
+    const TransportDataError mismatch_error = noise_consume_transport_data_packet(
+        &mismatch_buffer.packet,
+        &g_core_self_test_storage.responder_copy.current_keypair,
+        g_core_self_test_storage.decrypted_payload,
+        sizeof(g_core_self_test_storage.decrypted_payload),
+        nullptr);
+    if (mismatch_error != TransportDataError::ReceiverIndexMismatch) {
+        return false;
+    }
+
+    auto &tampered_payload_buffer = g_core_self_test_storage.tampered_payload_buffer;
+    std::memcpy(
+        tampered_payload_buffer.packet.data,
+        payload_buffer.packet.data,
+        payload_buffer.packet.len);
+    tampered_payload_buffer.packet.len = payload_buffer.packet.len;
+    tampered_payload_buffer.packet.data[tampered_payload_buffer.packet.len - 1] ^= 0x80U;
+    const TransportDataError tampered_payload_error = noise_consume_transport_data_packet(
+        &tampered_payload_buffer.packet,
+        &g_core_self_test_storage.responder_copy.current_keypair,
+        g_core_self_test_storage.decrypted_payload,
+        sizeof(g_core_self_test_storage.decrypted_payload),
+        nullptr);
+    if (tampered_payload_error != TransportDataError::AuthenticationFailed) {
         return false;
     }
 
@@ -666,6 +762,8 @@ bool TestHandshakeResponseAndSessionDerivation() {
            responder->current_keypair.receiving_key.valid &&
            initiator->cookie.valid &&
            initiator->has_last_initiation &&
+           responder->current_keypair.has_receive_counter &&
+           responder->current_keypair.receive_counter == payload_result.header.counter &&
            std::memcmp(
                initiator->current_keypair.sending_key.bytes,
                responder->current_keypair.receiving_key.bytes,

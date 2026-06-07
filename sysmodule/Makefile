@@ -42,6 +42,7 @@ HOST_TEST_CPP_SOURCES := \
 	src/wireguard/dispatch.cpp \
 	src/wireguard/index_allocator.cpp \
 	src/wireguard/session.cpp \
+	src/wireguard/data.cpp \
 	src/wireguard/handshake.cpp \
 	src/wireguard/timers.cpp \
 	src/wireguard/peer.cpp \
