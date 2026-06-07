@@ -1,14 +1,15 @@
 #include "platform_internal.hpp"
 
+#include "logger.hpp"
+
 #include <arpa/inet.h>
-#include <cerrno>
 #include <cstdio>
 #include <cstring>
 #include <netinet/in.h>
-#include <sys/socket.h>
-#include <unistd.h>
 
 #include <stratosphere.hpp>
+#include <stratosphere/socket/socket_api.hpp>
+#include <stratosphere/socket/socket_errno.hpp>
 #include <switch/services/nifm.h>
 
 namespace wgnx::sysmodule::platform::horizon::internal {
@@ -57,6 +58,19 @@ int ToNativeAddressFamily(wgnx::platform::address_family family) {
     }
 
     return AF_UNSPEC;
+}
+
+ams::socket::Family ToAmsAddressFamily(wgnx::platform::address_family family) {
+    switch (family) {
+        case wgnx::platform::address_family::inet:
+            return ams::socket::Family::Af_Inet;
+        case wgnx::platform::address_family::inet6:
+            return ams::socket::Family::Af_Inet6;
+        case wgnx::platform::address_family::unspecified:
+            break;
+    }
+
+    return ams::socket::Family::Af_Unspec;
 }
 
 wgnx::platform::address_family FromNativeAddressFamily(int family) {
@@ -166,16 +180,31 @@ socket_error udp_open(socket_handle *out_socket, address_family family) {
     *out_socket = InvalidSocket;
 
     if (family == address_family::unspecified) {
+        wgnx::sysmodule::logger::Log("udp_open rejected unspecified address family");
         return socket_error::invalid_endpoint;
     }
 
-    if (R_FAILED(wgnx::sysmodule::platform::horizon::internal::EnsureUdpRuntimeInitialized())) {
+    const ams::Result init_result = wgnx::sysmodule::platform::horizon::internal::EnsureUdpRuntimeInitialized();
+    if (R_FAILED(init_result)) {
+        wgnx::sysmodule::logger::Log(
+            "udp_open runtime initialization failed family=%u rc=0x%08x",
+            static_cast<unsigned int>(family),
+            static_cast<u32>(init_result.GetValue()));
         return socket_error::transport_init_failed;
     }
 
-    const int native_family = wgnx::sysmodule::platform::horizon::internal::ToNativeAddressFamily(family);
-    const int socket_fd = ::socket(native_family, SOCK_DGRAM, IPPROTO_UDP);
+    const auto ams_family = wgnx::sysmodule::platform::horizon::internal::ToAmsAddressFamily(family);
+    const s32 socket_fd = ams::socket::Socket(
+        ams_family,
+        ams::socket::Type::Sock_Dgram,
+        ams::socket::Protocol::IpProto_Udp);
     if (socket_fd < 0) {
+        const auto socket_errno = ams::socket::GetLastError();
+        wgnx::sysmodule::logger::Log(
+            "udp_open socket() failed family=%u ams_family=%u socket_errno=%u",
+            static_cast<unsigned int>(family),
+            static_cast<unsigned int>(ams_family),
+            static_cast<unsigned int>(socket_errno));
         return socket_error::open_failed;
     }
 
@@ -188,7 +217,7 @@ void udp_close(socket_handle socket) {
         return;
     }
 
-    ::close(socket);
+    static_cast<void>(ams::socket::Close(socket));
 }
 
 socket_error udp_send(socket_handle socket, const endpoint *destination, const void *data, std::size_t size, std::size_t *out_sent) {
@@ -203,14 +232,17 @@ socket_error udp_send(socket_handle socket, const endpoint *destination, const v
         return socket_error::invalid_endpoint;
     }
 
-    const ssize_t rc = ::sendto(
+    const ssize_t rc = ams::socket::SendTo(
         socket,
         data,
         size,
-        0,
-        reinterpret_cast<const sockaddr *>(std::addressof(native_address)),
-        native_length);
+        ams::socket::MsgFlag::Msg_None,
+        reinterpret_cast<const ams::socket::SockAddr *>(std::addressof(native_address)),
+        static_cast<ams::socket::SockLenT>(native_length));
     if (rc < 0) {
+        wgnx::sysmodule::logger::Log(
+            "udp_send failed socket_errno=%u",
+            static_cast<unsigned int>(ams::socket::GetLastError()));
         return socket_error::send_failed;
     }
 
@@ -226,25 +258,34 @@ socket_error udp_receive(socket_handle socket, void *buffer, std::size_t capacit
     }
 
     sockaddr_storage native_address = {};
-    socklen_t native_length = sizeof(native_address);
-    const ssize_t rc = ::recvfrom(
+    ams::socket::SockLenT native_length = sizeof(native_address);
+    const ssize_t rc = ams::socket::RecvFrom(
         socket,
         buffer,
         capacity,
-        0,
-        reinterpret_cast<sockaddr *>(std::addressof(native_address)),
+        ams::socket::MsgFlag::Msg_None,
+        reinterpret_cast<ams::socket::SockAddr *>(std::addressof(native_address)),
         std::addressof(native_length));
     if (rc < 0) {
+        wgnx::sysmodule::logger::Log(
+            "udp_receive failed socket_errno=%u",
+            static_cast<unsigned int>(ams::socket::GetLastError()));
         return socket_error::receive_failed;
     }
 
     if (out_received != nullptr) {
         *out_received = static_cast<std::size_t>(rc);
     }
-    if (out_source != nullptr &&
-        !wgnx::sysmodule::platform::horizon::internal::EncodeEndpointFromSockaddr(
-            out_source, reinterpret_cast<const sockaddr *>(std::addressof(native_address)))) {
-        return socket_error::receive_failed;
+    if (out_source != nullptr) {
+        *out_source = {};
+        if (!wgnx::sysmodule::platform::horizon::internal::EncodeEndpointFromSockaddr(
+                out_source, reinterpret_cast<const sockaddr *>(std::addressof(native_address)))) {
+            const auto *generic = reinterpret_cast<const sockaddr *>(std::addressof(native_address));
+            wgnx::sysmodule::logger::Log(
+                "udp_receive source decode skipped sa_family=%d addrlen=%u",
+                generic->sa_family,
+                static_cast<unsigned int>(native_length));
+        }
     }
 
     return socket_error::none;

@@ -193,6 +193,13 @@ wgnx::PeerErrorCode OpenRuntimeSocket(std::size_t peer_index) {
     auto &runtime = g_state.runtime[peer_index];
     CloseRuntimeSocket(std::addressof(runtime));
 
+    logger::Log(
+        "Opening UDP socket for peer %zu family=%s endpoint=%s",
+        peer_index,
+        wgnx::GetPeerResolvedFamilyName(
+            static_cast<wgnx::PeerResolvedFamily>(runtime.resolved_endpoint.family)),
+        runtime.resolved_endpoint_text);
+
     const auto open_error = wgnx::platform::udp_open(
         std::addressof(runtime.socket),
         runtime.resolved_endpoint.family);
