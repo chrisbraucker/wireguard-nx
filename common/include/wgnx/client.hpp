@@ -69,6 +69,16 @@ inline Result GetDaemonStatus(DaemonStatus* out_status) {
     return serviceDispatchOut(service.get(), static_cast<std::uint32_t>(CommandId::GetDaemonStatus), *out_status);
 }
 
+inline Result GetBuildInfo(BuildInfo* out_info) {
+    ScopedService service;
+    Result rc = service.open();
+    if (R_FAILED(rc)) {
+        return rc;
+    }
+
+    return serviceDispatchOut(service.get(), static_cast<std::uint32_t>(CommandId::GetBuildInfo), *out_info);
+}
+
 inline Result ListPeers(PeerInfo* out_peers, std::uint32_t max_peers, std::uint32_t* out_count) {
     ScopedService service;
     Result rc = service.open();

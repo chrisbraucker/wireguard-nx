@@ -14,6 +14,7 @@ enum class CommandId : std::uint32_t {
     GetApiVersion = 0,
     GetDaemonStatus = 1,
     ListPeers = 2,
+    GetBuildInfo = 3,
     SetActivePeer = 10,
     SetAutoStartPeer = 11,
 };
@@ -102,6 +103,11 @@ struct DaemonStatus {
     std::int32_t auto_start_peer_index;
     std::uint32_t flags;
     std::uint32_t reserved;
+};
+
+struct BuildInfo {
+    char version[32];
+    char build_id[64];
 };
 
 struct PeerSelectionRequest {
@@ -193,6 +199,8 @@ static_assert(std::is_standard_layout_v<PeerInfo>);
 static_assert(std::is_trivially_copyable_v<PeerInfo>);
 static_assert(std::is_standard_layout_v<DaemonStatus>);
 static_assert(std::is_trivially_copyable_v<DaemonStatus>);
+static_assert(std::is_standard_layout_v<BuildInfo>);
+static_assert(std::is_trivially_copyable_v<BuildInfo>);
 static_assert(std::is_standard_layout_v<PeerSelectionRequest>);
 static_assert(std::is_trivially_copyable_v<PeerSelectionRequest>);
 

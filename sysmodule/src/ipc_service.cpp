@@ -877,6 +877,14 @@ ams::Result ControlService::GetDaemonStatus(ams::sf::Out<wgnx::DaemonStatus> out
     R_SUCCEED();
 }
 
+ams::Result ControlService::GetBuildInfo(ams::sf::Out<wgnx::BuildInfo> out) {
+    wgnx::BuildInfo info = {};
+    std::snprintf(info.version, sizeof(info.version), "%s", VERSION);
+    std::snprintf(info.build_id, sizeof(info.build_id), "%s", BUILD_ID);
+    out.SetValue(info);
+    R_SUCCEED();
+}
+
 ams::Result ControlService::ListPeers(ams::sf::Out<u32> out_count, const ams::sf::OutArray<wgnx::PeerInfo> &out) {
     std::scoped_lock lock(g_state_mutex);
     InitializeState();

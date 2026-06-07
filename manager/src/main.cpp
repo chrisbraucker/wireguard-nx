@@ -19,6 +19,8 @@
 
 #include "wgnx/client.hpp"
 
+#define VERSION_WITH_BUILD VERSION "-" BUILD_ID
+
 int main(int argc, char **argv)
 {
     consoleInit(NULL);
@@ -44,6 +46,7 @@ int main(int argc, char **argv)
 
     // Display arguments sent from nxlink
     printf("%d arguments\n", argc);
+    printf("Manager Version: %s\n", VERSION_WITH_BUILD);
 
     for (int i=0; i<argc; i++) {
         printf("argv[%d] = %s\n", i, argv[i]);
@@ -69,6 +72,14 @@ int main(int argc, char **argv)
         u32 api_version = 0;
         if (R_SUCCEEDED(wgnx::client::GetApiVersion(&api_version))) {
             printf("WireGuard IPC API: v%u\n", api_version);
+        }
+
+        wgnx::BuildInfo sysmodule_build = {};
+        if (R_SUCCEEDED(wgnx::client::GetBuildInfo(&sysmodule_build))) {
+            printf(
+                "Sysmodule Version: %s-%s\n",
+                sysmodule_build.version[0] != '\0' ? sysmodule_build.version : "unknown",
+                sysmodule_build.build_id[0] != '\0' ? sysmodule_build.build_id : "unknown");
         }
 
         wgnx::DaemonStatus status{};

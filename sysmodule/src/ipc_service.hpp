@@ -8,6 +8,7 @@
     AMS_SF_METHOD_INFO(C, H, static_cast<u32>(wgnx::CommandId::GetApiVersion),    ams::Result, GetApiVersion,    (ams::sf::Out<u32> out),                                                     (out), ams::hos::Version_Min, ams::hos::Version_Max) \
     AMS_SF_METHOD_INFO(C, H, static_cast<u32>(wgnx::CommandId::GetDaemonStatus),  ams::Result, GetDaemonStatus,  (ams::sf::Out<wgnx::DaemonStatus> out),                                      (out), ams::hos::Version_Min, ams::hos::Version_Max) \
     AMS_SF_METHOD_INFO(C, H, static_cast<u32>(wgnx::CommandId::ListPeers),        ams::Result, ListPeers,        (ams::sf::Out<u32> out_count, const ams::sf::OutArray<wgnx::PeerInfo> &out), (out_count, out), ams::hos::Version_Min, ams::hos::Version_Max) \
+    AMS_SF_METHOD_INFO(C, H, static_cast<u32>(wgnx::CommandId::GetBuildInfo),     ams::Result, GetBuildInfo,     (ams::sf::Out<wgnx::BuildInfo> out),                                         (out), ams::hos::Version_Min, ams::hos::Version_Max) \
     AMS_SF_METHOD_INFO(C, H, static_cast<u32>(wgnx::CommandId::SetActivePeer),    ams::Result, SetActivePeer,    (const wgnx::PeerSelectionRequest &request),                                 (request), ams::hos::Version_Min, ams::hos::Version_Max) \
     AMS_SF_METHOD_INFO(C, H, static_cast<u32>(wgnx::CommandId::SetAutoStartPeer), ams::Result, SetAutoStartPeer, (const wgnx::PeerSelectionRequest &request),                                 (request), ams::hos::Version_Min, ams::hos::Version_Max)
 
@@ -22,6 +23,7 @@ class ControlService {
 public:
     ams::Result GetApiVersion(ams::sf::Out<u32> out);
     ams::Result GetDaemonStatus(ams::sf::Out<wgnx::DaemonStatus> out);
+    ams::Result GetBuildInfo(ams::sf::Out<wgnx::BuildInfo> out);
     ams::Result ListPeers(ams::sf::Out<u32> out_count, const ams::sf::OutArray<wgnx::PeerInfo> &out);
     ams::Result SetActivePeer(const wgnx::PeerSelectionRequest &request);
     ams::Result SetAutoStartPeer(const wgnx::PeerSelectionRequest &request);
