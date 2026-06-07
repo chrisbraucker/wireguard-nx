@@ -62,12 +62,33 @@ struct DispatchTestContext {
 struct CoreSelfTestStorage {
     wgnx::PeerConfigEntry config{};
     wg_device device{};
+    wgnx::PeerConfigEntry secondary_config{};
+    wg_device secondary_device{};
+    wg_peer peer_copy{};
+    message_handshake_response response{};
+    message_handshake_response tampered_response{};
+    message_handshake_cookie cookie{};
+    wgnx::platform::static_packet_buffer<HandshakeResponseSize> response_buffer{};
+    wgnx::platform::static_packet_buffer<HandshakeResponseSize> tampered_buffer{};
+    wgnx::platform::static_packet_buffer<HandshakeCookieSize> cookie_buffer{};
 };
 
-constinit CoreSelfTestStorage g_core_self_test_storage{};
+CoreSelfTestStorage g_core_self_test_storage{};
 
 void ResetCoreSelfTestStorage() {
     g_core_self_test_storage = {};
+    wgnx::platform::packet_init(
+        &g_core_self_test_storage.response_buffer.packet,
+        g_core_self_test_storage.response_buffer.storage.data(),
+        g_core_self_test_storage.response_buffer.storage.size());
+    wgnx::platform::packet_init(
+        &g_core_self_test_storage.tampered_buffer.packet,
+        g_core_self_test_storage.tampered_buffer.storage.data(),
+        g_core_self_test_storage.tampered_buffer.storage.size());
+    wgnx::platform::packet_init(
+        &g_core_self_test_storage.cookie_buffer.packet,
+        g_core_self_test_storage.cookie_buffer.storage.data(),
+        g_core_self_test_storage.cookie_buffer.storage.size());
 }
 
 bool ComputeHarnessCookieKey(
@@ -520,7 +541,7 @@ bool TestHandshakeResponseAndSessionDerivation() {
         return false;
     }
 
-    wgnx::PeerConfigEntry responder_config{};
+    wgnx::PeerConfigEntry &responder_config = g_core_self_test_storage.secondary_config;
     std::snprintf(responder_config.name, sizeof(responder_config.name), "%s", "responder-peer");
     std::snprintf(responder_config.address, sizeof(responder_config.address), "%s", "10.66.66.1/32");
     std::snprintf(responder_config.endpoint, sizeof(responder_config.endpoint), "%s", "0.0.0.0:0");
@@ -529,7 +550,7 @@ bool TestHandshakeResponseAndSessionDerivation() {
     std::snprintf(responder_config.preshared_key, sizeof(responder_config.preshared_key), "%s", HarnessPresharedKey);
     std::snprintf(responder_config.allowed_ips, sizeof(responder_config.allowed_ips), "%s", "10.66.66.2/32");
 
-    wg_device responder_device{};
+    wg_device &responder_device = g_core_self_test_storage.secondary_device;
     if (!wg_device_init_from_config_entry(&responder_device, responder_config)) {
         return false;
     }
@@ -549,18 +570,17 @@ bool TestHandshakeResponseAndSessionDerivation() {
         return false;
     }
 
-    message_handshake_response response{};
+    message_handshake_response &response = g_core_self_test_storage.response;
     if (!noise_handshake_create_response(&response, responder)) {
         return false;
     }
 
-    wg_peer initiator_copy = *initiator;
-    const message_handshake_response tampered_response = [&response] {
-        message_handshake_response tampered = response;
-        tampered.encrypted_nothing[0] ^= 0x80U;
-        return tampered;
-    }();
-    wgnx::platform::static_packet_buffer<HandshakeResponseSize> tampered_buffer;
+    wg_peer &initiator_copy = g_core_self_test_storage.peer_copy;
+    initiator_copy = *initiator;
+    message_handshake_response &tampered_response = g_core_self_test_storage.tampered_response;
+    tampered_response = response;
+    tampered_response.encrypted_nothing[0] ^= 0x80U;
+    auto &tampered_buffer = g_core_self_test_storage.tampered_buffer;
     if (SerializeHandshakeResponse(&tampered_buffer.packet, tampered_response) != ParseError::None) {
         return false;
     }
@@ -568,7 +588,7 @@ bool TestHandshakeResponseAndSessionDerivation() {
         return false;
     }
 
-    wgnx::platform::static_packet_buffer<HandshakeResponseSize> response_buffer;
+    auto &response_buffer = g_core_self_test_storage.response_buffer;
     if (SerializeHandshakeResponse(&response_buffer.packet, response) != ParseError::None) {
         return false;
     }
@@ -584,11 +604,11 @@ bool TestHandshakeResponseAndSessionDerivation() {
         return false;
     }
 
-    message_handshake_cookie cookie{};
+    message_handshake_cookie &cookie = g_core_self_test_storage.cookie;
     if (!BuildHarnessCookieReply(&cookie, *initiator, *responder)) {
         return false;
     }
-    wgnx::platform::static_packet_buffer<HandshakeCookieSize> cookie_buffer;
+    auto &cookie_buffer = g_core_self_test_storage.cookie_buffer;
     if (SerializeHandshakeCookie(&cookie_buffer.packet, cookie) != ParseError::None) {
         return false;
     }
