@@ -57,6 +57,7 @@ enum class PeerErrorCode : std::uint32_t {
     TransportOpenFailed = 9,
     TransportSendFailed = 10,
     TransportReceiveFailed = 11,
+    HandshakeTimedOut = 12,
 };
 
 enum DaemonFlags : std::uint32_t {
@@ -177,6 +178,8 @@ constexpr inline const char *GetPeerErrorCodeName(PeerErrorCode code) {
             return "transport send failed";
         case PeerErrorCode::TransportReceiveFailed:
             return "transport receive failed";
+        case PeerErrorCode::HandshakeTimedOut:
+            return "handshake timed out";
     }
 
     return "unknown";

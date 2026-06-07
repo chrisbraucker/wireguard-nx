@@ -1082,6 +1082,47 @@ bool noise_handshake_begin_session(wg_device *device, wg_peer *peer) {
     return true;
 }
 
+bool noise_create_keepalive_packet(wgnx::platform::packet_buffer *packet, const noise_keypair &keypair) {
+    if (packet == nullptr || !keypair.valid || !keypair.sending_key.valid || keypair.remote_index == 0) {
+        return false;
+    }
+
+    constexpr std::size_t KeepalivePacketSize = TransportDataHeaderSize + crypto::Poly1305TagSize;
+    if (packet->capacity < KeepalivePacketSize) {
+        return false;
+    }
+
+    message_transport_data header{};
+    SetMessageType(&header.type, MessageType::TransportData);
+    header.receiver_index = keypair.remote_index;
+    header.counter = keypair.send_counter;
+    if (SerializeTransportDataHeader(packet, header) != ParseError::None) {
+        return false;
+    }
+
+    std::uint8_t nonce[crypto::ChaCha20NonceSize]{};
+    StoreLe64(nonce + sizeof(std::uint32_t), header.counter);
+
+    std::uint8_t *ciphertext = packet->data + TransportDataHeaderSize;
+    std::uint8_t *tag = ciphertext;
+    if (!crypto::chacha20poly1305_encrypt(
+            ciphertext,
+            tag,
+            packet->data + packet->len,
+            0,
+            nullptr,
+            0,
+            keypair.sending_key.bytes,
+            nonce)) {
+        crypto::secure_clear(nonce, sizeof(nonce));
+        return false;
+    }
+
+    packet->len = KeepalivePacketSize;
+    crypto::secure_clear(nonce, sizeof(nonce));
+    return true;
+}
+
 HandshakePacketOutcome noise_handshake_consume_incoming_packet(
     const wgnx::platform::packet_buffer *packet,
     const wg_device *device,

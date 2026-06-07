@@ -42,6 +42,8 @@ ImGUI library: https://github.com/ocornut/imgui
 
 Plutonium SDL2 GUI library: https://github.com/XorTroll/Plutonium
 
+ReSwitched SwIPC docs: https://reswitched.github.io/SwIPC/
+
 
 ## Open questions
 

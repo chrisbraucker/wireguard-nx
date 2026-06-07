@@ -11,6 +11,7 @@ namespace wgnx::wireguard {
 
 struct wg_device;
 struct wg_peer;
+struct noise_keypair;
 
 enum class HandshakeState : std::uint8_t {
     Zeroed = 0,
@@ -53,6 +54,7 @@ bool noise_handshake_create_response(message_handshake_response *dst, wg_peer *p
 bool noise_handshake_consume_response(const message_handshake_response *src, const wg_device *device, wg_peer *peer);
 bool noise_handshake_consume_cookie_reply(const message_handshake_cookie *src, const wg_device *device, wg_peer *peer);
 bool noise_handshake_begin_session(wg_device *device, wg_peer *peer);
+bool noise_create_keepalive_packet(wgnx::platform::packet_buffer *packet, const noise_keypair &keypair);
 HandshakePacketOutcome noise_handshake_consume_incoming_packet(
     const wgnx::platform::packet_buffer *packet,
     const wg_device *device,
