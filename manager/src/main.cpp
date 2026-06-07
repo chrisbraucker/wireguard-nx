@@ -43,6 +43,8 @@ int main(int argc, char **argv)
         diagAbortWithResult(rc);
 
     printf("Exit by pressing + or -\n");
+    printf("Press ZL to send a debug ping to 10.13.13.1 through the tunnel\n");
+    printf("Press ZR to send a debug ping to 1.1.1.1 through the tunnel\n");
 
     // Display arguments sent from nxlink
     printf("%d arguments\n", argc);
@@ -131,7 +133,22 @@ int main(int argc, char **argv)
         if (kDown & HidNpadButton_Plus) break;
         if (kDown & HidNpadButton_Minus) break;
 
-        // Your code goes here
+        if (kDown & (HidNpadButton_ZL | HidNpadButton_ZR)) {
+            const wgnx::DebugTriggerAction action = (kDown & HidNpadButton_ZL) != 0
+                ? wgnx::DebugTriggerAction::PingTunnelPeer
+                : wgnx::DebugTriggerAction::PingPublicDns;
+
+            if (!wgnx::client::IsServiceRunning()) {
+                printf("TriggerDebugPayload: IPC service is not running.\n");
+            } else {
+                const Result trigger_rc = wgnx::client::TriggerDebugPayload(action);
+                printf(
+                    "TriggerDebugPayload(%s): %s (0x%08X)\n",
+                    wgnx::GetDebugTriggerActionName(action),
+                    R_SUCCEEDED(trigger_rc) ? "queued" : "failed",
+                    trigger_rc);
+            }
+        }
 
         consoleUpdate(NULL);
     }

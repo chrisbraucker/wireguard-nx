@@ -10,7 +10,8 @@
     AMS_SF_METHOD_INFO(C, H, static_cast<u32>(wgnx::CommandId::ListPeers),        ams::Result, ListPeers,        (ams::sf::Out<u32> out_count, const ams::sf::OutArray<wgnx::PeerInfo> &out), (out_count, out), ams::hos::Version_Min, ams::hos::Version_Max) \
     AMS_SF_METHOD_INFO(C, H, static_cast<u32>(wgnx::CommandId::GetBuildInfo),     ams::Result, GetBuildInfo,     (ams::sf::Out<wgnx::BuildInfo> out),                                         (out), ams::hos::Version_Min, ams::hos::Version_Max) \
     AMS_SF_METHOD_INFO(C, H, static_cast<u32>(wgnx::CommandId::SetActivePeer),    ams::Result, SetActivePeer,    (const wgnx::PeerSelectionRequest &request),                                 (request), ams::hos::Version_Min, ams::hos::Version_Max) \
-    AMS_SF_METHOD_INFO(C, H, static_cast<u32>(wgnx::CommandId::SetAutoStartPeer), ams::Result, SetAutoStartPeer, (const wgnx::PeerSelectionRequest &request),                                 (request), ams::hos::Version_Min, ams::hos::Version_Max)
+    AMS_SF_METHOD_INFO(C, H, static_cast<u32>(wgnx::CommandId::SetAutoStartPeer), ams::Result, SetAutoStartPeer, (const wgnx::PeerSelectionRequest &request),                                 (request), ams::hos::Version_Min, ams::hos::Version_Max) \
+    AMS_SF_METHOD_INFO(C, H, static_cast<u32>(wgnx::CommandId::TriggerDebugPayload), ams::Result, TriggerDebugPayload, (const wgnx::DebugTriggerRequest &request),                         (request), ams::hos::Version_Min, ams::hos::Version_Max)
 
 // Interface ID for Stratosphere's service framework.
 // 0x57474E58 is ASCII "WGNX", chosen as a stable, human-readable identifier
@@ -27,6 +28,7 @@ public:
     ams::Result ListPeers(ams::sf::Out<u32> out_count, const ams::sf::OutArray<wgnx::PeerInfo> &out);
     ams::Result SetActivePeer(const wgnx::PeerSelectionRequest &request);
     ams::Result SetAutoStartPeer(const wgnx::PeerSelectionRequest &request);
+    ams::Result TriggerDebugPayload(const wgnx::DebugTriggerRequest &request);
 };
 static_assert(IsIControlService<ControlService>);
 

@@ -17,6 +17,13 @@ enum class CommandId : std::uint32_t {
     GetBuildInfo = 3,
     SetActivePeer = 10,
     SetAutoStartPeer = 11,
+    TriggerDebugPayload = 20,
+};
+
+enum class DebugTriggerAction : std::uint32_t {
+    None = 0,
+    PingTunnelPeer = 1,
+    PingPublicDns = 2,
 };
 
 enum PeerFlags : std::uint8_t {
@@ -116,6 +123,11 @@ struct PeerSelectionRequest {
     std::uint32_t reserved;
 };
 
+struct DebugTriggerRequest {
+    std::uint32_t action;
+    std::uint32_t reserved;
+};
+
 constexpr inline const char *GetPeerRuntimeStateName(PeerRuntimeState state) {
     switch (state) {
         case PeerRuntimeState::Inactive:
@@ -198,6 +210,19 @@ constexpr inline const char *GetPeerResolvedFamilyName(PeerResolvedFamily family
     return "unknown";
 }
 
+constexpr inline const char *GetDebugTriggerActionName(DebugTriggerAction action) {
+    switch (action) {
+        case DebugTriggerAction::None:
+            return "none";
+        case DebugTriggerAction::PingTunnelPeer:
+            return "ping-tunnel-peer";
+        case DebugTriggerAction::PingPublicDns:
+            return "ping-public-dns";
+    }
+
+    return "unknown";
+}
+
 static_assert(std::is_standard_layout_v<PeerInfo>);
 static_assert(std::is_trivially_copyable_v<PeerInfo>);
 static_assert(std::is_standard_layout_v<DaemonStatus>);
@@ -206,5 +231,7 @@ static_assert(std::is_standard_layout_v<BuildInfo>);
 static_assert(std::is_trivially_copyable_v<BuildInfo>);
 static_assert(std::is_standard_layout_v<PeerSelectionRequest>);
 static_assert(std::is_trivially_copyable_v<PeerSelectionRequest>);
+static_assert(std::is_standard_layout_v<DebugTriggerRequest>);
+static_assert(std::is_trivially_copyable_v<DebugTriggerRequest>);
 
 } // namespace wgnx

@@ -122,4 +122,19 @@ inline Result SetAutoStartPeer(std::int32_t peer_index) {
     return serviceDispatchIn(service.get(), static_cast<std::uint32_t>(CommandId::SetAutoStartPeer), request);
 }
 
+inline Result TriggerDebugPayload(DebugTriggerAction action) {
+    ScopedService service;
+    Result rc = service.open();
+    if (R_FAILED(rc)) {
+        return rc;
+    }
+
+    const DebugTriggerRequest request = {
+        .action = static_cast<std::uint32_t>(action),
+        .reserved = 0,
+    };
+
+    return serviceDispatchIn(service.get(), static_cast<std::uint32_t>(CommandId::TriggerDebugPayload), request);
+}
+
 } // namespace wgnx::client
