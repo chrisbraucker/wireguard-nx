@@ -228,7 +228,7 @@ void FailProtocolPeer(std::size_t peer_index, const char *reason) {
         peer->name,
         reason));
     wgnx::wireguard::wg_timers_cancel_all(std::addressof(peer->timers), peer->name);
-    wgnx::wireguard::wg_peer_reset_keypairs(peer);
+    wgnx::wireguard::wg_peer_scrub_transient_state(peer);
 }
 
 void ResetRuntimeMetrics(DaemonState::PeerRuntimeInfo *runtime) {

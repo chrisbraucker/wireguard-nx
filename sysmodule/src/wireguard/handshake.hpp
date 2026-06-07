@@ -1,6 +1,7 @@
 #pragma once
 
 #include "wgnx/platform/clock.hpp"
+#include "wgnx/platform/packet.hpp"
 
 #include "wireguard/messages.hpp"
 
@@ -28,7 +29,14 @@ struct noise_handshake {
     wgnx::platform::ktime_t last_transition_ns{0};
 };
 
+enum class HandshakePacketOutcome : std::uint8_t {
+    Invalid = 0,
+    ResponseConsumed = 1,
+    CookieReplyDeferred = 2,
+};
+
 const char *GetHandshakeStateName(HandshakeState state);
+const char *GetHandshakePacketOutcomeName(HandshakePacketOutcome outcome);
 
 void noise_handshake_init(noise_handshake *handshake);
 bool noise_handshake_transition(
@@ -43,5 +51,8 @@ bool noise_handshake_consume_initiation(const message_handshake_initiation *src,
 bool noise_handshake_create_response(message_handshake_response *dst, wg_peer *peer);
 bool noise_handshake_consume_response(const message_handshake_response *src, wg_peer *peer);
 bool noise_handshake_begin_session(wg_peer *peer);
+HandshakePacketOutcome noise_handshake_consume_incoming_packet(
+    const wgnx::platform::packet_buffer *packet,
+    wg_peer *peer);
 
 } // namespace wgnx::wireguard

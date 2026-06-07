@@ -58,5 +58,6 @@ void wg_peer_set_resolved_endpoint(
 void wg_peer_clear_resolved_endpoint(wg_peer *peer);
 void wg_peer_reset_keypairs(wg_peer *peer);
 void wg_peer_clear_last_initiation(wg_peer *peer);
+void wg_peer_scrub_transient_state(wg_peer *peer);
 
 } // namespace wgnx::wireguard

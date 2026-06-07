@@ -481,6 +481,19 @@ const char *GetHandshakeStateName(HandshakeState state) {
     return "unknown";
 }
 
+const char *GetHandshakePacketOutcomeName(HandshakePacketOutcome outcome) {
+    switch (outcome) {
+        case HandshakePacketOutcome::Invalid:
+            return "invalid";
+        case HandshakePacketOutcome::ResponseConsumed:
+            return "response_consumed";
+        case HandshakePacketOutcome::CookieReplyDeferred:
+            return "cookie_reply_deferred";
+    }
+
+    return "unknown";
+}
+
 void noise_handshake_init(noise_handshake *handshake) {
     if (handshake == nullptr) {
         return;
@@ -659,6 +672,18 @@ bool noise_handshake_consume_initiation(const message_handshake_initiation *src,
         wgnx::sysmodule::logger::Log("WG handshake peer='%s': rejected initiation with wrong message type", peer->name);
         goto out;
     }
+    if (src->sender_index == 0) {
+        wgnx::sysmodule::logger::Log("WG handshake peer='%s': rejected initiation with zero sender index", peer->name);
+        goto out;
+    }
+    if (peer->handshake.remote_index != 0 && peer->handshake.remote_index != src->sender_index) {
+        wgnx::sysmodule::logger::Log(
+            "WG handshake peer='%s': rejected initiation remote index changed old=0x%08x new=0x%08x",
+            peer->name,
+            peer->handshake.remote_index,
+            src->sender_index);
+        goto out;
+    }
 
     HandshakeInit(chaining_key, hash, peer->static_identity.static_public);
     MessageEphemeral(remote_ephemeral, src->unencrypted_ephemeral, chaining_key, hash);
@@ -713,7 +738,7 @@ out:
 bool noise_handshake_create_response(message_handshake_response *dst, wg_peer *peer) {
     if (dst == nullptr || peer == nullptr || !peer->static_identity.remote_static.valid ||
         !peer->handshake_material.remote_ephemeral.valid || peer->handshake.local_index == 0 ||
-        peer->handshake.state != HandshakeState::InitiationReceived) {
+        peer->handshake.remote_index == 0 || peer->handshake.state != HandshakeState::InitiationReceived) {
         return false;
     }
 
@@ -809,12 +834,27 @@ bool noise_handshake_consume_response(const message_handshake_response *src, wg_
         wgnx::sysmodule::logger::Log("WG handshake peer='%s': rejected response with wrong message type", peer->name);
         goto out;
     }
+    if (src->sender_index == 0) {
+        wgnx::sysmodule::logger::Log("WG handshake peer='%s': rejected response with zero sender index", peer->name);
+        goto out;
+    }
+    if (src->sender_index == peer->handshake.local_index) {
+        wgnx::sysmodule::logger::Log("WG handshake peer='%s': rejected response reusing local sender index", peer->name);
+        goto out;
+    }
     if (src->receiver_index != peer->handshake.local_index) {
         wgnx::sysmodule::logger::Log(
             "WG handshake peer='%s': response receiver index mismatch local=0x%08x got=0x%08x",
             peer->name,
             peer->handshake.local_index,
             src->receiver_index);
+        goto out;
+    }
+    if (peer->current_keypair.valid && src->sender_index == peer->current_keypair.remote_index) {
+        wgnx::sysmodule::logger::Log(
+            "WG handshake peer='%s': rejected replayed response sender=0x%08x",
+            peer->name,
+            src->sender_index);
         goto out;
     }
 
@@ -900,6 +940,73 @@ bool noise_handshake_begin_session(wg_peer *peer) {
         "derived real session keys"));
     ClearHandshakeTranscript(peer);
     return true;
+}
+
+HandshakePacketOutcome noise_handshake_consume_incoming_packet(
+    const wgnx::platform::packet_buffer *packet,
+    wg_peer *peer) {
+    if (packet == nullptr || peer == nullptr) {
+        return HandshakePacketOutcome::Invalid;
+    }
+
+    MessageType type = MessageType::Invalid;
+    const ParseResult type_result = InspectMessageType(packet, &type);
+    if (!type_result.success) {
+        wgnx::sysmodule::logger::Log(
+            "WG handshake peer='%s': rejected packet at type inspection err=%s",
+            peer->name,
+            GetParseErrorName(type_result.error));
+        return HandshakePacketOutcome::Invalid;
+    }
+
+    switch (type) {
+        case MessageType::HandshakeResponse: {
+            message_handshake_response response{};
+            const ParseResult parse_result = ParseHandshakeResponse(packet, &response);
+            if (!parse_result.success) {
+                wgnx::sysmodule::logger::Log(
+                    "WG handshake peer='%s': rejected response packet err=%s",
+                    peer->name,
+                    GetParseErrorName(parse_result.error));
+                return HandshakePacketOutcome::Invalid;
+            }
+            return noise_handshake_consume_response(&response, peer)
+                ? HandshakePacketOutcome::ResponseConsumed
+                : HandshakePacketOutcome::Invalid;
+        }
+        case MessageType::CookieReply: {
+            message_handshake_cookie cookie{};
+            const ParseResult parse_result = ParseHandshakeCookie(packet, &cookie);
+            if (!parse_result.success) {
+                wgnx::sysmodule::logger::Log(
+                    "WG handshake peer='%s': rejected cookie reply packet err=%s",
+                    peer->name,
+                    GetParseErrorName(parse_result.error));
+                return HandshakePacketOutcome::Invalid;
+            }
+            /*
+             * Deliberate Milestone 5 boundary:
+             * Cookie replies are recognized at the packet seam now so Milestone
+             * 6 can route them explicitly, but full cookie decryption/response
+             * handling remains deferred until XChaCha20-Poly1305 is added.
+             */
+            wgnx::sysmodule::logger::Log(
+                "WG handshake peer='%s': received cookie reply for receiver=0x%08x (deferred)",
+                peer->name,
+                cookie.receiver_index);
+            return HandshakePacketOutcome::CookieReplyDeferred;
+        }
+        case MessageType::HandshakeInitiation:
+        case MessageType::TransportData:
+        case MessageType::Invalid:
+            break;
+    }
+
+    wgnx::sysmodule::logger::Log(
+        "WG handshake peer='%s': rejected unsupported incoming packet type=%s",
+        peer->name,
+        GetMessageTypeName(type));
+    return HandshakePacketOutcome::Invalid;
 }
 
 } // namespace wgnx::wireguard

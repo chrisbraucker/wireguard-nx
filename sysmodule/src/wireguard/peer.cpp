@@ -1,5 +1,7 @@
 #include "wireguard/peer.hpp"
 
+#include "wireguard/crypto/primitives.hpp"
+
 #include "logger.hpp"
 
 #include <cstdio>
@@ -97,6 +99,31 @@ void wg_peer_clear_last_initiation(wg_peer *peer) {
 
     peer->last_initiation = {};
     peer->has_last_initiation = false;
+}
+
+void wg_peer_scrub_transient_state(wg_peer *peer) {
+    if (peer == nullptr) {
+        return;
+    }
+
+    crypto::secure_clear(
+        peer->handshake_material.ephemeral_private.bytes,
+        sizeof(peer->handshake_material.ephemeral_private.bytes));
+    peer->handshake_material.ephemeral_private.valid = false;
+    crypto::secure_clear(
+        peer->handshake_material.ephemeral_public.bytes,
+        sizeof(peer->handshake_material.ephemeral_public.bytes));
+    peer->handshake_material.ephemeral_public.valid = false;
+    crypto::secure_clear(
+        peer->handshake_material.remote_ephemeral.bytes,
+        sizeof(peer->handshake_material.remote_ephemeral.bytes));
+    peer->handshake_material.remote_ephemeral.valid = false;
+    crypto::secure_clear(peer->handshake_material.chaining_key.bytes, sizeof(peer->handshake_material.chaining_key.bytes));
+    peer->handshake_material.chaining_key.valid = false;
+    crypto::secure_clear(peer->handshake_material.hash.bytes, sizeof(peer->handshake_material.hash.bytes));
+    peer->handshake_material.hash.valid = false;
+    wg_peer_clear_last_initiation(peer);
+    wg_peer_reset_keypairs(peer);
 }
 
 } // namespace wgnx::wireguard

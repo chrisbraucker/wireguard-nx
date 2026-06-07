@@ -496,14 +496,44 @@ bool TestHandshakeResponseAndSessionDerivation() {
         tampered.encrypted_nothing[0] ^= 0x80U;
         return tampered;
     }();
-    if (noise_handshake_consume_response(&tampered_response, &initiator_copy)) {
+    wgnx::platform::static_packet_buffer<HandshakeResponseSize> tampered_buffer;
+    if (SerializeHandshakeResponse(&tampered_buffer.packet, tampered_response) != ParseError::None) {
         return false;
     }
-    if (!noise_handshake_consume_response(&response, initiator)) {
+    if (noise_handshake_consume_incoming_packet(&tampered_buffer.packet, &initiator_copy) != HandshakePacketOutcome::Invalid) {
+        return false;
+    }
+
+    wgnx::platform::static_packet_buffer<HandshakeResponseSize> response_buffer;
+    if (SerializeHandshakeResponse(&response_buffer.packet, response) != ParseError::None) {
+        return false;
+    }
+    if (noise_handshake_consume_incoming_packet(&response_buffer.packet, initiator) != HandshakePacketOutcome::ResponseConsumed) {
         return false;
     }
 
     if (!noise_handshake_begin_session(initiator) || !noise_handshake_begin_session(responder)) {
+        return false;
+    }
+
+    if (noise_handshake_consume_incoming_packet(&response_buffer.packet, initiator) != HandshakePacketOutcome::Invalid) {
+        return false;
+    }
+
+    message_handshake_cookie cookie{};
+    SetMessageType(&cookie.type, MessageType::CookieReply);
+    cookie.receiver_index = 0x01020304U;
+    for (std::size_t i = 0; i < sizeof(cookie.nonce); ++i) {
+        cookie.nonce[i] = static_cast<std::uint8_t>(0x90U + i);
+    }
+    for (std::size_t i = 0; i < sizeof(cookie.encrypted_cookie); ++i) {
+        cookie.encrypted_cookie[i] = static_cast<std::uint8_t>(0xB0U + i);
+    }
+    wgnx::platform::static_packet_buffer<HandshakeCookieSize> cookie_buffer;
+    if (SerializeHandshakeCookie(&cookie_buffer.packet, cookie) != ParseError::None) {
+        return false;
+    }
+    if (noise_handshake_consume_incoming_packet(&cookie_buffer.packet, initiator) != HandshakePacketOutcome::CookieReplyDeferred) {
         return false;
     }
 
