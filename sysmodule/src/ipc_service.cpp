@@ -2,6 +2,7 @@
 
 #include "config_loader.hpp"
 #include "logger.hpp"
+#include "wgnx/platform/clock.hpp"
 #include "wgnx/platform/udp.hpp"
 #include "wgnx/platform/work.hpp"
 #include "wireguard/device.hpp"
@@ -13,6 +14,7 @@
 #include <array>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <mutex>
 
 namespace wgnx::sysmodule {
@@ -40,9 +42,10 @@ struct DaemonState {
         std::uint32_t state_ticks{0};
         std::uint32_t activation_generation{0};
         std::uint32_t handshake_send_attempts{0};
-        std::int32_t last_handshake_seconds{-1};
-        std::int32_t last_rx_seconds{-1};
-        std::int32_t last_tx_seconds{-1};
+        wgnx::platform::ktime_t state_changed_ns{0};
+        wgnx::platform::ktime_t last_handshake_ns{0};
+        wgnx::platform::ktime_t last_rx_ns{0};
+        wgnx::platform::ktime_t last_tx_ns{0};
         std::uint64_t rx_bytes{0};
         std::uint64_t tx_bytes{0};
         wgnx::platform::endpoint resolved_endpoint{};
@@ -104,6 +107,32 @@ constexpr inline wgnx::platform::jiffies_t SimulatedHandshakeRetransmitJiffies =
 constexpr inline wgnx::platform::jiffies_t SimulatedRekeyJiffies = 120U * wgnx::platform::HZ;
 constexpr inline std::uint32_t MaxHandshakeSendAttempts = 5;
 constexpr inline std::size_t ReceivePacketCapacity = 4096;
+
+wgnx::platform::ktime_t GetRuntimeNowNs() {
+    return wgnx::platform::ktime_get_coarse_boottime_ns();
+}
+
+void StampRuntimeNow(wgnx::platform::ktime_t *field) {
+    if (field == nullptr) {
+        return;
+    }
+
+    *field = GetRuntimeNowNs();
+}
+
+std::int32_t ComputeElapsedSeconds(wgnx::platform::ktime_t timestamp_ns, wgnx::platform::ktime_t now_ns) {
+    if (timestamp_ns <= 0 || now_ns < timestamp_ns) {
+        return -1;
+    }
+
+    const wgnx::platform::ktime_t elapsed_ns = now_ns - timestamp_ns;
+    const wgnx::platform::ktime_t elapsed_seconds = elapsed_ns / wgnx::platform::NSEC_PER_SEC;
+    if (elapsed_seconds > static_cast<wgnx::platform::ktime_t>(std::numeric_limits<std::int32_t>::max())) {
+        return std::numeric_limits<std::int32_t>::max();
+    }
+
+    return static_cast<std::int32_t>(elapsed_seconds);
+}
 
 void CloseRuntimeSocket(DaemonState::PeerRuntimeInfo *runtime) {
     if (runtime == nullptr || runtime->socket == wgnx::platform::InvalidSocket) {
@@ -269,8 +298,8 @@ wgnx::PeerErrorCode SendProtocolPeerInitiation(std::size_t peer_index) {
         return MapSocketErrorToPeerErrorCode(send_error);
     }
 
-    runtime.last_tx_seconds = 0;
     runtime.tx_bytes += sent;
+    StampRuntimeNow(std::addressof(runtime.last_tx_ns));
     logger::Log(
         "Sent WG handshake initiation for peer %zu bytes=%zu endpoint=%s",
         peer_index,
@@ -314,8 +343,8 @@ wgnx::PeerErrorCode SendProtocolPeerKeepalive(std::size_t peer_index) {
         return MapSocketErrorToPeerErrorCode(send_error);
     }
 
-    runtime.last_tx_seconds = 0;
     runtime.tx_bytes += sent;
+    StampRuntimeNow(std::addressof(runtime.last_tx_ns));
     logger::Log(
         "Sent WG keepalive for peer %zu bytes=%zu endpoint=%s",
         peer_index,
@@ -502,9 +531,10 @@ void ResetRuntimeMetrics(DaemonState::PeerRuntimeInfo *runtime) {
 
     runtime->state_ticks = 0;
     runtime->handshake_send_attempts = 0;
-    runtime->last_handshake_seconds = -1;
-    runtime->last_rx_seconds = -1;
-    runtime->last_tx_seconds = -1;
+    runtime->state_changed_ns = 0;
+    runtime->last_handshake_ns = 0;
+    runtime->last_rx_ns = 0;
+    runtime->last_tx_ns = 0;
     runtime->rx_bytes = 0;
     runtime->tx_bytes = 0;
     runtime->established = false;
@@ -565,6 +595,7 @@ void SetPeerInactive(std::size_t peer_index) {
     ClearRuntimeError(&runtime);
     ResetRuntimeMetrics(&runtime);
     ClearResolvedEndpoint(&runtime);
+    StampRuntimeNow(std::addressof(runtime.state_changed_ns));
 }
 
 std::uint32_t AllocateActivationGeneration() {
@@ -585,6 +616,7 @@ void SetPeerResolving(std::size_t peer_index, std::uint32_t activation_generatio
     ClearRuntimeError(&runtime);
     ResetRuntimeMetrics(&runtime);
     ClearResolvedEndpoint(&runtime);
+    StampRuntimeNow(std::addressof(runtime.state_changed_ns));
 }
 
 void SetPeerHandshaking(std::size_t peer_index) {
@@ -592,7 +624,7 @@ void SetPeerHandshaking(std::size_t peer_index) {
     runtime.state = wgnx::PeerRuntimeState::Handshaking;
     ClearRuntimeError(&runtime);
     runtime.state_ticks = 0;
-    runtime.last_tx_seconds = 0;
+    StampRuntimeNow(std::addressof(runtime.state_changed_ns));
 }
 
 void SetPeerActive(std::size_t peer_index) {
@@ -601,8 +633,8 @@ void SetPeerActive(std::size_t peer_index) {
     ClearRuntimeError(&runtime);
     runtime.state_ticks = 0;
     runtime.established = true;
-    runtime.last_handshake_seconds = 0;
-    runtime.last_rx_seconds = 0;
+    StampRuntimeNow(std::addressof(runtime.state_changed_ns));
+    StampRuntimeNow(std::addressof(runtime.last_handshake_ns));
 }
 
 void SetPeerError(std::size_t peer_index, wgnx::PeerErrorStage stage, wgnx::PeerErrorCode code) {
@@ -613,6 +645,7 @@ void SetPeerError(std::size_t peer_index, wgnx::PeerErrorStage stage, wgnx::Peer
     runtime.last_error_code = static_cast<std::uint32_t>(code);
     runtime.state_ticks = 0;
     runtime.established = false;
+    StampRuntimeNow(std::addressof(runtime.state_changed_ns));
     FailProtocolPeer(peer_index, wgnx::GetPeerErrorCodeName(code));
 }
 
@@ -675,25 +708,10 @@ void StartPeerRuntime(std::size_t peer_index) {
         peer_index, activation_generation, config.endpoint);
 }
 
-void AdvanceAges(DaemonState::PeerRuntimeInfo *runtime) {
-    if (runtime == nullptr) {
-        return;
-    }
-
-    if (runtime->last_handshake_seconds >= 0) {
-        ++runtime->last_handshake_seconds;
-    }
-    if (runtime->last_rx_seconds >= 0) {
-        ++runtime->last_rx_seconds;
-    }
-    if (runtime->last_tx_seconds >= 0) {
-        ++runtime->last_tx_seconds;
-    }
-}
-
 wgnx::PeerInfo BuildPeerInfo(std::size_t peer_index) {
     const auto &config = g_state.configured_peers[peer_index];
     const auto &runtime = g_state.runtime[peer_index];
+    const wgnx::platform::ktime_t now_ns = GetRuntimeNowNs();
 
     wgnx::PeerInfo peer = {};
     std::snprintf(peer.name, sizeof(peer.name), "%s", config.name);
@@ -705,9 +723,9 @@ wgnx::PeerInfo BuildPeerInfo(std::size_t peer_index) {
         sizeof(peer.derived_public_key),
         "%s",
         g_state.config_derived[peer_index].has_derived_public_key ? g_state.config_derived[peer_index].derived_public_key : "");
-    peer.last_handshake_seconds = runtime.last_handshake_seconds;
-    peer.last_rx_seconds = runtime.last_rx_seconds;
-    peer.last_tx_seconds = runtime.last_tx_seconds;
+    peer.last_handshake_seconds = ComputeElapsedSeconds(runtime.last_handshake_ns, now_ns);
+    peer.last_rx_seconds = ComputeElapsedSeconds(runtime.last_rx_ns, now_ns);
+    peer.last_tx_seconds = ComputeElapsedSeconds(runtime.last_tx_ns, now_ns);
     peer.last_error_code = runtime.last_error_code;
     peer.persistent_keepalive_interval = runtime.persistent_keepalive_interval;
     peer.runtime_state = static_cast<std::uint8_t>(runtime.state);
@@ -782,26 +800,11 @@ bool IsValidPeerIndex(std::int32_t peer_index) {
 }
 
 void TickActivePeer() {
-    if (g_state.active_peer_index < 0) {
-        return;
-    }
-
-    auto &runtime = g_state.runtime[static_cast<std::size_t>(g_state.active_peer_index)];
-    AdvanceAges(&runtime);
-    ++runtime.state_ticks;
-
-    switch (runtime.state) {
-        case wgnx::PeerRuntimeState::Inactive:
-            break;
-        case wgnx::PeerRuntimeState::ResolvingEndpoint:
-            break;
-        case wgnx::PeerRuntimeState::Handshaking:
-            break;
-        case wgnx::PeerRuntimeState::Active:
-            break;
-        case wgnx::PeerRuntimeState::Error:
-            break;
-    }
+    /*
+     * IPC status queries should observe live runtime state, not advance it.
+     * The remaining call sites stay in place so this seam can grow later
+     * without making status requests mutate transport-visible ages again.
+     */
 }
 
 bool DequeueResolveRequest(ResolveRequest *out_request) {
@@ -914,7 +917,7 @@ void CommitReceivedPacket(
     }
 
     runtime.rx_bytes += packet->len;
-    runtime.last_rx_seconds = 0;
+    StampRuntimeNow(std::addressof(runtime.last_rx_ns));
 
     wgnx::wireguard::wg_peer *peer = GetProtocolPeer(peer_index);
     if (peer == nullptr) {
