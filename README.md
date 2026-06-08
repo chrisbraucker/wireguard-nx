@@ -1,40 +1,80 @@
-# Preliminary documentation
+# WireGuard-NX
+
+A work-in-progress project to bring the WireGuard VPN to Atmosphère.
+
+Current state: Userspace WireGuard implementation is able to send and receive IP packets inside the sysmodule.
+
+Parts of this project were generated under supervision with AI, make of that what you want.
+
+
+## Outline
 
 The repo is split into four main source configurations:
 
 - `/common` for shared code
+- `/docs` for documentation on usage and internals
 - `/manager` for the manager applet started via nx-hbmenu or similar
 - `/overlay` a tesla-based config menu for quick settings
 - `/sysmodule` for the sysmodule that does the actual work
+- `/tools` has convenience scripts for debugging and quickly installing binaries and pulling logs
 
 Manager and overlay should communicate with the sysmodule via IPC.
 
 The project provides a .devcontainer configuration for quick environment setup in supported editors such as VSCode.
 
 
-## Enabling nxlink
+## Development
+
+Make sure that the submodule is initialized.
+
+```bash
+git submodule update --init --recursive
+```
+
+
+### Devcontainers
+
+The project ships devcontainer configuration based on the [`devkitPro`](https://devkitpro.org/) image with some tweaks to make development in VS Code more convenient.
+
+The devcontainers configuration comes with two setup scripts to prepare host and container for the workflow.
+
+- `/.devcontainer/initialize.sh` makes sure two volumes, `codex-data`, and `wg-nx-history`, exist to persist session history and agent configuration across devcontainer sessions. It is currently not possible to opt out of the creation of those volumes, but they do no harm if unused.
+- `/.devcontainer/postStart.sh` maps those folders into the right locations in the container, so that history survives container rebuilds.
+  If you create those volumes manually, they may need to have their permissions tweaked, as the `postStart.sh` script is executed without root permissions in the container and therefore cannot change permissions.
+
+
+### Enabling nxlink in devcontainer
 
 If using the devcontainer together with nxlink for on-device development, make sure to set the remote extension port forwarding policy to `allInterfaces` at [Remote Extension: Local Port Host](vscode://settings/remote.localPortHost).
 
 
 ## Primitive
 
-I grabbed the project outline in part from the [switch-homebrew templates](https://github.com/switchbrew/switch-examples/tree/master/templates) and the open source [sys-clk project](https://github.com/retronx-team/sys-clk/tree/develop), as I want to use the IPC, overlay controls and manager software for my project likewise.
+The project outline is based in part on [switch-homebrew templates](https://github.com/switchbrew/switch-examples/tree/master/templates).
+
+
+## License
+
+This software is licensed under the terms of the GPLv2, with exemptions for specific projects noted below.
+
+The project ships a vendored version of [monocypher](https://github.com/LoupVaillant/Monocypher), which is dual-licensed under CC-01 or BSD.
+
+You can find a copy of the license in the [LICENSE file](LICENSE).
+
+Exemptions:
+
+- Nintendo is exempt from GPLv2 licensing and may (at its option) instead license any source code authored for the wireguard-nx project under the Zero-Clause BSD license.
 
 
 ## Resources
 
-Other network-related stuff may be relevant in [ldn-mitm](https://github.com/spacemeowx2/ldn_mitm).
+Network-related details may be relevant in [ldn-mitm](https://github.com/spacemeowx2/ldn_mitm).
+
+ReSwitched SwIPC docs: https://reswitched.github.io/SwIPC/
 
 Wireguard Linux kernel driver: https://git.zx2c4.com/wireguard-linux/tree/drivers/net/wireguard/
 
 ftpd: https://github.com/mtheall/ftpd
-
-sys-ftpd (started at boot): https://github.com/jakibaki/sys-ftpd
-
-libnx: https://github.com/switchbrew/libnx
-
-Tesla overlay: https://gbatemp.net/threads/tesla-the-nintendo-switch-overlay-menu.557362/
 
 Tesla-based helper to manage IP configuration for LANPlay and XLink Kai: https://github.com/matteofo/LANHelper-Tesla
 
@@ -42,10 +82,7 @@ ImGUI library: https://github.com/ocornut/imgui
 
 Plutonium SDL2 GUI library: https://github.com/XorTroll/Plutonium
 
-ReSwitched SwIPC docs: https://reswitched.github.io/SwIPC/
-
 
 ## Open questions
 
-- Biggest question right now is if it is possible to implement a custom network device and driver and tweak routing on demand to enable VPN functionality.
-- Another question is whether the wireguard runtime has a small-enough system footprint that it can stay running as a sysmodule all the time.
+- Biggest question is how to get the OS to use the tunnel, e.g. via MITM, module replacement or even a custom kernel driver.
