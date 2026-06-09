@@ -10,6 +10,8 @@
 
 #include <cstddef>
 #include <cstring>
+#include <span>
+#include <string_view>
 
 namespace wgnx::wireguard {
 
@@ -280,15 +282,11 @@ bool MessageEncrypt(
     }
 
     std::uint8_t tag[NoiseTagSize]{};
-    std::uint8_t empty_plaintext = 0;
-    const std::uint8_t *plaintext_src = src_plaintext != nullptr ? src_plaintext : &empty_plaintext;
     if (!crypto::chacha20poly1305_encrypt(
             dst_ciphertext,
             tag,
-            plaintext_src,
-            src_size,
-            hash,
-            NoiseHashSize,
+            {src_plaintext, src_size},
+            {hash, NoiseHashSize},
             key,
             ZeroNonce)) {
         return false;
@@ -322,11 +320,9 @@ bool MessageDecrypt(
 
     const bool ok = crypto::chacha20poly1305_decrypt(
         plaintext_dst,
-        src_ciphertext,
-        plaintext_size,
+        {src_ciphertext, plaintext_size},
         src_ciphertext + plaintext_size,
-        hash,
-        NoiseHashSize,
+        {hash, NoiseHashSize},
         key,
         ZeroNonce);
     if (!ok) {
@@ -585,8 +581,8 @@ void noise_handshake_init(noise_handshake *handshake) {
 bool noise_handshake_transition(
     noise_handshake *handshake,
     HandshakeState new_state,
-    const char *peer_name,
-    const char *reason) {
+    std::string_view peer_name,
+    std::string_view reason) {
     if (handshake == nullptr) {
         return false;
     }
@@ -598,10 +594,10 @@ bool noise_handshake_transition(
 
     wgnx::sysmodule::logger::Log(
         "WG handshake peer='%s' %s -> %s reason='%s' local=0x%08x remote=0x%08x transitions=%u",
-        peer_name != nullptr ? peer_name : "<unnamed>",
+        peer_name.empty() ? "<unnamed>" : peer_name.data(),
         GetHandshakeStateName(old_state),
         GetHandshakeStateName(new_state),
-        reason != nullptr ? reason : "none",
+        reason.empty() ? "none" : reason.data(),
         handshake->local_index,
         handshake->remote_index,
         handshake->transition_count);
@@ -1008,11 +1004,9 @@ bool noise_handshake_consume_cookie_reply(const message_handshake_cookie *src, c
     }
     if (!crypto::xchacha20poly1305_decrypt(
             cookie_value,
-            src->encrypted_cookie,
-            CookieValueSize,
+            {src->encrypted_cookie, CookieValueSize},
             src->encrypted_cookie + CookieValueSize,
             peer->cookie.last_mac1,
-            sizeof(peer->cookie.last_mac1),
             cookie_key,
             src->nonce)) {
         wgnx::sysmodule::logger::Log("WG handshake peer='%s': cookie reply decrypt failed", peer->name);
@@ -1108,10 +1102,8 @@ bool noise_create_keepalive_packet(wgnx::platform::packet_buffer *packet, const 
     if (!crypto::chacha20poly1305_encrypt(
             ciphertext,
             tag,
-            nullptr,
-            0,
-            nullptr,
-            0,
+            {},
+            {},
             keypair.sending_key.bytes,
             nonce)) {
         crypto::secure_clear(nonce, sizeof(nonce));

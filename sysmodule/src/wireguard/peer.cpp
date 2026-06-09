@@ -4,8 +4,10 @@
 
 #include "logger.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <string_view>
 
 namespace wgnx::wireguard {
 
@@ -31,8 +33,8 @@ void wg_peer_init_from_config(wg_peer *peer, const wgnx::PeerConfigEntry &config
     wg_peer_clear_last_initiation(peer);
 }
 
-bool wg_peer_prepare_static_identity(wg_peer *peer, const char *local_private_key_text) {
-    if (peer == nullptr || local_private_key_text == nullptr) {
+bool wg_peer_prepare_static_identity(wg_peer *peer, std::string_view local_private_key_text) {
+    if (peer == nullptr) {
         return false;
     }
 
@@ -59,18 +61,16 @@ bool wg_peer_prepare_static_identity(wg_peer *peer, const char *local_private_ke
 void wg_peer_set_resolved_endpoint(
     wg_peer *peer,
     const wgnx::platform::endpoint &endpoint,
-    const char *endpoint_text) {
+    std::string_view endpoint_text) {
     if (peer == nullptr) {
         return;
     }
 
     peer->resolved_endpoint = endpoint;
     peer->has_resolved_endpoint = true;
-    std::snprintf(
-        peer->resolved_endpoint_text,
-        sizeof(peer->resolved_endpoint_text),
-        "%s",
-        endpoint_text != nullptr ? endpoint_text : "");
+    std::memset(peer->resolved_endpoint_text, 0, sizeof(peer->resolved_endpoint_text));
+    const std::size_t copy_size = std::min(endpoint_text.size(), sizeof(peer->resolved_endpoint_text) - 1);
+    std::memcpy(peer->resolved_endpoint_text, endpoint_text.data(), copy_size);
 }
 
 void wg_peer_clear_resolved_endpoint(wg_peer *peer) {

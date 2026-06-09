@@ -137,9 +137,7 @@ bool BuildHarnessCookieReply(
             out_cookie->encrypted_cookie,
             tag,
             CookieValue,
-            sizeof(CookieValue),
             initiator.cookie.last_mac1,
-            sizeof(initiator.cookie.last_mac1),
             cookie_key,
             out_cookie->nonce)) {
         crypto::secure_clear(cookie_key, sizeof(cookie_key));
@@ -639,11 +637,9 @@ bool TestHandshakeResponseAndSessionDerivation() {
     StoreLe64(nonce + sizeof(std::uint32_t), keepalive_header.counter);
     const bool keepalive_decrypted = crypto::chacha20poly1305_decrypt(
         &decrypted_empty,
+        {keepalive_buffer.packet.data + TransportDataHeaderSize, 0},
         keepalive_buffer.packet.data + TransportDataHeaderSize,
-        0,
-        keepalive_buffer.packet.data + TransportDataHeaderSize,
-        nullptr,
-        0,
+        {},
         responder->current_keypair.receiving_key.bytes,
         nonce);
     crypto::secure_clear(nonce, sizeof(nonce));

@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <span>
 
 namespace wgnx::wireguard::crypto {
 
@@ -49,52 +50,42 @@ void chacha20_block(
     const std::uint8_t nonce[ChaCha20NonceSize]);
 void chacha20_xor(
     std::uint8_t *dst,
-    const std::uint8_t *src,
-    std::size_t size,
+    std::span<const std::uint8_t> src,
     const std::uint8_t key[ChaCha20KeySize],
     std::uint32_t counter,
     const std::uint8_t nonce[ChaCha20NonceSize]);
 
 void poly1305_auth(
     std::uint8_t tag[Poly1305TagSize],
-    const std::uint8_t *message,
-    std::size_t message_size,
+    std::span<const std::uint8_t> message,
     const std::uint8_t key[Poly1305KeySize]);
 
 bool chacha20poly1305_encrypt(
     std::uint8_t *ciphertext,
     std::uint8_t tag[Poly1305TagSize],
-    const std::uint8_t *plaintext,
-    std::size_t plaintext_size,
-    const std::uint8_t *aad,
-    std::size_t aad_size,
+    std::span<const std::uint8_t> plaintext,
+    std::span<const std::uint8_t> aad,
     const std::uint8_t key[ChaCha20KeySize],
     const std::uint8_t nonce[ChaCha20NonceSize]);
 bool chacha20poly1305_decrypt(
     std::uint8_t *plaintext,
-    const std::uint8_t *ciphertext,
-    std::size_t ciphertext_size,
+    std::span<const std::uint8_t> ciphertext,
     const std::uint8_t tag[Poly1305TagSize],
-    const std::uint8_t *aad,
-    std::size_t aad_size,
+    std::span<const std::uint8_t> aad,
     const std::uint8_t key[ChaCha20KeySize],
     const std::uint8_t nonce[ChaCha20NonceSize]);
 bool xchacha20poly1305_encrypt(
     std::uint8_t *ciphertext,
     std::uint8_t tag[Poly1305TagSize],
-    const std::uint8_t *plaintext,
-    std::size_t plaintext_size,
-    const std::uint8_t *aad,
-    std::size_t aad_size,
+    std::span<const std::uint8_t> plaintext,
+    std::span<const std::uint8_t> aad,
     const std::uint8_t key[ChaCha20KeySize],
     const std::uint8_t nonce[XChaCha20NonceSize]);
 bool xchacha20poly1305_decrypt(
     std::uint8_t *plaintext,
-    const std::uint8_t *ciphertext,
-    std::size_t ciphertext_size,
+    std::span<const std::uint8_t> ciphertext,
     const std::uint8_t tag[Poly1305TagSize],
-    const std::uint8_t *aad,
-    std::size_t aad_size,
+    std::span<const std::uint8_t> aad,
     const std::uint8_t key[ChaCha20KeySize],
     const std::uint8_t nonce[XChaCha20NonceSize]);
 

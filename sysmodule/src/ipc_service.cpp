@@ -16,6 +16,7 @@
 #include <cstring>
 #include <limits>
 #include <mutex>
+#include <string_view>
 
 namespace wgnx::sysmodule {
 
@@ -1299,7 +1300,7 @@ ams::Result ControlService::SetAutoStartPeer(const wgnx::PeerSelectionRequest &r
         peer_name = g_state.configured_peers[static_cast<std::size_t>(request.peer_index)].name;
     }
 
-    const ams::Result store_rc = StoreAutoStartPeerName(peer_name);
+    const ams::Result store_rc = StoreAutoStartPeerName(peer_name != nullptr ? std::string_view(peer_name) : std::string_view{});
     if (R_FAILED(store_rc)) {
         logger::Log("Rejected SetAutoStartPeer(%d): persist failed rc=0x%08x", request.peer_index, static_cast<u32>(store_rc.GetValue()));
         R_THROW(store_rc);

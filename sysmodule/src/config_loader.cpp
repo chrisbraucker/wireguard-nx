@@ -13,6 +13,8 @@
 #include "logger.hpp"
 #include "wgnx/paths.hpp"
 
+#include <algorithm>
+
 namespace wgnx::sysmodule {
 
 namespace {
@@ -60,50 +62,69 @@ std::string_view Trim(std::string_view value) {
     return value;
 }
 
-void SetError(ConfigParseError *error, std::size_t line, const char *message) {
+void SetError(ConfigParseError *error, std::size_t line, std::string_view message) {
     if (error == nullptr) {
         return;
     }
 
     error->line = line;
-    std::snprintf(error->message, sizeof(error->message), "%s", message);
+    std::snprintf(
+        error->message,
+        sizeof(error->message),
+        "%.*s",
+        static_cast<int>(std::min(message.size(), sizeof(error->message) - 1)),
+        message.data());
 }
 
 template<std::size_t Size>
-bool CopyField(char (&dst)[Size], const char *value, ConfigParseError *error, std::size_t line, const char *field_name) {
-    if (value == nullptr) {
-        SetError(error, line, "value is null");
-        return false;
-    }
-
-    const std::size_t length = std::strlen(value);
+bool CopyField(char (&dst)[Size], std::string_view value, ConfigParseError *error, std::size_t line, std::string_view field_name) {
+    const std::size_t length = value.size();
     if (length >= Size) {
         char message[sizeof(ConfigParseError::message)] = {};
-        std::snprintf(message, sizeof(message), "%s is too long", field_name);
+        std::snprintf(
+            message,
+            sizeof(message),
+            "%.*s is too long",
+            static_cast<int>(field_name.size()),
+            field_name.data());
         SetError(error, line, message);
         return false;
     }
 
-    std::memcpy(dst, value, length + 1);
+    std::memcpy(dst, value.data(), length);
+    dst[length] = '\0';
     return true;
 }
 
-bool ParseUnsignedField(std::uint16_t *out, const char *value, ConfigParseError *error, std::size_t line, const char *field_name) {
+bool ParseUnsignedField(std::uint16_t *out, std::string_view value, ConfigParseError *error, std::size_t line, std::string_view field_name) {
     if (out == nullptr) {
         SetError(error, line, "numeric output pointer is null");
         return false;
     }
-    if (value == nullptr || value[0] == '\0') {
+    if (value.empty()) {
         SetError(error, line, "numeric value is empty");
         return false;
     }
 
+    char value_buffer[32] = {};
+    if (value.size() >= sizeof(value_buffer)) {
+        SetError(error, line, "numeric value is too long");
+        return false;
+    }
+    std::memcpy(value_buffer, value.data(), value.size());
+    value_buffer[value.size()] = '\0';
+
     char *end = nullptr;
     errno = 0;
-    const unsigned long parsed = std::strtoul(value, &end, 10);
-    if (errno != 0 || end == value || *end != '\0' || parsed > 0xFFFFul) {
+    const unsigned long parsed = std::strtoul(value_buffer, &end, 10);
+    if (errno != 0 || end == value_buffer || *end != '\0' || parsed > 0xFFFFul) {
         char message[sizeof(ConfigParseError::message)] = {};
-        std::snprintf(message, sizeof(message), "%s must be an unsigned 16-bit integer", field_name);
+        std::snprintf(
+            message,
+            sizeof(message),
+            "%.*s must be an unsigned 16-bit integer",
+            static_cast<int>(field_name.size()),
+            field_name.data());
         SetError(error, line, message);
         return false;
     }
@@ -114,18 +135,22 @@ bool ParseUnsignedField(std::uint16_t *out, const char *value, ConfigParseError 
 
 int HandleConnectionConfig(void *user_ctx, const char *section, const char *name, const char *value) {
     auto *ctx = static_cast<ConnectionParseContext *>(user_ctx);
-    if (ctx == nullptr || ctx->out == nullptr) {
+    if (ctx == nullptr || ctx->out == nullptr || section == nullptr || name == nullptr || value == nullptr) {
         return 0;
     }
 
-    if (std::strcmp(section, "Interface") == 0) {
-        if (std::strcmp(name, "PrivateKey") == 0) {
+    const std::string_view section_view(section);
+    const std::string_view name_view(name);
+    const std::string_view value_view(value);
+
+    if (section_view == "Interface") {
+        if (name_view == "PrivateKey") {
             if (ctx->saw_private_key) {
                 SetError(ctx->error, 0, "multiple Interface.PrivateKey values are not supported");
                 return 0;
             }
 
-            if (!CopyField(ctx->out->private_key, value, ctx->error, 0, "PrivateKey")) {
+            if (!CopyField(ctx->out->private_key, value_view, ctx->error, 0, "PrivateKey")) {
                 return 0;
             }
 
@@ -134,13 +159,13 @@ int HandleConnectionConfig(void *user_ctx, const char *section, const char *name
             return 1;
         }
 
-        if (std::strcmp(name, "Address") == 0) {
+        if (name_view == "Address") {
             if (ctx->saw_address) {
                 SetError(ctx->error, 0, "multiple Interface.Address values are not supported");
                 return 0;
             }
 
-            if (!CopyField(ctx->out->address, value, ctx->error, 0, "Address")) {
+            if (!CopyField(ctx->out->address, value_view, ctx->error, 0, "Address")) {
                 return 0;
             }
 
@@ -148,13 +173,13 @@ int HandleConnectionConfig(void *user_ctx, const char *section, const char *name
             return 1;
         }
 
-        if (std::strcmp(name, "ListenPort") == 0) {
+        if (name_view == "ListenPort") {
             if (ctx->saw_listen_port) {
                 SetError(ctx->error, 0, "multiple Interface.ListenPort values are not supported");
                 return 0;
             }
 
-            if (!ParseUnsignedField(&ctx->out->listen_port, value, ctx->error, 0, "ListenPort")) {
+            if (!ParseUnsignedField(&ctx->out->listen_port, value_view, ctx->error, 0, "ListenPort")) {
                 return 0;
             }
 
@@ -163,13 +188,13 @@ int HandleConnectionConfig(void *user_ctx, const char *section, const char *name
             return 1;
         }
 
-        if (std::strcmp(name, "DNS") == 0) {
+        if (name_view == "DNS") {
             if (ctx->saw_dns) {
                 SetError(ctx->error, 0, "multiple Interface.DNS values are not supported");
                 return 0;
             }
 
-            if (!CopyField(ctx->out->dns, value, ctx->error, 0, "DNS")) {
+            if (!CopyField(ctx->out->dns, value_view, ctx->error, 0, "DNS")) {
                 return 0;
             }
 
@@ -178,13 +203,13 @@ int HandleConnectionConfig(void *user_ctx, const char *section, const char *name
             return 1;
         }
 
-        if (std::strcmp(name, "MTU") == 0) {
+        if (name_view == "MTU") {
             if (ctx->saw_mtu) {
                 SetError(ctx->error, 0, "multiple Interface.MTU values are not supported");
                 return 0;
             }
 
-            if (!ParseUnsignedField(&ctx->out->mtu, value, ctx->error, 0, "MTU")) {
+            if (!ParseUnsignedField(&ctx->out->mtu, value_view, ctx->error, 0, "MTU")) {
                 return 0;
             }
 
@@ -196,14 +221,14 @@ int HandleConnectionConfig(void *user_ctx, const char *section, const char *name
         return 1;
     }
 
-    if (std::strcmp(section, "Peer") == 0) {
-        if (std::strcmp(name, "PublicKey") == 0) {
+    if (section_view == "Peer") {
+        if (name_view == "PublicKey") {
             if (ctx->saw_public_key) {
                 SetError(ctx->error, 0, "multiple Peer.PublicKey values are not supported");
                 return 0;
             }
 
-            if (!CopyField(ctx->out->public_key, value, ctx->error, 0, "PublicKey")) {
+            if (!CopyField(ctx->out->public_key, value_view, ctx->error, 0, "PublicKey")) {
                 return 0;
             }
 
@@ -212,13 +237,13 @@ int HandleConnectionConfig(void *user_ctx, const char *section, const char *name
             return 1;
         }
 
-        if (std::strcmp(name, "PresharedKey") == 0) {
+        if (name_view == "PresharedKey") {
             if (ctx->saw_preshared_key) {
                 SetError(ctx->error, 0, "multiple Peer.PresharedKey values are not supported");
                 return 0;
             }
 
-            if (!CopyField(ctx->out->preshared_key, value, ctx->error, 0, "PresharedKey")) {
+            if (!CopyField(ctx->out->preshared_key, value_view, ctx->error, 0, "PresharedKey")) {
                 return 0;
             }
 
@@ -227,13 +252,13 @@ int HandleConnectionConfig(void *user_ctx, const char *section, const char *name
             return 1;
         }
 
-        if (std::strcmp(name, "AllowedIPs") == 0) {
+        if (name_view == "AllowedIPs") {
             if (ctx->saw_allowed_ips) {
                 SetError(ctx->error, 0, "multiple Peer.AllowedIPs values are not supported");
                 return 0;
             }
 
-            if (!CopyField(ctx->out->allowed_ips, value, ctx->error, 0, "AllowedIPs")) {
+            if (!CopyField(ctx->out->allowed_ips, value_view, ctx->error, 0, "AllowedIPs")) {
                 return 0;
             }
 
@@ -242,13 +267,13 @@ int HandleConnectionConfig(void *user_ctx, const char *section, const char *name
             return 1;
         }
 
-        if (std::strcmp(name, "Endpoint") == 0) {
+        if (name_view == "Endpoint") {
             if (ctx->saw_endpoint) {
                 SetError(ctx->error, 0, "multiple Peer.Endpoint values are not supported");
                 return 0;
             }
 
-            if (!CopyField(ctx->out->endpoint, value, ctx->error, 0, "Endpoint")) {
+            if (!CopyField(ctx->out->endpoint, value_view, ctx->error, 0, "Endpoint")) {
                 return 0;
             }
 
@@ -256,13 +281,13 @@ int HandleConnectionConfig(void *user_ctx, const char *section, const char *name
             return 1;
         }
 
-        if (std::strcmp(name, "PersistentKeepalive") == 0) {
+        if (name_view == "PersistentKeepalive") {
             if (ctx->saw_persistent_keepalive) {
                 SetError(ctx->error, 0, "multiple Peer.PersistentKeepalive values are not supported");
                 return 0;
             }
 
-            if (!ParseUnsignedField(&ctx->out->persistent_keepalive, value, ctx->error, 0, "PersistentKeepalive")) {
+            if (!ParseUnsignedField(&ctx->out->persistent_keepalive, value_view, ctx->error, 0, "PersistentKeepalive")) {
                 return 0;
             }
 
@@ -277,16 +302,11 @@ int HandleConnectionConfig(void *user_ctx, const char *section, const char *name
     return 1;
 }
 
-bool ValidateSectionLayout(const char *text, ConfigParseError *error) {
-    if (text == nullptr) {
-        SetError(error, 0, "config text is null");
-        return false;
-    }
-
+bool ValidateSectionLayout(std::string_view text, ConfigParseError *error) {
     std::size_t interface_sections = 0;
     std::size_t peer_sections = 0;
     std::size_t line_number = 0;
-    std::string_view remaining(text);
+    std::string_view remaining = text;
 
     while (true) {
         const std::size_t line_end = remaining.find('\n');
@@ -342,21 +362,16 @@ bool ValidateSectionLayout(const char *text, ConfigParseError *error) {
     return true;
 }
 
-bool HasConfSuffix(const char *name) {
-    if (name == nullptr) {
-        return false;
-    }
-
-    const std::size_t length = std::strlen(name);
-    return length > 5 && std::strcmp(name + length - 5, ".conf") == 0;
+bool HasConfSuffix(std::string_view name) {
+    return name.size() > 5 && name.ends_with(".conf");
 }
 
-bool ExtractPeerName(char *out_name, std::size_t out_name_size, const char *file_name) {
-    if (out_name == nullptr || out_name_size == 0 || file_name == nullptr) {
+bool ExtractPeerName(char *out_name, std::size_t out_name_size, std::string_view file_name) {
+    if (out_name == nullptr || out_name_size == 0) {
         return false;
     }
 
-    const std::size_t length = std::strlen(file_name);
+    const std::size_t length = file_name.size();
     if (length <= 5) {
         return false;
     }
@@ -366,17 +381,23 @@ bool ExtractPeerName(char *out_name, std::size_t out_name_size, const char *file
         return false;
     }
 
-    std::memcpy(out_name, file_name, stem_length);
+    std::memcpy(out_name, file_name.data(), stem_length);
     out_name[stem_length] = '\0';
     return true;
 }
 
-bool BuildConfigPath(char *out_path, std::size_t out_path_size, const char *file_name) {
-    if (out_path == nullptr || out_path_size == 0 || file_name == nullptr) {
+bool BuildConfigPath(char *out_path, std::size_t out_path_size, std::string_view file_name) {
+    if (out_path == nullptr || out_path_size == 0) {
         return false;
     }
 
-    const int written = std::snprintf(out_path, out_path_size, "%s/%s", wgnx::ConfigPath, file_name);
+    const int written = std::snprintf(
+        out_path,
+        out_path_size,
+        "%s/%.*s",
+        wgnx::ConfigPath,
+        static_cast<int>(file_name.size()),
+        file_name.data());
     return written > 0 && static_cast<std::size_t>(written) < out_path_size;
 }
 
@@ -596,20 +617,20 @@ bool LoadAutoStartPeerName(char *out_name, std::size_t out_name_size) {
     return true;
 }
 
-ams::Result StoreAutoStartPeerName(const char *name) {
+ams::Result StoreAutoStartPeerName(std::string_view name) {
     R_TRY(fs_runtime::EnsureDirectoryExists("/config"));
     R_TRY(fs_runtime::EnsureDirectoryExists(wgnx::ConfigPath));
 
-    if (name == nullptr || name[0] == '\0') {
+    if (name.empty()) {
         R_TRY(fs_runtime::DeleteFileIfExists(wgnx::AutoStartPath));
         logger::Log("Cleared autostart peer");
         R_SUCCEED();
     }
 
-    const std::size_t length = std::strlen(name);
+    const std::size_t length = name.size();
     R_UNLESS(length < sizeof(wgnx::PeerInfo::name), ams::fs::ResultTooLongPath());
-    R_TRY(fs_runtime::WriteTextFile(wgnx::AutoStartPath, name, length));
-    logger::Log("Stored autostart peer '%s'", name);
+    R_TRY(fs_runtime::WriteTextFile(wgnx::AutoStartPath, name.data(), length));
+    logger::Log("Stored autostart peer '%.*s'", static_cast<int>(name.size()), name.data());
     R_SUCCEED();
 }
 

@@ -6,6 +6,7 @@
 #include "wireguard/messages.hpp"
 
 #include <cstdint>
+#include <string_view>
 
 namespace wgnx::wireguard {
 
@@ -44,8 +45,8 @@ void noise_handshake_init(noise_handshake *handshake);
 bool noise_handshake_transition(
     noise_handshake *handshake,
     HandshakeState new_state,
-    const char *peer_name,
-    const char *reason);
+    std::string_view peer_name,
+    std::string_view reason);
 void noise_handshake_set_local_index(noise_handshake *handshake, std::uint32_t local_index);
 void noise_handshake_set_remote_index(noise_handshake *handshake, std::uint32_t remote_index);
 bool noise_handshake_create_initiation(message_handshake_initiation *dst, wg_peer *peer);

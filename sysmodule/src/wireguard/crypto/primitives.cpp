@@ -214,8 +214,7 @@ bool TestPoly1305Vector() {
     std::uint8_t tag[Poly1305TagSize]{};
     poly1305_auth(
         tag,
-        reinterpret_cast<const std::uint8_t *>(Message),
-        sizeof(Message) - 1,
+        {reinterpret_cast<const std::uint8_t *>(Message), sizeof(Message) - 1},
         Key);
     const bool same = secure_equal(tag, Expected, sizeof(Expected));
     secure_clear(tag, sizeof(tag));
@@ -270,10 +269,8 @@ bool TestChaCha20Poly1305Vector() {
     const bool encrypted = chacha20poly1305_encrypt(
         ciphertext,
         tag,
-        reinterpret_cast<const std::uint8_t *>(Plaintext),
-        sizeof(Plaintext) - 1,
+        {reinterpret_cast<const std::uint8_t *>(Plaintext), sizeof(Plaintext) - 1},
         Aad,
-        sizeof(Aad),
         Key,
         Nonce);
     if (!encrypted ||
@@ -288,10 +285,8 @@ bool TestChaCha20Poly1305Vector() {
     const bool decrypted_ok = chacha20poly1305_decrypt(
         decrypted,
         ciphertext,
-        sizeof(ciphertext),
         tag,
         Aad,
-        sizeof(Aad),
         Key,
         Nonce);
     const bool same_plaintext = decrypted_ok &&
@@ -350,10 +345,8 @@ bool TestXChaCha20Poly1305Vector() {
     const bool encrypted = xchacha20poly1305_encrypt(
         ciphertext,
         tag,
-        reinterpret_cast<const std::uint8_t *>(Plaintext),
-        sizeof(Plaintext) - 1,
+        {reinterpret_cast<const std::uint8_t *>(Plaintext), sizeof(Plaintext) - 1},
         Aad,
-        sizeof(Aad),
         Key,
         Nonce);
     const bool same_ciphertext = encrypted &&
@@ -370,10 +363,8 @@ bool TestXChaCha20Poly1305Vector() {
     const bool decrypted_ok = xchacha20poly1305_decrypt(
         decrypted,
         ciphertext,
-        sizeof(ciphertext),
         tag,
         Aad,
-        sizeof(Aad),
         Key,
         Nonce);
     const bool same_plaintext = decrypted_ok &&
@@ -506,60 +497,66 @@ void chacha20_block(
 
 void chacha20_xor(
     std::uint8_t *dst,
-    const std::uint8_t *src,
-    std::size_t size,
+    std::span<const std::uint8_t> src,
     const std::uint8_t key[ChaCha20KeySize],
     std::uint32_t counter,
     const std::uint8_t nonce[ChaCha20NonceSize]) {
-    static_cast<void>(crypto_chacha20_ietf(dst, src, size, key, nonce, counter));
+    static_cast<void>(crypto_chacha20_ietf(dst, src.data(), src.size(), key, nonce, counter));
 }
 
 void poly1305_auth(
     std::uint8_t tag[Poly1305TagSize],
-    const std::uint8_t *message,
-    std::size_t message_size,
+    std::span<const std::uint8_t> message,
     const std::uint8_t key[Poly1305KeySize]) {
-    crypto_poly1305(tag, message, message_size, key);
+    crypto_poly1305(tag, message.data(), message.size(), key);
 }
 
 bool chacha20poly1305_encrypt(
     std::uint8_t *ciphertext,
     std::uint8_t tag[Poly1305TagSize],
-    const std::uint8_t *plaintext,
-    std::size_t plaintext_size,
-    const std::uint8_t *aad,
-    std::size_t aad_size,
+    std::span<const std::uint8_t> plaintext,
+    std::span<const std::uint8_t> aad,
     const std::uint8_t key[ChaCha20KeySize],
     const std::uint8_t nonce[ChaCha20NonceSize]) {
-    if (ciphertext == nullptr || tag == nullptr || key == nullptr || nonce == nullptr ||
-        (plaintext == nullptr && plaintext_size != 0) || (aad == nullptr && aad_size != 0)) {
+    if (ciphertext == nullptr || tag == nullptr || key == nullptr || nonce == nullptr) {
         return false;
     }
 
     crypto_aead_ctx ctx{};
     crypto_aead_init_ietf(&ctx, key, nonce);
-    crypto_aead_write(&ctx, ciphertext, tag, aad, aad_size, plaintext, plaintext_size);
+    crypto_aead_write(
+        &ctx,
+        ciphertext,
+        tag,
+        aad.data(),
+        aad.size(),
+        plaintext.data(),
+        plaintext.size());
     secure_clear(&ctx, sizeof(ctx));
     return true;
 }
 
 bool chacha20poly1305_decrypt(
     std::uint8_t *plaintext,
-    const std::uint8_t *ciphertext,
-    std::size_t ciphertext_size,
+    std::span<const std::uint8_t> ciphertext,
     const std::uint8_t tag[Poly1305TagSize],
-    const std::uint8_t *aad,
-    std::size_t aad_size,
+    std::span<const std::uint8_t> aad,
     const std::uint8_t key[ChaCha20KeySize],
     const std::uint8_t nonce[ChaCha20NonceSize]) {
-    if (plaintext == nullptr || ciphertext == nullptr || tag == nullptr || key == nullptr || nonce == nullptr ||
-        (aad == nullptr && aad_size != 0)) {
+    if (plaintext == nullptr || tag == nullptr || key == nullptr || nonce == nullptr) {
         return false;
     }
 
     crypto_aead_ctx ctx{};
     crypto_aead_init_ietf(&ctx, key, nonce);
-    const bool ok = crypto_aead_read(&ctx, plaintext, tag, aad, aad_size, ciphertext, ciphertext_size) == 0;
+    const bool ok = crypto_aead_read(
+        &ctx,
+        plaintext,
+        tag,
+        aad.data(),
+        aad.size(),
+        ciphertext.data(),
+        ciphertext.size()) == 0;
     secure_clear(&ctx, sizeof(ctx));
     return ok;
 }
@@ -567,41 +564,49 @@ bool chacha20poly1305_decrypt(
 bool xchacha20poly1305_encrypt(
     std::uint8_t *ciphertext,
     std::uint8_t tag[Poly1305TagSize],
-    const std::uint8_t *plaintext,
-    std::size_t plaintext_size,
-    const std::uint8_t *aad,
-    std::size_t aad_size,
+    std::span<const std::uint8_t> plaintext,
+    std::span<const std::uint8_t> aad,
     const std::uint8_t key[ChaCha20KeySize],
     const std::uint8_t nonce[XChaCha20NonceSize]) {
-    if (ciphertext == nullptr || tag == nullptr || key == nullptr || nonce == nullptr ||
-        (plaintext == nullptr && plaintext_size != 0) || (aad == nullptr && aad_size != 0)) {
+    if (ciphertext == nullptr || tag == nullptr || key == nullptr || nonce == nullptr) {
         return false;
     }
 
     crypto_aead_ctx ctx{};
     crypto_aead_init_x(&ctx, key, nonce);
-    crypto_aead_write(&ctx, ciphertext, tag, aad, aad_size, plaintext, plaintext_size);
+    crypto_aead_write(
+        &ctx,
+        ciphertext,
+        tag,
+        aad.data(),
+        aad.size(),
+        plaintext.data(),
+        plaintext.size());
     secure_clear(&ctx, sizeof(ctx));
     return true;
 }
 
 bool xchacha20poly1305_decrypt(
     std::uint8_t *plaintext,
-    const std::uint8_t *ciphertext,
-    std::size_t ciphertext_size,
+    std::span<const std::uint8_t> ciphertext,
     const std::uint8_t tag[Poly1305TagSize],
-    const std::uint8_t *aad,
-    std::size_t aad_size,
+    std::span<const std::uint8_t> aad,
     const std::uint8_t key[ChaCha20KeySize],
     const std::uint8_t nonce[XChaCha20NonceSize]) {
-    if (plaintext == nullptr || ciphertext == nullptr || tag == nullptr || key == nullptr || nonce == nullptr ||
-        (aad == nullptr && aad_size != 0)) {
+    if (plaintext == nullptr || tag == nullptr || key == nullptr || nonce == nullptr) {
         return false;
     }
 
     crypto_aead_ctx ctx{};
     crypto_aead_init_x(&ctx, key, nonce);
-    const bool ok = crypto_aead_read(&ctx, plaintext, tag, aad, aad_size, ciphertext, ciphertext_size) == 0;
+    const bool ok = crypto_aead_read(
+        &ctx,
+        plaintext,
+        tag,
+        aad.data(),
+        aad.size(),
+        ciphertext.data(),
+        ciphertext.size()) == 0;
     secure_clear(&ctx, sizeof(ctx));
     return ok;
 }

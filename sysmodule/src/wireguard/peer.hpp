@@ -10,6 +10,7 @@
 #include "wireguard/timers.hpp"
 
 #include <cstdint>
+#include <string_view>
 
 namespace wgnx::wireguard {
 
@@ -51,11 +52,11 @@ struct wg_peer {
 };
 
 void wg_peer_init_from_config(wg_peer *peer, const wgnx::PeerConfigEntry &config);
-bool wg_peer_prepare_static_identity(wg_peer *peer, const char *local_private_key_text);
+bool wg_peer_prepare_static_identity(wg_peer *peer, std::string_view local_private_key_text);
 void wg_peer_set_resolved_endpoint(
     wg_peer *peer,
     const wgnx::platform::endpoint &endpoint,
-    const char *endpoint_text);
+    std::string_view endpoint_text);
 void wg_peer_clear_resolved_endpoint(wg_peer *peer);
 void wg_peer_reset_keypairs(wg_peer *peer);
 void wg_peer_clear_last_initiation(wg_peer *peer);
