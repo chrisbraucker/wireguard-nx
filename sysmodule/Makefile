@@ -43,6 +43,7 @@ HOST_TEST_CPP_SOURCES := \
 	src/wireguard/index_allocator.cpp \
 	src/wireguard/session.cpp \
 	src/wireguard/data.cpp \
+	src/wireguard/debug_probe.cpp \
 	src/wireguard/handshake.cpp \
 	src/wireguard/timers.cpp \
 	src/wireguard/peer.cpp \
@@ -149,7 +150,7 @@ test: $(HOST_TEST_TARGET)
 $(HOST_TEST_TARGET): $(HOST_TEST_CPP_SOURCES) $(HOST_TEST_C_SOURCES)
 	@[ -d $(HOST_TEST_DIR) ] || mkdir -p $(HOST_TEST_DIR)
 	@$(HOST_CC) -std=c11 -I$(CURDIR)/src/wireguard/crypto -c $(CURDIR)/src/wireguard/crypto/monocypher.c -o $(HOST_TEST_DIR)/monocypher.o
-	@$(HOST_CXX) -std=c++20 $(HOST_TEST_INCLUDES) $(addprefix $(CURDIR)/,$(HOST_TEST_CPP_SOURCES)) $(HOST_TEST_DIR)/monocypher.o -o $(HOST_TEST_TARGET)
+	@$(HOST_CXX) -std=c++23 $(HOST_TEST_INCLUDES) $(addprefix $(CURDIR)/,$(HOST_TEST_CPP_SOURCES)) $(HOST_TEST_DIR)/monocypher.o -o $(HOST_TEST_TARGET)
 
 libs	:
 	@$(foreach lib,$(LIBNAMES),$(MAKE) --no-print-directory -C $(TOPDIR)/lib/$(lib) && ) true

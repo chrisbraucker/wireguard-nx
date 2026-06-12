@@ -1,6 +1,7 @@
 #include "wireguard/debug_harness.hpp"
 
 #include "wireguard/data.hpp"
+#include "wireguard/debug_probe.hpp"
 #include "wireguard/device.hpp"
 #include "wireguard/dispatch.hpp"
 #include "wireguard/endian.hpp"
@@ -12,6 +13,8 @@
 #include "wireguard/timers.hpp"
 
 #include <cstdio>
+#include <algorithm>
+#include <array>
 #include <cstring>
 #include <span>
 
@@ -175,6 +178,76 @@ bool BuildHarnessCookieReply(
     std::memcpy(out_cookie->encrypted_cookie + CookieValueSize, tag, sizeof(tag));
     crypto::secure_clear(cookie_key, sizeof(cookie_key));
     crypto::secure_clear(tag, sizeof(tag));
+    return true;
+}
+
+void StoreHarnessBigEndian16(std::uint8_t *dst, std::uint16_t value) {
+    if (dst == nullptr) {
+        return;
+    }
+
+    dst[0] = static_cast<std::uint8_t>((value >> 8) & 0xFFu);
+    dst[1] = static_cast<std::uint8_t>(value & 0xFFu);
+}
+
+std::uint16_t ComputeHarnessInternetChecksum(const std::uint8_t *data, std::size_t size) {
+    std::uint32_t sum = 0;
+    std::size_t index = 0;
+    while ((index + 1) < size) {
+        sum += (static_cast<std::uint32_t>(data[index]) << 8) |
+               static_cast<std::uint32_t>(data[index + 1]);
+        index += 2;
+    }
+
+    if (index < size) {
+        sum += static_cast<std::uint32_t>(data[index]) << 8;
+    }
+
+    while ((sum >> 16) != 0) {
+        sum = (sum & 0xFFFFu) + (sum >> 16);
+    }
+
+    return static_cast<std::uint16_t>(~sum & 0xFFFFu);
+}
+
+bool BuildHarnessDebugProbeReply(
+    std::array<std::uint8_t, DebugProbePacketSize> *out_reply,
+    wgnx::DebugTriggerAction action,
+    std::uint32_t activation_generation,
+    std::size_t peer_index) {
+    if (out_reply == nullptr) {
+        return false;
+    }
+
+    *out_reply = {};
+    const std::size_t request_size = BuildDebugIcmpEchoRequest(
+        *out_reply,
+        "10.13.13.2/32",
+        action,
+        activation_generation,
+        peer_index,
+        0x11223344U);
+    if (request_size != DebugProbePacketSize) {
+        return false;
+    }
+
+    std::swap((*out_reply)[12], (*out_reply)[16]);
+    std::swap((*out_reply)[13], (*out_reply)[17]);
+    std::swap((*out_reply)[14], (*out_reply)[18]);
+    std::swap((*out_reply)[15], (*out_reply)[19]);
+    (*out_reply)[10] = 0;
+    (*out_reply)[11] = 0;
+    StoreHarnessBigEndian16(
+        out_reply->data() + 10,
+        ComputeHarnessInternetChecksum(out_reply->data(), DebugProbeIpv4HeaderSize));
+
+    std::uint8_t *icmp = out_reply->data() + DebugProbeIpv4HeaderSize;
+    icmp[0] = 0;
+    icmp[2] = 0;
+    icmp[3] = 0;
+    StoreHarnessBigEndian16(
+        icmp + 2,
+        ComputeHarnessInternetChecksum(icmp, DebugProbeIcmpHeaderSize + DebugProbeIcmpPayloadSize));
     return true;
 }
 
@@ -800,6 +873,73 @@ bool TestHandshakeResponseAndSessionDerivation() {
                NoiseMacSize) != 0;
 }
 
+bool TestDebugProbeIcmpRoundTrip() {
+    std::array<std::uint8_t, DebugProbePacketSize> reply{};
+    if (!BuildHarnessDebugProbeReply(
+            std::addressof(reply),
+            wgnx::DebugTriggerAction::PingTunnelPeer,
+            0x01020304U,
+            2)) {
+        wgnx::sysmodule::logger::Log("Debug probe self-test: failed to build synthetic reply");
+        return false;
+    }
+
+    DebugProbeReplyInfo info{};
+    const DebugProbeReplyValidation validation = ValidateDebugIcmpEchoReply(
+        reply,
+        "10.13.13.2/32",
+        2,
+        0x01020304U,
+        std::addressof(info));
+    if (validation != DebugProbeReplyValidation::Valid) {
+        wgnx::sysmodule::logger::Log(
+            "Debug probe self-test: unexpected validation=%s",
+            GetDebugProbeReplyValidationName(validation));
+        return false;
+    }
+    if (info.action != wgnx::DebugTriggerAction::PingTunnelPeer ||
+        info.activation_generation != 0x01020304U ||
+        info.peer_index != 2 ||
+        info.source_ipv4 != std::array<std::uint8_t, 4>{10, 13, 13, 1} ||
+        info.destination_ipv4 != std::array<std::uint8_t, 4>{10, 13, 13, 2}) {
+        wgnx::sysmodule::logger::Log(
+            "Debug probe self-test: info mismatch action=%s activation=%u peer=%u src=%u.%u.%u.%u dst=%u.%u.%u.%u",
+            wgnx::GetDebugTriggerActionName(info.action),
+            info.activation_generation,
+            static_cast<unsigned int>(info.peer_index),
+            static_cast<unsigned int>(info.source_ipv4[0]),
+            static_cast<unsigned int>(info.source_ipv4[1]),
+            static_cast<unsigned int>(info.source_ipv4[2]),
+            static_cast<unsigned int>(info.source_ipv4[3]),
+            static_cast<unsigned int>(info.destination_ipv4[0]),
+            static_cast<unsigned int>(info.destination_ipv4[1]),
+            static_cast<unsigned int>(info.destination_ipv4[2]),
+            static_cast<unsigned int>(info.destination_ipv4[3]));
+        return false;
+    }
+
+    reply[12] ^= 0x01U;
+    reply[10] = 0;
+    reply[11] = 0;
+    StoreHarnessBigEndian16(
+        reply.data() + 10,
+        ComputeHarnessInternetChecksum(reply.data(), DebugProbeIpv4HeaderSize));
+    const DebugProbeReplyValidation mismatch_validation = ValidateDebugIcmpEchoReply(
+        reply,
+        "10.13.13.2/32",
+        2,
+        0x01020304U,
+        nullptr);
+    if (mismatch_validation != DebugProbeReplyValidation::SourceMismatch) {
+        wgnx::sysmodule::logger::Log(
+            "Debug probe self-test: expected source_mismatch got=%s",
+            GetDebugProbeReplyValidationName(mismatch_validation));
+        return false;
+    }
+
+    return true;
+}
+
 } // namespace
 
 bool RunMessageSelfTest() {
@@ -839,7 +979,8 @@ bool RunCoreSelfTest() {
         TestDeviceAndPeerSkeleton() &&
         TestStaticIdentityParsing() &&
         TestHandshakeInitiationCreation() &&
-        TestHandshakeResponseAndSessionDerivation();
+        TestHandshakeResponseAndSessionDerivation() &&
+        TestDebugProbeIcmpRoundTrip();
     ResetCoreSelfTestStorage();
 
     if (ok) {

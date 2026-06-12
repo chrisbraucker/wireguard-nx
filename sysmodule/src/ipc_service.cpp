@@ -7,13 +7,13 @@
 #include "wgnx/platform/udp.hpp"
 #include "wgnx/platform/work.hpp"
 #include "wireguard/data.hpp"
+#include "wireguard/debug_probe.hpp"
 #include "wireguard/device.hpp"
 #include "wireguard/handshake.hpp"
 #include "wireguard/session.hpp"
 #include "wireguard/timers.hpp"
 
 #include <algorithm>
-#include <arpa/inet.h>
 #include <array>
 #include <cstdio>
 #include <cstring>
@@ -50,8 +50,11 @@ struct DaemonState {
         wgnx::platform::ktime_t last_handshake_ns{0};
         wgnx::platform::ktime_t last_rx_ns{0};
         wgnx::platform::ktime_t last_tx_ns{0};
+        wgnx::platform::ktime_t debug_probe_state_changed_ns{0};
         std::uint64_t rx_bytes{0};
         std::uint64_t tx_bytes{0};
+        wgnx::DebugTriggerAction debug_probe_action{wgnx::DebugTriggerAction::None};
+        wgnx::DebugProbeStatus debug_probe_status{wgnx::DebugProbeStatus::None};
         wgnx::platform::endpoint resolved_endpoint{};
         char resolved_endpoint_text[sizeof(wgnx::PeerInfo::resolved_endpoint)]{};
         bool established{false};
@@ -119,19 +122,18 @@ constinit TimerActionDispatcher g_rekey_dispatcher = {
     .hook = wgnx::wireguard::TimerHook::Rekey,
 };
 wgnx::platform::workqueue_struct *g_timer_action_workqueue = nullptr;
+struct PayloadProbeTimeoutDispatcher {
+    wgnx::platform::work_struct work{};
+    wgnx::platform::timer_list timer{};
+};
+constinit PayloadProbeTimeoutDispatcher g_payload_probe_timeout_dispatcher = {};
 
 constexpr inline wgnx::platform::jiffies_t SimulatedHandshakeRetransmitJiffies = 5U * wgnx::platform::HZ;
 constexpr inline wgnx::platform::jiffies_t SimulatedRekeyJiffies = 120U * wgnx::platform::HZ;
+constexpr inline wgnx::platform::jiffies_t DebugProbeTimeoutJiffies = 5U * wgnx::platform::HZ;
 constexpr inline std::uint32_t MaxHandshakeSendAttempts = 5;
 constexpr inline std::size_t ReceivePacketCapacity = 4096;
 constexpr inline std::size_t MaxTransportPayloadSize = 1500;
-constexpr inline std::uint8_t DebugTunnelPeerIpv4[4] = {10, 13, 13, 1};
-constexpr inline std::uint8_t DebugPublicDnsIpv4[4] = {1, 1, 1, 1};
-constexpr inline std::size_t DebugIpv4HeaderSize = 20;
-constexpr inline std::size_t DebugIcmpHeaderSize = 8;
-constexpr inline std::size_t DebugIcmpPayloadSize = 16;
-constexpr inline std::size_t DebugIcmpPacketSize =
-    DebugIpv4HeaderSize + DebugIcmpHeaderSize + DebugIcmpPayloadSize;
 constinit std::array<std::uint8_t, MaxTransportPayloadSize> g_receive_payload_buffer = {};
 
 template<std::size_t Size>
@@ -140,160 +142,7 @@ const char *CStr(const std::array<char, Size> &value) {
 }
 
 bool IsSupportedDebugTriggerAction(wgnx::DebugTriggerAction action) {
-    switch (action) {
-        case wgnx::DebugTriggerAction::PingTunnelPeer:
-        case wgnx::DebugTriggerAction::PingPublicDns:
-            return true;
-        case wgnx::DebugTriggerAction::None:
-            return false;
-    }
-
-    return false;
-}
-
-void StoreBigEndian16(std::uint8_t *dst, std::uint16_t value) {
-    if (dst == nullptr) {
-        return;
-    }
-
-    dst[0] = static_cast<std::uint8_t>((value >> 8) & 0xFFu);
-    dst[1] = static_cast<std::uint8_t>(value & 0xFFu);
-}
-
-void StoreBigEndian32(std::uint8_t *dst, std::uint32_t value) {
-    if (dst == nullptr) {
-        return;
-    }
-
-    dst[0] = static_cast<std::uint8_t>((value >> 24) & 0xFFu);
-    dst[1] = static_cast<std::uint8_t>((value >> 16) & 0xFFu);
-    dst[2] = static_cast<std::uint8_t>((value >> 8) & 0xFFu);
-    dst[3] = static_cast<std::uint8_t>(value & 0xFFu);
-}
-
-std::uint16_t ComputeInternetChecksum(const std::uint8_t *data, std::size_t size) {
-    std::uint32_t sum = 0;
-    std::size_t index = 0;
-    while ((index + 1) < size) {
-        sum += (static_cast<std::uint32_t>(data[index]) << 8) |
-               static_cast<std::uint32_t>(data[index + 1]);
-        index += 2;
-    }
-
-    if (index < size) {
-        sum += static_cast<std::uint32_t>(data[index]) << 8;
-    }
-
-    while ((sum >> 16) != 0) {
-        sum = (sum & 0xFFFFu) + (sum >> 16);
-    }
-
-    return static_cast<std::uint16_t>(~sum & 0xFFFFu);
-}
-
-bool ParseIpv4InterfaceAddress(std::uint8_t out[4], const char *address_text) {
-    if (out == nullptr || address_text == nullptr || address_text[0] == '\0') {
-        return false;
-    }
-
-    char address_copy[sizeof(wgnx::PeerInfo::address)] = {};
-    std::snprintf(address_copy, sizeof(address_copy), "%s", address_text);
-    if (char *slash = std::strchr(address_copy, '/'); slash != nullptr) {
-        *slash = '\0';
-    }
-
-    return ::inet_pton(AF_INET, address_copy, out) == 1;
-}
-
-void CopyDebugTargetIpv4(wgnx::DebugTriggerAction action, std::uint8_t out[4]) {
-    if (out == nullptr) {
-        return;
-    }
-
-    switch (action) {
-        case wgnx::DebugTriggerAction::PingTunnelPeer:
-            std::memcpy(out, DebugTunnelPeerIpv4, sizeof(DebugTunnelPeerIpv4));
-            return;
-        case wgnx::DebugTriggerAction::PingPublicDns:
-            std::memcpy(out, DebugPublicDnsIpv4, sizeof(DebugPublicDnsIpv4));
-            return;
-        case wgnx::DebugTriggerAction::None:
-            break;
-    }
-
-    std::memset(out, 0, 4);
-}
-
-void FormatIpv4Text(const std::uint8_t address[4], char *out, std::size_t out_size) {
-    if (out == nullptr || out_size == 0 || address == nullptr) {
-        return;
-    }
-
-    std::snprintf(
-        out,
-        out_size,
-        "%u.%u.%u.%u",
-        static_cast<unsigned int>(address[0]),
-        static_cast<unsigned int>(address[1]),
-        static_cast<unsigned int>(address[2]),
-        static_cast<unsigned int>(address[3]));
-}
-
-/*
- * Temporary Milestone 7 debug seam:
- * The manager sends only a small action code. The sysmodule owns payload
- * construction and currently emits fixed IPv4 ICMP echo requests so the live
- * session path can be exercised without committing to a packet ABI yet.
- */
-std::size_t BuildDebugIcmpEchoRequest(
-    std::uint8_t *payload,
-    std::size_t capacity,
-    const char *source_address_text,
-    wgnx::DebugTriggerAction action,
-    std::uint32_t activation_generation,
-    std::size_t peer_index) {
-    if (payload == nullptr || capacity < DebugIcmpPacketSize ||
-        !IsSupportedDebugTriggerAction(action)) {
-        return 0;
-    }
-
-    std::uint8_t source_ipv4[4] = {};
-    if (!ParseIpv4InterfaceAddress(source_ipv4, source_address_text)) {
-        return 0;
-    }
-
-    std::uint8_t destination_ipv4[4] = {};
-    CopyDebugTargetIpv4(action, destination_ipv4);
-
-    std::memset(payload, 0, DebugIcmpPacketSize);
-    payload[0] = 0x45;
-    payload[1] = 0x00;
-    StoreBigEndian16(payload + 2, static_cast<std::uint16_t>(DebugIcmpPacketSize));
-    StoreBigEndian16(payload + 4, static_cast<std::uint16_t>(wgnx::platform::get_random_u32_below(0x10000u)));
-    StoreBigEndian16(payload + 6, 0x4000u);
-    payload[8] = 64;
-    payload[9] = 1;
-    std::memcpy(payload + 12, source_ipv4, sizeof(source_ipv4));
-    std::memcpy(payload + 16, destination_ipv4, sizeof(destination_ipv4));
-    StoreBigEndian16(payload + 10, ComputeInternetChecksum(payload, DebugIpv4HeaderSize));
-
-    std::uint8_t *icmp = payload + DebugIpv4HeaderSize;
-    icmp[0] = 8;
-    icmp[1] = 0;
-    StoreBigEndian16(icmp + 4, static_cast<std::uint16_t>(wgnx::platform::get_random_u32_below(0x10000u)));
-    StoreBigEndian16(icmp + 6, static_cast<std::uint16_t>(activation_generation & 0xFFFFu));
-
-    std::uint8_t *icmp_payload = icmp + DebugIcmpHeaderSize;
-    icmp_payload[0] = 'W';
-    icmp_payload[1] = 'G';
-    icmp_payload[2] = 'N';
-    icmp_payload[3] = 'X';
-    StoreBigEndian32(icmp_payload + 4, static_cast<std::uint32_t>(action));
-    StoreBigEndian32(icmp_payload + 8, activation_generation);
-    StoreBigEndian32(icmp_payload + 12, static_cast<std::uint32_t>(peer_index));
-    StoreBigEndian16(icmp + 2, ComputeInternetChecksum(icmp, DebugIcmpHeaderSize + DebugIcmpPayloadSize));
-
-    return DebugIcmpPacketSize;
+    return wgnx::wireguard::IsSupportedDebugTriggerAction(action);
 }
 
 const char *GetIndexSlotName(wgnx::wireguard::wg_index_slot slot) {
@@ -348,157 +197,6 @@ void FormatEndpointText(
     }
 }
 
-enum class DebugIcmpReplyValidation : std::uint8_t {
-    NotDebugReply = 0,
-    InvalidIpv4,
-    InvalidIcmp,
-    InvalidAction,
-    ActivationMismatch,
-    PeerMismatch,
-    DestinationMismatch,
-    SourceMismatch,
-    Valid,
-};
-
-struct DebugIcmpReplyInfo {
-    wgnx::DebugTriggerAction action{wgnx::DebugTriggerAction::None};
-    std::uint32_t activation_generation{0};
-    std::uint32_t peer_index{0};
-    std::uint16_t sequence{0};
-    std::uint8_t source_ipv4[4]{};
-    std::uint8_t destination_ipv4[4]{};
-};
-
-const char *GetDebugIcmpReplyValidationName(DebugIcmpReplyValidation validation) {
-    switch (validation) {
-        case DebugIcmpReplyValidation::NotDebugReply:
-            return "not_debug_reply";
-        case DebugIcmpReplyValidation::InvalidIpv4:
-            return "invalid_ipv4";
-        case DebugIcmpReplyValidation::InvalidIcmp:
-            return "invalid_icmp";
-        case DebugIcmpReplyValidation::InvalidAction:
-            return "invalid_action";
-        case DebugIcmpReplyValidation::ActivationMismatch:
-            return "activation_mismatch";
-        case DebugIcmpReplyValidation::PeerMismatch:
-            return "peer_mismatch";
-        case DebugIcmpReplyValidation::DestinationMismatch:
-            return "destination_mismatch";
-        case DebugIcmpReplyValidation::SourceMismatch:
-            return "source_mismatch";
-        case DebugIcmpReplyValidation::Valid:
-            return "valid";
-    }
-
-    return "unknown";
-}
-
-DebugIcmpReplyValidation ValidateDebugIcmpEchoReply(
-    const std::uint8_t *payload,
-    std::size_t payload_size,
-    const char *local_address_text,
-    std::size_t expected_peer_index,
-    std::uint32_t expected_activation_generation,
-    DebugIcmpReplyInfo *out_info) {
-    if (out_info != nullptr) {
-        *out_info = {};
-    }
-    if (payload == nullptr || payload_size < (DebugIpv4HeaderSize + DebugIcmpHeaderSize)) {
-        return DebugIcmpReplyValidation::NotDebugReply;
-    }
-
-    const std::uint8_t version = payload[0] >> 4;
-    const std::size_t ihl = static_cast<std::size_t>(payload[0] & 0x0Fu) * 4;
-    if (version != 4) {
-        return DebugIcmpReplyValidation::NotDebugReply;
-    }
-    if (ihl < DebugIpv4HeaderSize || payload_size < ihl ||
-        ComputeInternetChecksum(payload, ihl) != 0) {
-        return DebugIcmpReplyValidation::InvalidIpv4;
-    }
-
-    const std::uint16_t total_length =
-        (static_cast<std::uint16_t>(payload[2]) << 8) |
-        static_cast<std::uint16_t>(payload[3]);
-    if (total_length < (ihl + DebugIcmpHeaderSize) || total_length > payload_size) {
-        return DebugIcmpReplyValidation::InvalidIpv4;
-    }
-    if (payload[9] != 1) {
-        return DebugIcmpReplyValidation::NotDebugReply;
-    }
-
-    const std::uint8_t *icmp = payload + ihl;
-    const std::size_t icmp_size = total_length - ihl;
-    if (icmp_size < (DebugIcmpHeaderSize + DebugIcmpPayloadSize) ||
-        ComputeInternetChecksum(icmp, icmp_size) != 0) {
-        return DebugIcmpReplyValidation::InvalidIcmp;
-    }
-    if (icmp[0] != 0 || icmp[1] != 0) {
-        return DebugIcmpReplyValidation::NotDebugReply;
-    }
-
-    const std::uint8_t *icmp_payload = icmp + DebugIcmpHeaderSize;
-    if (std::memcmp(icmp_payload, "WGNX", 4) != 0) {
-        return DebugIcmpReplyValidation::NotDebugReply;
-    }
-
-    const std::uint32_t encoded_action =
-        (static_cast<std::uint32_t>(icmp_payload[4]) << 24) |
-        (static_cast<std::uint32_t>(icmp_payload[5]) << 16) |
-        (static_cast<std::uint32_t>(icmp_payload[6]) << 8) |
-        static_cast<std::uint32_t>(icmp_payload[7]);
-    const auto action = static_cast<wgnx::DebugTriggerAction>(encoded_action);
-    if (!IsSupportedDebugTriggerAction(action)) {
-        return DebugIcmpReplyValidation::InvalidAction;
-    }
-
-    const std::uint32_t activation_generation =
-        (static_cast<std::uint32_t>(icmp_payload[8]) << 24) |
-        (static_cast<std::uint32_t>(icmp_payload[9]) << 16) |
-        (static_cast<std::uint32_t>(icmp_payload[10]) << 8) |
-        static_cast<std::uint32_t>(icmp_payload[11]);
-    if (activation_generation != expected_activation_generation) {
-        return DebugIcmpReplyValidation::ActivationMismatch;
-    }
-
-    const std::uint32_t peer_index =
-        (static_cast<std::uint32_t>(icmp_payload[12]) << 24) |
-        (static_cast<std::uint32_t>(icmp_payload[13]) << 16) |
-        (static_cast<std::uint32_t>(icmp_payload[14]) << 8) |
-        static_cast<std::uint32_t>(icmp_payload[15]);
-    if (peer_index != expected_peer_index) {
-        return DebugIcmpReplyValidation::PeerMismatch;
-    }
-
-    std::uint8_t expected_destination[4] = {};
-    if (!ParseIpv4InterfaceAddress(expected_destination, local_address_text)) {
-        return DebugIcmpReplyValidation::DestinationMismatch;
-    }
-    if (std::memcmp(payload + 16, expected_destination, sizeof(expected_destination)) != 0) {
-        return DebugIcmpReplyValidation::DestinationMismatch;
-    }
-
-    std::uint8_t expected_source[4] = {};
-    CopyDebugTargetIpv4(action, expected_source);
-    if (std::memcmp(payload + 12, expected_source, sizeof(expected_source)) != 0) {
-        return DebugIcmpReplyValidation::SourceMismatch;
-    }
-
-    if (out_info != nullptr) {
-        out_info->action = action;
-        out_info->activation_generation = activation_generation;
-        out_info->peer_index = peer_index;
-        out_info->sequence =
-            (static_cast<std::uint16_t>(icmp[6]) << 8) |
-            static_cast<std::uint16_t>(icmp[7]);
-        std::memcpy(out_info->source_ipv4, payload + 12, sizeof(out_info->source_ipv4));
-        std::memcpy(out_info->destination_ipv4, payload + 16, sizeof(out_info->destination_ipv4));
-    }
-
-    return DebugIcmpReplyValidation::Valid;
-}
-
 wgnx::platform::ktime_t GetRuntimeNowNs() {
     return wgnx::platform::ktime_get_coarse_boottime_ns();
 }
@@ -523,6 +221,34 @@ std::int32_t ComputeElapsedSeconds(wgnx::platform::ktime_t timestamp_ns, wgnx::p
     }
 
     return static_cast<std::int32_t>(elapsed_seconds);
+}
+
+void ClearDebugProbeState(DaemonState::PeerRuntimeInfo *runtime) {
+    if (runtime == nullptr) {
+        return;
+    }
+
+    runtime->debug_probe_action = wgnx::DebugTriggerAction::None;
+    runtime->debug_probe_status = wgnx::DebugProbeStatus::None;
+    runtime->debug_probe_state_changed_ns = 0;
+}
+
+void SetDebugProbeState(
+    DaemonState::PeerRuntimeInfo *runtime,
+    wgnx::DebugTriggerAction action,
+    wgnx::DebugProbeStatus status) {
+    if (runtime == nullptr) {
+        return;
+    }
+
+    runtime->debug_probe_action = action;
+    runtime->debug_probe_status = status;
+    StampRuntimeNow(std::addressof(runtime->debug_probe_state_changed_ns));
+}
+
+bool IsDebugProbePending(const DaemonState::PeerRuntimeInfo &runtime) {
+    return runtime.debug_probe_status == wgnx::DebugProbeStatus::Queued ||
+           runtime.debug_probe_status == wgnx::DebugProbeStatus::Sent;
 }
 
 void CloseRuntimeSocket(DaemonState::PeerRuntimeInfo *runtime) {
@@ -879,6 +605,16 @@ void CancelAllTransportTimers() {
     CancelProtocolTimer(peer_index, wgnx::wireguard::TimerHook::Rekey);
 }
 
+void SchedulePayloadProbeTimeout() {
+    wgnx::platform::mod_timer(
+        std::addressof(g_payload_probe_timeout_dispatcher.timer),
+        wgnx::platform::get_jiffies_64() + DebugProbeTimeoutJiffies);
+}
+
+void CancelPayloadProbeTimeout() {
+    wgnx::platform::timer_delete(std::addressof(g_payload_probe_timeout_dispatcher.timer));
+}
+
 void ScheduleProtocolSessionTimers(std::size_t peer_index, wgnx::wireguard::wg_peer *peer) {
     if (peer == nullptr) {
         return;
@@ -978,6 +714,7 @@ void FailProtocolPeer(std::size_t peer_index, const char *reason) {
         peer->name,
         reason));
     CancelAllTransportTimers();
+    CancelPayloadProbeTimeout();
     wgnx::wireguard::wg_timers_cancel_all(std::addressof(peer->timers), peer->name);
     wgnx::wireguard::wg_peer_scrub_transient_state(peer);
     wgnx::wireguard::wg_device_clear_index_registry(std::addressof(g_state.protocol[peer_index].device));
@@ -994,9 +731,12 @@ void ResetRuntimeMetrics(DaemonState::PeerRuntimeInfo *runtime) {
     runtime->last_handshake_ns = 0;
     runtime->last_rx_ns = 0;
     runtime->last_tx_ns = 0;
+    runtime->debug_probe_state_changed_ns = 0;
     runtime->rx_bytes = 0;
     runtime->tx_bytes = 0;
     runtime->established = false;
+    runtime->debug_probe_action = wgnx::DebugTriggerAction::None;
+    runtime->debug_probe_status = wgnx::DebugProbeStatus::None;
 }
 
 void ClearResolvedEndpoint(DaemonState::PeerRuntimeInfo *runtime) {
@@ -1045,6 +785,7 @@ void RefreshDerivedPublicKey(std::size_t peer_index) {
 void SetPeerInactive(std::size_t peer_index) {
     const auto &config = g_state.configured_peers[peer_index];
     auto &runtime = g_state.runtime[peer_index];
+    CancelPayloadProbeTimeout();
     CloseRuntimeSocket(std::addressof(runtime));
     ResetProtocolPeer(peer_index);
     runtime = {};
@@ -1067,6 +808,7 @@ std::uint32_t AllocateActivationGeneration() {
 void SetPeerResolving(std::size_t peer_index, std::uint32_t activation_generation) {
     const auto &config = g_state.configured_peers[peer_index];
     auto &runtime = g_state.runtime[peer_index];
+    CancelPayloadProbeTimeout();
     runtime = {};
     runtime.state = wgnx::PeerRuntimeState::ResolvingEndpoint;
     runtime.persistent_keepalive_interval = config.persistent_keepalive;
@@ -1097,12 +839,14 @@ void SetPeerActive(std::size_t peer_index) {
 
 void SetPeerError(std::size_t peer_index, wgnx::PeerErrorStage stage, wgnx::PeerErrorCode code) {
     auto &runtime = g_state.runtime[peer_index];
+    CancelPayloadProbeTimeout();
     CloseRuntimeSocket(std::addressof(runtime));
     runtime.state = wgnx::PeerRuntimeState::Error;
     runtime.error_stage = stage;
     runtime.last_error_code = static_cast<std::uint32_t>(code);
     runtime.state_ticks = 0;
     runtime.established = false;
+    ClearDebugProbeState(std::addressof(runtime));
     StampRuntimeNow(std::addressof(runtime.state_changed_ns));
     FailProtocolPeer(peer_index, wgnx::GetPeerErrorCodeName(code));
 }
@@ -1158,7 +902,7 @@ bool QueuePayloadSubmissionRequestLocked(wgnx::DebugTriggerAction action) {
     }
 
     const std::size_t peer_index = static_cast<std::size_t>(g_state.active_peer_index);
-    const auto &runtime = g_state.runtime[peer_index];
+    auto &runtime = g_state.runtime[peer_index];
     wgnx::wireguard::wg_peer *peer = GetProtocolPeer(peer_index);
     if (runtime.state != wgnx::PeerRuntimeState::Active ||
         runtime.socket == wgnx::platform::InvalidSocket ||
@@ -1166,7 +910,7 @@ bool QueuePayloadSubmissionRequestLocked(wgnx::DebugTriggerAction action) {
         !peer->current_keypair.valid) {
         return false;
     }
-    if (g_payload_submission_request.pending) {
+    if (g_payload_submission_request.pending || IsDebugProbePending(runtime)) {
         return false;
     }
     if (!IsSupportedDebugTriggerAction(action)) {
@@ -1178,6 +922,7 @@ bool QueuePayloadSubmissionRequestLocked(wgnx::DebugTriggerAction action) {
     g_payload_submission_request.peer_index = peer_index;
     g_payload_submission_request.activation_generation = runtime.activation_generation;
     g_payload_submission_request.action = action;
+    SetDebugProbeState(std::addressof(runtime), action, wgnx::DebugProbeStatus::Queued);
     return true;
 }
 
@@ -1223,7 +968,10 @@ wgnx::PeerInfo BuildPeerInfo(std::size_t peer_index) {
     peer.last_handshake_seconds = ComputeElapsedSeconds(runtime.last_handshake_ns, now_ns);
     peer.last_rx_seconds = ComputeElapsedSeconds(runtime.last_rx_ns, now_ns);
     peer.last_tx_seconds = ComputeElapsedSeconds(runtime.last_tx_ns, now_ns);
+    peer.last_debug_probe_seconds = ComputeElapsedSeconds(runtime.debug_probe_state_changed_ns, now_ns);
     peer.last_error_code = runtime.last_error_code;
+    peer.debug_probe_action = static_cast<std::uint32_t>(runtime.debug_probe_action);
+    peer.debug_probe_status = static_cast<std::uint32_t>(runtime.debug_probe_status);
     peer.persistent_keepalive_interval = runtime.persistent_keepalive_interval;
     peer.runtime_state = static_cast<std::uint8_t>(runtime.state);
     peer.error_stage = static_cast<std::uint8_t>(runtime.error_stage);
@@ -1494,19 +1242,24 @@ void CommitReceivedPacket(
             return;
         }
 
-        DebugIcmpReplyInfo reply_info{};
-        const DebugIcmpReplyValidation reply_validation = ValidateDebugIcmpEchoReply(
-            g_receive_payload_buffer.data(),
-            decrypt_result.decrypt.payload_size,
+        wgnx::wireguard::DebugProbeReplyInfo reply_info{};
+        const wgnx::wireguard::DebugProbeReplyValidation reply_validation =
+            wgnx::wireguard::ValidateDebugIcmpEchoReply(
+            std::span<const std::uint8_t>(g_receive_payload_buffer.data(), decrypt_result.decrypt.payload_size),
             g_state.configured_peers[peer_index].address.data(),
             peer_index,
             activation_generation,
             std::addressof(reply_info));
-        if (reply_validation == DebugIcmpReplyValidation::Valid) {
+        if (reply_validation == wgnx::wireguard::DebugProbeReplyValidation::Valid) {
             char inner_source[16] = {};
             char inner_destination[16] = {};
-            FormatIpv4Text(reply_info.source_ipv4, inner_source, sizeof(inner_source));
-            FormatIpv4Text(reply_info.destination_ipv4, inner_destination, sizeof(inner_destination));
+            wgnx::wireguard::FormatIpv4Text(reply_info.source_ipv4, inner_source, sizeof(inner_source));
+            wgnx::wireguard::FormatIpv4Text(reply_info.destination_ipv4, inner_destination, sizeof(inner_destination));
+            CancelPayloadProbeTimeout();
+            SetDebugProbeState(
+                std::addressof(runtime),
+                reply_info.action,
+                wgnx::DebugProbeStatus::ReplyValidated);
             logger::Log(
                 "Validated debug ICMP reply for peer %zu action=%s source=%s destination=%s seq=%u activation=%u",
                 peer_index,
@@ -1518,11 +1271,16 @@ void CommitReceivedPacket(
             return;
         }
 
-        if (reply_validation != DebugIcmpReplyValidation::NotDebugReply) {
+        if (reply_validation != wgnx::wireguard::DebugProbeReplyValidation::NotDebugReply) {
+            CancelPayloadProbeTimeout();
+            SetDebugProbeState(
+                std::addressof(runtime),
+                runtime.debug_probe_action,
+                wgnx::DebugProbeStatus::ReplyRejected);
             logger::Log(
                 "Rejected debug ICMP reply metadata for peer %zu validation=%s payload=%zu",
                 peer_index,
-                GetDebugIcmpReplyValidationName(reply_validation),
+                wgnx::wireguard::GetDebugProbeReplyValidationName(reply_validation),
                 decrypt_result.decrypt.payload_size);
             return;
         }
@@ -1619,6 +1377,9 @@ void CommitPayloadSubmission(const PayloadSubmissionRequest &request) {
     if (runtime.activation_generation != request.activation_generation ||
         runtime.state != wgnx::PeerRuntimeState::Active ||
         runtime.socket == wgnx::platform::InvalidSocket) {
+        if (runtime.activation_generation == request.activation_generation) {
+            SetDebugProbeState(std::addressof(runtime), request.action, wgnx::DebugProbeStatus::InvalidState);
+        }
         logger::Log(
             "Discarded queued payload submission for peer %zu state=%s activation=%u current_activation=%u",
             request.peer_index,
@@ -1628,19 +1389,20 @@ void CommitPayloadSubmission(const PayloadSubmissionRequest &request) {
         return;
     }
 
-    std::uint8_t payload[DebugIcmpPacketSize]{};
-    const std::size_t payload_size = BuildDebugIcmpEchoRequest(
+    std::array<std::uint8_t, wgnx::wireguard::DebugProbePacketSize> payload{};
+    const std::size_t payload_size = wgnx::wireguard::BuildDebugIcmpEchoRequest(
         payload,
-        sizeof(payload),
         g_state.configured_peers[request.peer_index].address.data(),
         request.action,
         request.activation_generation,
-        request.peer_index);
+        request.peer_index,
+        wgnx::platform::get_random_u32_below(std::numeric_limits<std::uint32_t>::max()));
     if (payload_size == 0) {
         char target_text[16] = {};
-        std::uint8_t target_ipv4[4] = {};
-        CopyDebugTargetIpv4(request.action, target_ipv4);
-        FormatIpv4Text(target_ipv4, target_text, sizeof(target_text));
+        std::array<std::uint8_t, 4> target_ipv4{};
+        wgnx::wireguard::CopyDebugTargetIpv4(request.action, target_ipv4);
+        wgnx::wireguard::FormatIpv4Text(target_ipv4, target_text, sizeof(target_text));
+        SetDebugProbeState(std::addressof(runtime), request.action, wgnx::DebugProbeStatus::BuildFailed);
         logger::Log(
             "Failed to build debug ICMP packet for peer %zu activation=%u action=%s source=%s target=%s",
             request.peer_index,
@@ -1652,9 +1414,9 @@ void CommitPayloadSubmission(const PayloadSubmissionRequest &request) {
     }
 
     char target_text[16] = {};
-    std::uint8_t target_ipv4[4] = {};
-    CopyDebugTargetIpv4(request.action, target_ipv4);
-    FormatIpv4Text(target_ipv4, target_text, sizeof(target_text));
+    std::array<std::uint8_t, 4> target_ipv4{};
+    wgnx::wireguard::CopyDebugTargetIpv4(request.action, target_ipv4);
+    wgnx::wireguard::FormatIpv4Text(target_ipv4, target_text, sizeof(target_text));
     logger::Log(
         "Built debug ICMP packet for peer %zu activation=%u action=%s source=%s target=%s bytes=%zu",
         request.peer_index,
@@ -1665,12 +1427,17 @@ void CommitPayloadSubmission(const PayloadSubmissionRequest &request) {
         payload_size);
     const wgnx::PeerErrorCode send_error = SendProtocolPeerPayload(
         request.peer_index,
-        payload,
+        payload.data(),
         payload_size,
         wgnx::GetDebugTriggerActionName(request.action));
     if (send_error != wgnx::PeerErrorCode::None) {
+        SetDebugProbeState(std::addressof(runtime), request.action, wgnx::DebugProbeStatus::SendFailed);
         SetPeerError(request.peer_index, GetPayloadSubmissionErrorStage(send_error), send_error);
+        return;
     }
+
+    SetDebugProbeState(std::addressof(runtime), request.action, wgnx::DebugProbeStatus::Sent);
+    SchedulePayloadProbeTimeout();
 }
 
 void ResolverWorkMain(wgnx::platform::work_struct *) {
@@ -1720,6 +1487,33 @@ void PayloadSubmissionWorkMain(wgnx::platform::work_struct *) {
     while (DequeuePayloadSubmissionRequest(std::addressof(request))) {
         CommitPayloadSubmission(request);
     }
+}
+
+void CommitPayloadProbeTimeout() {
+    std::scoped_lock lock(g_state_mutex);
+    if (g_state.active_peer_index < 0) {
+        return;
+    }
+
+    const std::size_t peer_index = static_cast<std::size_t>(g_state.active_peer_index);
+    auto &runtime = g_state.runtime[peer_index];
+    if (runtime.state != wgnx::PeerRuntimeState::Active ||
+        runtime.debug_probe_status != wgnx::DebugProbeStatus::Sent ||
+        runtime.debug_probe_action == wgnx::DebugTriggerAction::None) {
+        return;
+    }
+
+    const auto action = runtime.debug_probe_action;
+    SetDebugProbeState(std::addressof(runtime), action, wgnx::DebugProbeStatus::TimedOut);
+    logger::Log(
+        "Debug payload probe timed out for peer %zu action=%s activation=%u",
+        peer_index,
+        wgnx::GetDebugTriggerActionName(action),
+        runtime.activation_generation);
+}
+
+void PayloadProbeTimeoutWorkMain(wgnx::platform::work_struct *) {
+    CommitPayloadProbeTimeout();
 }
 
 void RunTimerAction(wgnx::wireguard::TimerHook hook) {
@@ -1839,6 +1633,14 @@ void RekeyTimerCallback(wgnx::platform::timer_list *) {
     }
 }
 
+void PayloadProbeTimeoutTimerCallback(wgnx::platform::timer_list *) {
+    if (g_timer_action_workqueue != nullptr) {
+        static_cast<void>(wgnx::platform::queue_work(
+            g_timer_action_workqueue,
+            std::addressof(g_payload_probe_timeout_dispatcher.work)));
+    }
+}
+
 void TimerActionWorkMain(wgnx::platform::work_struct *work) {
     if (work == std::addressof(g_retransmit_dispatcher.work)) {
         RunTimerAction(wgnx::wireguard::TimerHook::RetransmitHandshake);
@@ -1850,6 +1652,11 @@ void TimerActionWorkMain(wgnx::platform::work_struct *work) {
     }
     if (work == std::addressof(g_rekey_dispatcher.work)) {
         RunTimerAction(wgnx::wireguard::TimerHook::Rekey);
+        return;
+    }
+
+    if (work == std::addressof(g_payload_probe_timeout_dispatcher.work)) {
+        PayloadProbeTimeoutWorkMain(work);
     }
 }
 
@@ -1896,9 +1703,13 @@ void InitializeTransportTimerExecutor() {
     wgnx::platform::INIT_WORK(std::addressof(g_retransmit_dispatcher.work), TimerActionWorkMain);
     wgnx::platform::INIT_WORK(std::addressof(g_keepalive_dispatcher.work), TimerActionWorkMain);
     wgnx::platform::INIT_WORK(std::addressof(g_rekey_dispatcher.work), TimerActionWorkMain);
+    wgnx::platform::INIT_WORK(std::addressof(g_payload_probe_timeout_dispatcher.work), TimerActionWorkMain);
     wgnx::platform::timer_setup(std::addressof(g_retransmit_dispatcher.timer), RetransmitTimerCallback);
     wgnx::platform::timer_setup(std::addressof(g_keepalive_dispatcher.timer), KeepaliveTimerCallback);
     wgnx::platform::timer_setup(std::addressof(g_rekey_dispatcher.timer), RekeyTimerCallback);
+    wgnx::platform::timer_setup(
+        std::addressof(g_payload_probe_timeout_dispatcher.timer),
+        PayloadProbeTimeoutTimerCallback);
     logger::Log("Started transport timer executor");
 }
 
