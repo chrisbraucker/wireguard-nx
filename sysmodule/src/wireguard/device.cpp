@@ -54,10 +54,10 @@ bool wg_device_init_from_config_entry(wg_device *device, const wgnx::PeerConfigE
     }
 
     wg_device_reset(device);
-    std::snprintf(device->name, sizeof(device->name), "%s", config.name);
-    std::snprintf(device->interface_address, sizeof(device->interface_address), "%s", config.address);
-    std::snprintf(device->private_key, sizeof(device->private_key), "%s", config.private_key);
-    std::snprintf(device->dns, sizeof(device->dns), "%s", config.dns);
+    std::snprintf(device->name, sizeof(device->name), "%s", config.name.data());
+    std::snprintf(device->interface_address, sizeof(device->interface_address), "%s", config.address.data());
+    std::snprintf(device->private_key, sizeof(device->private_key), "%s", config.private_key.data());
+    std::snprintf(device->dns, sizeof(device->dns), "%s", config.dns.data());
     device->listen_port = config.listen_port;
     device->mtu = config.mtu;
     device->has_private_key = config.private_key[0] != '\0';
@@ -66,7 +66,7 @@ bool wg_device_init_from_config_entry(wg_device *device, const wgnx::PeerConfigE
     wg_device_clear_index_registry(device);
 
     wg_peer_init_from_config(&device->peers[0], config);
-    if (!wg_peer_prepare_static_identity(&device->peers[0], config.private_key)) {
+    if (!wg_peer_prepare_static_identity(&device->peers[0], config.private_key.data())) {
         wg_device_reset(device);
         return false;
     }

@@ -388,14 +388,14 @@ bool TestTransportFixedVector() {
 bool TestDeviceAndPeerSkeleton() {
     ResetCoreSelfTestStorage();
     wgnx::PeerConfigEntry &config = g_core_self_test_storage.config;
-    std::snprintf(config.name, sizeof(config.name), "%s", "harness-peer");
-    std::snprintf(config.address, sizeof(config.address), "%s", "10.66.66.2/32");
-    std::snprintf(config.endpoint, sizeof(config.endpoint), "%s", "vpn.example.test:51820");
-    std::snprintf(config.private_key, sizeof(config.private_key), "%s", HarnessLocalPrivateKey);
-    std::snprintf(config.public_key, sizeof(config.public_key), "%s", HarnessRemotePublicKey);
-    std::snprintf(config.preshared_key, sizeof(config.preshared_key), "%s", HarnessPresharedKey);
-    std::snprintf(config.allowed_ips, sizeof(config.allowed_ips), "%s", "0.0.0.0/0, ::/0");
-    std::snprintf(config.dns, sizeof(config.dns), "%s", "1.1.1.1");
+    std::snprintf(config.name.data(), config.name.size(), "%s", "harness-peer");
+    std::snprintf(config.address.data(), config.address.size(), "%s", "10.66.66.2/32");
+    std::snprintf(config.endpoint.data(), config.endpoint.size(), "%s", "vpn.example.test:51820");
+    std::snprintf(config.private_key.data(), config.private_key.size(), "%s", HarnessLocalPrivateKey);
+    std::snprintf(config.public_key.data(), config.public_key.size(), "%s", HarnessRemotePublicKey);
+    std::snprintf(config.preshared_key.data(), config.preshared_key.size(), "%s", HarnessPresharedKey);
+    std::snprintf(config.allowed_ips.data(), config.allowed_ips.size(), "%s", "0.0.0.0/0, ::/0");
+    std::snprintf(config.dns.data(), config.dns.size(), "%s", "1.1.1.1");
     config.listen_port = 51820;
     config.persistent_keepalive = 25;
     config.mtu = 1420;
@@ -497,13 +497,13 @@ bool TestStaticIdentityParsing() {
 bool TestHandshakeInitiationCreation() {
     ResetCoreSelfTestStorage();
     wgnx::PeerConfigEntry &config = g_core_self_test_storage.config;
-    std::snprintf(config.name, sizeof(config.name), "%s", "handshake-peer");
-    std::snprintf(config.address, sizeof(config.address), "%s", "10.66.66.2/32");
-    std::snprintf(config.endpoint, sizeof(config.endpoint), "%s", "vpn.example.test:51820");
-    std::snprintf(config.private_key, sizeof(config.private_key), "%s", HarnessLocalPrivateKey);
-    std::snprintf(config.public_key, sizeof(config.public_key), "%s", HarnessRemotePublicKey);
-    std::snprintf(config.preshared_key, sizeof(config.preshared_key), "%s", HarnessPresharedKey);
-    std::snprintf(config.allowed_ips, sizeof(config.allowed_ips), "%s", "0.0.0.0/0, ::/0");
+    std::snprintf(config.name.data(), config.name.size(), "%s", "handshake-peer");
+    std::snprintf(config.address.data(), config.address.size(), "%s", "10.66.66.2/32");
+    std::snprintf(config.endpoint.data(), config.endpoint.size(), "%s", "vpn.example.test:51820");
+    std::snprintf(config.private_key.data(), config.private_key.size(), "%s", HarnessLocalPrivateKey);
+    std::snprintf(config.public_key.data(), config.public_key.size(), "%s", HarnessRemotePublicKey);
+    std::snprintf(config.preshared_key.data(), config.preshared_key.size(), "%s", HarnessPresharedKey);
+    std::snprintf(config.allowed_ips.data(), config.allowed_ips.size(), "%s", "0.0.0.0/0, ::/0");
 
     wg_device &device = g_core_self_test_storage.device;
     if (!wg_device_init_from_config_entry(&device, config)) {
@@ -548,13 +548,13 @@ bool TestHandshakeResponseAndSessionDerivation() {
 
     ResetCoreSelfTestStorage();
     wgnx::PeerConfigEntry &initiator_config = g_core_self_test_storage.config;
-    std::snprintf(initiator_config.name, sizeof(initiator_config.name), "%s", "initiator-peer");
-    std::snprintf(initiator_config.address, sizeof(initiator_config.address), "%s", "10.66.66.2/32");
-    std::snprintf(initiator_config.endpoint, sizeof(initiator_config.endpoint), "%s", "vpn.example.test:51820");
-    std::snprintf(initiator_config.private_key, sizeof(initiator_config.private_key), "%s", HarnessLocalPrivateKey);
-    std::snprintf(initiator_config.public_key, sizeof(initiator_config.public_key), "%s", HarnessRemotePublicKey);
-    std::snprintf(initiator_config.preshared_key, sizeof(initiator_config.preshared_key), "%s", HarnessPresharedKey);
-    std::snprintf(initiator_config.allowed_ips, sizeof(initiator_config.allowed_ips), "%s", "0.0.0.0/0, ::/0");
+    std::snprintf(initiator_config.name.data(), initiator_config.name.size(), "%s", "initiator-peer");
+    std::snprintf(initiator_config.address.data(), initiator_config.address.size(), "%s", "10.66.66.2/32");
+    std::snprintf(initiator_config.endpoint.data(), initiator_config.endpoint.size(), "%s", "vpn.example.test:51820");
+    std::snprintf(initiator_config.private_key.data(), initiator_config.private_key.size(), "%s", HarnessLocalPrivateKey);
+    std::snprintf(initiator_config.public_key.data(), initiator_config.public_key.size(), "%s", HarnessRemotePublicKey);
+    std::snprintf(initiator_config.preshared_key.data(), initiator_config.preshared_key.size(), "%s", HarnessPresharedKey);
+    std::snprintf(initiator_config.allowed_ips.data(), initiator_config.allowed_ips.size(), "%s", "0.0.0.0/0, ::/0");
 
     wg_device &initiator_device = g_core_self_test_storage.device;
     if (!wg_device_init_from_config_entry(&initiator_device, initiator_config)) {
@@ -566,13 +566,13 @@ bool TestHandshakeResponseAndSessionDerivation() {
     }
 
     wgnx::PeerConfigEntry &responder_config = g_core_self_test_storage.secondary_config;
-    std::snprintf(responder_config.name, sizeof(responder_config.name), "%s", "responder-peer");
-    std::snprintf(responder_config.address, sizeof(responder_config.address), "%s", "10.66.66.1/32");
-    std::snprintf(responder_config.endpoint, sizeof(responder_config.endpoint), "%s", "0.0.0.0:0");
-    std::snprintf(responder_config.private_key, sizeof(responder_config.private_key), "%s", HarnessRemotePrivateKey);
-    std::snprintf(responder_config.public_key, sizeof(responder_config.public_key), "%s", HarnessLocalPublicKey);
-    std::snprintf(responder_config.preshared_key, sizeof(responder_config.preshared_key), "%s", HarnessPresharedKey);
-    std::snprintf(responder_config.allowed_ips, sizeof(responder_config.allowed_ips), "%s", "10.66.66.2/32");
+    std::snprintf(responder_config.name.data(), responder_config.name.size(), "%s", "responder-peer");
+    std::snprintf(responder_config.address.data(), responder_config.address.size(), "%s", "10.66.66.1/32");
+    std::snprintf(responder_config.endpoint.data(), responder_config.endpoint.size(), "%s", "0.0.0.0:0");
+    std::snprintf(responder_config.private_key.data(), responder_config.private_key.size(), "%s", HarnessRemotePrivateKey);
+    std::snprintf(responder_config.public_key.data(), responder_config.public_key.size(), "%s", HarnessLocalPublicKey);
+    std::snprintf(responder_config.preshared_key.data(), responder_config.preshared_key.size(), "%s", HarnessPresharedKey);
+    std::snprintf(responder_config.allowed_ips.data(), responder_config.allowed_ips.size(), "%s", "10.66.66.2/32");
 
     wg_device &responder_device = g_core_self_test_storage.secondary_device;
     if (!wg_device_init_from_config_entry(&responder_device, responder_config)) {

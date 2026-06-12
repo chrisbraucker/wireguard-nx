@@ -70,7 +70,7 @@ void SetError(ConfigParseError *error, std::size_t line, const char *message) {
 }
 
 template<std::size_t Size>
-bool CopyField(char (&dst)[Size], const char *value, ConfigParseError *error, std::size_t line, const char *field_name) {
+bool CopyField(std::array<char, Size> &dst, const char *value, ConfigParseError *error, std::size_t line, const char *field_name) {
     if (value == nullptr) {
         SetError(error, line, "value is null");
         return false;
@@ -84,7 +84,7 @@ bool CopyField(char (&dst)[Size], const char *value, ConfigParseError *error, st
         return false;
     }
 
-    std::memcpy(dst, value, length + 1);
+    std::memcpy(dst.data(), value, length + 1);
     return true;
 }
 
@@ -451,7 +451,7 @@ bool LoadConnectionFile(wgnx::PeerConfigEntry *out, const ConfigFileCandidate &c
         return false;
     }
 
-    std::snprintf(out->name, sizeof(out->name), "%s", candidate.peer_name);
+    std::snprintf(out->name.data(), out->name.size(), "%s", candidate.peer_name);
     logger::Log("Loaded connection '%s' from '%s'", out->name, resolved_path.data());
     return true;
 }

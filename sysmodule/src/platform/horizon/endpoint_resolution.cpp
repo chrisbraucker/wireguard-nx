@@ -251,7 +251,7 @@ bool ResolveNumericEndpoint(const EndpointParts &parts, endpoint_resolution_resu
         out->resolved = {};
         out->resolved.family = address_family::inet;
         out->resolved.port = static_cast<std::uint16_t>(std::strtoul(parts.service, nullptr, 10));
-        std::memcpy(out->resolved.address, std::addressof(addr4), sizeof(addr4));
+        std::memcpy(out->resolved.address.data(), std::addressof(addr4), sizeof(addr4));
         return StoreResolvedText(out);
     }
 
@@ -260,7 +260,7 @@ bool ResolveNumericEndpoint(const EndpointParts &parts, endpoint_resolution_resu
         out->resolved = {};
         out->resolved.family = address_family::inet6;
         out->resolved.port = static_cast<std::uint16_t>(std::strtoul(parts.service, nullptr, 10));
-        std::memcpy(out->resolved.address, std::addressof(addr6), sizeof(addr6));
+        std::memcpy(out->resolved.address.data(), std::addressof(addr6), sizeof(addr6));
         return StoreResolvedText(out);
     }
 

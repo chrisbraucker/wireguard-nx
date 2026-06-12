@@ -20,14 +20,14 @@ enum PeerConfigFieldFlags : std::uint32_t {
 };
 
 struct PeerConfigEntry {
-    char name[sizeof(PeerInfo::name)];
-    char address[sizeof(PeerInfo::address)];
-    char endpoint[sizeof(PeerInfo::endpoint)];
-    char private_key[64];
-    char dns[128];
-    char public_key[64];
-    char preshared_key[64];
-    char allowed_ips[256];
+    std::array<char, sizeof(PeerInfo::name)> name{};
+    std::array<char, sizeof(PeerInfo::address)> address{};
+    std::array<char, sizeof(PeerInfo::endpoint)> endpoint{};
+    std::array<char, 64> private_key{};
+    std::array<char, 128> dns{};
+    std::array<char, 64> public_key{};
+    std::array<char, 64> preshared_key{};
+    std::array<char, 256> allowed_ips{};
     std::uint16_t listen_port;
     std::uint16_t persistent_keepalive;
     std::uint16_t mtu;

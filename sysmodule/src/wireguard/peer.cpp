@@ -15,11 +15,11 @@ void wg_peer_init_from_config(wg_peer *peer, const wgnx::PeerConfigEntry &config
     }
 
     *peer = {};
-    std::snprintf(peer->name, sizeof(peer->name), "%s", config.name);
-    std::snprintf(peer->allowed_ips, sizeof(peer->allowed_ips), "%s", config.allowed_ips);
-    std::snprintf(peer->endpoint_text, sizeof(peer->endpoint_text), "%s", config.endpoint);
-    std::snprintf(peer->public_key, sizeof(peer->public_key), "%s", config.public_key);
-    std::snprintf(peer->preshared_key, sizeof(peer->preshared_key), "%s", config.preshared_key);
+    std::snprintf(peer->name, sizeof(peer->name), "%s", config.name.data());
+    std::snprintf(peer->allowed_ips, sizeof(peer->allowed_ips), "%s", config.allowed_ips.data());
+    std::snprintf(peer->endpoint_text, sizeof(peer->endpoint_text), "%s", config.endpoint.data());
+    std::snprintf(peer->public_key, sizeof(peer->public_key), "%s", config.public_key.data());
+    std::snprintf(peer->preshared_key, sizeof(peer->preshared_key), "%s", config.preshared_key.data());
     peer->persistent_keepalive_interval = config.persistent_keepalive;
     peer->has_preshared_key = config.preshared_key[0] != '\0';
     noise_static_identity_reset(&peer->static_identity);

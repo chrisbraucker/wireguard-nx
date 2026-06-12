@@ -134,6 +134,11 @@ constexpr inline std::size_t DebugIcmpPacketSize =
     DebugIpv4HeaderSize + DebugIcmpHeaderSize + DebugIcmpPayloadSize;
 constinit std::array<std::uint8_t, MaxTransportPayloadSize> g_receive_payload_buffer = {};
 
+template<std::size_t Size>
+const char *CStr(const std::array<char, Size> &value) {
+    return value.data();
+}
+
 bool IsSupportedDebugTriggerAction(wgnx::DebugTriggerAction action) {
     switch (action) {
         case wgnx::DebugTriggerAction::PingTunnelPeer:
@@ -327,7 +332,7 @@ bool EndpointsEqual(const wgnx::platform::endpoint &lhs, const wgnx::platform::e
     }
 
     const std::size_t address_size = GetEndpointAddressSize(lhs.family);
-    return address_size != 0 && std::memcmp(lhs.address, rhs.address, address_size) == 0;
+    return address_size != 0 && std::memcmp(lhs.address.data(), rhs.address.data(), address_size) == 0;
 }
 
 void FormatEndpointText(
@@ -619,7 +624,7 @@ wgnx::PeerErrorCode InstantiateProtocolPeer(std::size_t peer_index, std::uint32_
             g_state.configured_peers[peer_index])) {
         logger::Log(
             "Failed to instantiate WG protocol peer for '%s'",
-            g_state.configured_peers[peer_index].name);
+            CStr(g_state.configured_peers[peer_index].name));
         return wgnx::PeerErrorCode::KeyInvalid;
     }
     protocol.instantiated = true;
@@ -1019,7 +1024,7 @@ void SetResolvedEndpoint(DaemonState::PeerRuntimeInfo *runtime, const wgnx::plat
     }
 
     runtime->resolved_endpoint = resolved.resolved;
-    std::snprintf(runtime->resolved_endpoint_text, sizeof(runtime->resolved_endpoint_text), "%s", resolved.text);
+    std::snprintf(runtime->resolved_endpoint_text, sizeof(runtime->resolved_endpoint_text), "%s", resolved.text.data());
     runtime->has_resolved_endpoint = true;
 }
 
@@ -1032,7 +1037,7 @@ void RefreshDerivedPublicKey(std::size_t peer_index) {
     derived = {};
     if (wgnx::wireguard::noise_derive_public_key_text(
             derived.derived_public_key,
-            g_state.configured_peers[peer_index].private_key)) {
+            g_state.configured_peers[peer_index].private_key.data())) {
         derived.has_derived_public_key = true;
     }
 }
@@ -1106,9 +1111,9 @@ wgnx::PeerErrorCode ValidatePeerConfiguration(const wgnx::PeerConfigEntry &confi
     if (config.private_key[0] == '\0' || config.public_key[0] == '\0' || config.allowed_ips[0] == '\0') {
         return wgnx::PeerErrorCode::ConfigInvalid;
     }
-    if (!wgnx::wireguard::noise_is_valid_encoded_key(config.private_key) ||
-        !wgnx::wireguard::noise_is_valid_encoded_key(config.public_key) ||
-        !wgnx::wireguard::noise_is_valid_encoded_key(config.preshared_key, true)) {
+    if (!wgnx::wireguard::noise_is_valid_encoded_key(config.private_key.data()) ||
+        !wgnx::wireguard::noise_is_valid_encoded_key(config.public_key.data()) ||
+        !wgnx::wireguard::noise_is_valid_encoded_key(config.preshared_key.data(), true)) {
         return wgnx::PeerErrorCode::KeyInvalid;
     }
     if (config.endpoint[0] == '\0') {
@@ -1125,7 +1130,7 @@ void QueueEndpointResolve(std::size_t peer_index) {
     g_resolve_request.pending = true;
     g_resolve_request.peer_index = peer_index;
     g_resolve_request.activation_generation = runtime.activation_generation;
-    std::snprintf(g_resolve_request.endpoint, sizeof(g_resolve_request.endpoint), "%s", config.endpoint);
+    std::snprintf(g_resolve_request.endpoint, sizeof(g_resolve_request.endpoint), "%s", config.endpoint.data());
     static_cast<void>(wgnx::platform::queue_work(g_resolver_workqueue, std::addressof(g_resolve_dispatcher.work)));
 }
 
@@ -1197,7 +1202,7 @@ void StartPeerRuntime(std::size_t peer_index) {
     }
     QueueEndpointResolve(peer_index);
     logger::Log("Queued endpoint resolution for peer %zu activation=%u endpoint='%s'",
-        peer_index, activation_generation, config.endpoint);
+        peer_index, activation_generation, config.endpoint.data());
 }
 
 wgnx::PeerInfo BuildPeerInfo(std::size_t peer_index) {
@@ -1206,9 +1211,9 @@ wgnx::PeerInfo BuildPeerInfo(std::size_t peer_index) {
     const wgnx::platform::ktime_t now_ns = GetRuntimeNowNs();
 
     wgnx::PeerInfo peer = {};
-    std::snprintf(peer.name, sizeof(peer.name), "%s", config.name);
-    std::snprintf(peer.address, sizeof(peer.address), "%s", config.address);
-    std::snprintf(peer.endpoint, sizeof(peer.endpoint), "%s", config.endpoint);
+    std::snprintf(peer.name, sizeof(peer.name), "%s", config.name.data());
+    std::snprintf(peer.address, sizeof(peer.address), "%s", config.address.data());
+    std::snprintf(peer.endpoint, sizeof(peer.endpoint), "%s", config.endpoint.data());
     std::snprintf(peer.resolved_endpoint, sizeof(peer.resolved_endpoint), "%s", runtime.resolved_endpoint_text);
     std::snprintf(
         peer.derived_public_key,
@@ -1273,7 +1278,7 @@ void InitializeState() {
             RefreshDerivedPublicKey(i);
             SetPeerInactive(i);
 
-            if (has_auto_start_name && std::strncmp(entry.name, auto_start_name, sizeof(entry.name)) == 0) {
+            if (has_auto_start_name && std::strncmp(entry.name.data(), auto_start_name, entry.name.size()) == 0) {
                 g_state.auto_start_peer_index = static_cast<std::int32_t>(i);
             }
         }
@@ -1493,7 +1498,7 @@ void CommitReceivedPacket(
         const DebugIcmpReplyValidation reply_validation = ValidateDebugIcmpEchoReply(
             g_receive_payload_buffer.data(),
             decrypt_result.decrypt.payload_size,
-            g_state.configured_peers[peer_index].address,
+            g_state.configured_peers[peer_index].address.data(),
             peer_index,
             activation_generation,
             std::addressof(reply_info));
@@ -1627,7 +1632,7 @@ void CommitPayloadSubmission(const PayloadSubmissionRequest &request) {
     const std::size_t payload_size = BuildDebugIcmpEchoRequest(
         payload,
         sizeof(payload),
-        g_state.configured_peers[request.peer_index].address,
+        g_state.configured_peers[request.peer_index].address.data(),
         request.action,
         request.activation_generation,
         request.peer_index);
@@ -1641,7 +1646,7 @@ void CommitPayloadSubmission(const PayloadSubmissionRequest &request) {
             request.peer_index,
             request.activation_generation,
             wgnx::GetDebugTriggerActionName(request.action),
-            g_state.configured_peers[request.peer_index].address,
+            g_state.configured_peers[request.peer_index].address.data(),
             target_text);
         return;
     }
@@ -1655,7 +1660,7 @@ void CommitPayloadSubmission(const PayloadSubmissionRequest &request) {
         request.peer_index,
         request.activation_generation,
         wgnx::GetDebugTriggerActionName(request.action),
-        g_state.configured_peers[request.peer_index].address,
+        g_state.configured_peers[request.peer_index].address.data(),
         target_text,
         payload_size);
     const wgnx::PeerErrorCode send_error = SendProtocolPeerPayload(
@@ -1986,7 +1991,7 @@ ams::Result ControlService::SetAutoStartPeer(const wgnx::PeerSelectionRequest &r
 
     const char *peer_name = nullptr;
     if (request.peer_index >= 0) {
-        peer_name = g_state.configured_peers[static_cast<std::size_t>(request.peer_index)].name;
+        peer_name = g_state.configured_peers[static_cast<std::size_t>(request.peer_index)].name.data();
     }
 
     const ams::Result store_rc = StoreAutoStartPeerName(peer_name);

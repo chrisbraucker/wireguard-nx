@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -22,7 +23,7 @@ static_assert(static_cast<std::uint8_t>(address_family::inet6) == static_cast<st
 struct endpoint {
     address_family family{address_family::unspecified};
     std::uint16_t port{0};
-    std::uint8_t address[16]{};
+    std::array<std::uint8_t, 16> address{};
 };
 
 struct endpoint_resolution_result {
@@ -30,7 +31,7 @@ struct endpoint_resolution_result {
     wgnx::PeerErrorStage error_stage{wgnx::PeerErrorStage::None};
     wgnx::PeerErrorCode error_code{wgnx::PeerErrorCode::None};
     endpoint resolved{};
-    char text[sizeof(wgnx::PeerInfo::resolved_endpoint)]{};
+    std::array<char, sizeof(wgnx::PeerInfo::resolved_endpoint)> text{};
 };
 
 using socket_handle = std::int32_t;

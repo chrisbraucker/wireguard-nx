@@ -98,7 +98,7 @@ bool EncodeEndpointFromSockaddr(wgnx::platform::endpoint *out, const sockaddr *a
         const auto *addr4 = reinterpret_cast<const sockaddr_in *>(address);
         out->family = wgnx::platform::address_family::inet;
         out->port = ntohs(addr4->sin_port);
-        std::memcpy(out->address, std::addressof(addr4->sin_addr), sizeof(addr4->sin_addr));
+        std::memcpy(out->address.data(), std::addressof(addr4->sin_addr), sizeof(addr4->sin_addr));
         return true;
     }
 
@@ -106,7 +106,7 @@ bool EncodeEndpointFromSockaddr(wgnx::platform::endpoint *out, const sockaddr *a
         const auto *addr6 = reinterpret_cast<const sockaddr_in6 *>(address);
         out->family = wgnx::platform::address_family::inet6;
         out->port = ntohs(addr6->sin6_port);
-        std::memcpy(out->address, std::addressof(addr6->sin6_addr), sizeof(addr6->sin6_addr));
+        std::memcpy(out->address.data(), std::addressof(addr6->sin6_addr), sizeof(addr6->sin6_addr));
         return true;
     }
 
@@ -126,7 +126,7 @@ bool DecodeEndpointToSockaddr(sockaddr_storage *out_address, socklen_t *out_leng
         *addr4 = {};
         addr4->sin_family = AF_INET;
         addr4->sin_port = htons(endpoint.port);
-        std::memcpy(std::addressof(addr4->sin_addr), endpoint.address, sizeof(addr4->sin_addr));
+        std::memcpy(std::addressof(addr4->sin_addr), endpoint.address.data(), sizeof(addr4->sin_addr));
         *out_length = sizeof(*addr4);
         return true;
     }
@@ -136,7 +136,7 @@ bool DecodeEndpointToSockaddr(sockaddr_storage *out_address, socklen_t *out_leng
         *addr6 = {};
         addr6->sin6_family = AF_INET6;
         addr6->sin6_port = htons(endpoint.port);
-        std::memcpy(std::addressof(addr6->sin6_addr), endpoint.address, sizeof(addr6->sin6_addr));
+        std::memcpy(std::addressof(addr6->sin6_addr), endpoint.address.data(), sizeof(addr6->sin6_addr));
         *out_length = sizeof(*addr6);
         return true;
     }
@@ -175,13 +175,13 @@ bool endpoint_to_string(const endpoint &endpoint, std::span<char> out_text) {
 
     switch (endpoint.family) {
         case address_family::inet:
-            if (::inet_ntop(AF_INET, endpoint.address, host, sizeof(host)) == nullptr) {
+            if (::inet_ntop(AF_INET, endpoint.address.data(), host, sizeof(host)) == nullptr) {
                 return false;
             }
             std::snprintf(out_text.data(), out_text.size(), "%s:%u", host, static_cast<unsigned int>(endpoint.port));
             return true;
         case address_family::inet6:
-            if (::inet_ntop(AF_INET6, endpoint.address, host, sizeof(host)) == nullptr) {
+            if (::inet_ntop(AF_INET6, endpoint.address.data(), host, sizeof(host)) == nullptr) {
                 return false;
             }
             std::snprintf(out_text.data(), out_text.size(), "[%s]:%u", host, static_cast<unsigned int>(endpoint.port));
