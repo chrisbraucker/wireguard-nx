@@ -2,6 +2,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <span>
+#include <string_view>
 
 #include "wgnx/protocol.hpp"
 
@@ -49,8 +51,8 @@ enum class socket_error : std::uint32_t {
  * code stay independent of Horizon networking headers, while the Horizon
  * adapter remains responsible for translating to native socket types.
  */
-endpoint_resolution_result resolve_endpoint(const char *configured_endpoint);
-bool endpoint_to_string(const endpoint *endpoint, char *out_text, std::size_t out_text_size);
+endpoint_resolution_result resolve_endpoint(std::string_view configured_endpoint);
+bool endpoint_to_string(const endpoint &endpoint, std::span<char> out_text);
 
 /*
  * Deviation from Linux:
@@ -62,7 +64,15 @@ constexpr inline socket_handle InvalidSocket = -1;
 
 socket_error udp_open(socket_handle *out_socket, address_family family);
 void udp_close(socket_handle socket);
-socket_error udp_send(socket_handle socket, const endpoint *destination, const void *data, std::size_t size, std::size_t *out_sent);
-socket_error udp_receive(socket_handle socket, void *buffer, std::size_t capacity, std::size_t *out_received, endpoint *out_source);
+socket_error udp_send(
+    socket_handle socket,
+    const endpoint &destination,
+    std::span<const std::uint8_t> data,
+    std::size_t *out_sent);
+socket_error udp_receive(
+    socket_handle socket,
+    std::span<std::uint8_t> buffer,
+    std::size_t *out_received,
+    endpoint *out_source);
 
 } // namespace wgnx::platform

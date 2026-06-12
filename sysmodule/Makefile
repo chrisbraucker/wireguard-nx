@@ -73,7 +73,7 @@ DEFINES	+=	-DDISABLE_IPC -D__SWITCH__ \
 
 CFLAGS	+= $(INCLUDE) -Wno-unused-result
 
-CXXFLAGS	+= $(CFLAGS)
+CXXFLAGS	+= $(CFLAGS) -std=c++23
 
 #---------------------------------------------------------------------------------
 # list of directories containing libraries, this must be the top level containing

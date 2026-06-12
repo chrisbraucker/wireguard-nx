@@ -40,9 +40,7 @@ ParseResult DispatchPacket(
             message_transport_data message = {};
             result = ParseTransportDataHeader(packet, &message);
             if (result.success && handlers.transport_data != nullptr) {
-                const std::uint8_t *payload = packet->data + TransportDataHeaderSize;
-                const std::size_t payload_size = packet->len - TransportDataHeaderSize;
-                handlers.transport_data(handlers.context, message, payload, payload_size);
+                handlers.transport_data(handlers.context, message, packet->bytes().subspan(TransportDataHeaderSize));
             }
             return result;
         }

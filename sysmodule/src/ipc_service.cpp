@@ -19,6 +19,7 @@
 #include <cstring>
 #include <limits>
 #include <mutex>
+#include <span>
 
 namespace wgnx::sysmodule {
 
@@ -337,7 +338,7 @@ void FormatEndpointText(
         return;
     }
 
-    if (!wgnx::platform::endpoint_to_string(&endpoint, out_text, out_text_size)) {
+    if (!wgnx::platform::endpoint_to_string(endpoint, std::span<char>(out_text, out_text_size))) {
         std::snprintf(out_text, out_text_size, "<invalid>");
     }
 }
@@ -710,9 +711,8 @@ wgnx::PeerErrorCode SendProtocolPeerInitiation(std::size_t peer_index) {
     std::size_t sent = 0;
     const auto send_error = wgnx::platform::udp_send(
         runtime.socket,
-        std::addressof(runtime.resolved_endpoint),
-        packet.packet.data,
-        packet.packet.len,
+        runtime.resolved_endpoint,
+        packet.packet.bytes(),
         std::addressof(sent));
     if (send_error != wgnx::platform::socket_error::none) {
         logger::Log(
@@ -748,12 +748,13 @@ wgnx::PeerErrorCode SendProtocolPeerPayload(
     wgnx::platform::static_packet_buffer<
         wgnx::wireguard::TransportDataHeaderSize + MaxTransportPayloadSize + wgnx::wireguard::NoiseMacSize>
         packet;
+    const auto payload_span = payload != nullptr ? std::span<const std::uint8_t>(payload, payload_size)
+                                                 : std::span<const std::uint8_t>{};
     const wgnx::wireguard::TransportDataError build_error =
         wgnx::wireguard::noise_create_transport_data_packet(
             std::addressof(packet.packet),
             peer->current_keypair,
-            payload,
-            payload_size);
+            payload_span);
     if (build_error != wgnx::wireguard::TransportDataError::None) {
         logger::Log(
             "Failed to build WG transport payload for peer %zu endpoint=%s reason=%s payload=%zu err=%s",
@@ -768,9 +769,8 @@ wgnx::PeerErrorCode SendProtocolPeerPayload(
     std::size_t sent = 0;
     const auto send_error = wgnx::platform::udp_send(
         runtime.socket,
-        std::addressof(runtime.resolved_endpoint),
-        packet.packet.data,
-        packet.packet.len,
+        runtime.resolved_endpoint,
+        packet.packet.bytes(),
         std::addressof(sent));
     if (send_error != wgnx::platform::socket_error::none) {
         logger::Log(
@@ -1032,7 +1032,6 @@ void RefreshDerivedPublicKey(std::size_t peer_index) {
     derived = {};
     if (wgnx::wireguard::noise_derive_public_key_text(
             derived.derived_public_key,
-            sizeof(derived.derived_public_key),
             g_state.configured_peers[peer_index].private_key)) {
         derived.has_derived_public_key = true;
     }
@@ -1463,8 +1462,7 @@ void CommitReceivedPacket(
                 packet,
                 std::addressof(g_state.protocol[peer_index].device),
                 peer,
-                g_receive_payload_buffer.data(),
-                g_receive_payload_buffer.size(),
+                g_receive_payload_buffer,
                 std::addressof(decrypt_result));
         if (decrypt_error != wgnx::wireguard::TransportDataError::None) {
             logger::Log(
@@ -1695,8 +1693,7 @@ void ReceiveWorkMain(wgnx::platform::work_struct *) {
         std::size_t received = 0;
         const auto receive_error = wgnx::platform::udp_receive(
             socket,
-            packet.storage.data(),
-            packet.storage.size(),
+            packet.storage,
             std::addressof(received),
             std::addressof(source));
         if (receive_error != wgnx::platform::socket_error::none) {

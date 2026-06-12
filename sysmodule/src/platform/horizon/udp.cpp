@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 #include <netinet/in.h>
+#include <span>
 
 #include <stratosphere.hpp>
 #include <stratosphere/socket/socket_api.hpp>
@@ -165,25 +166,25 @@ bool SetReceiveTimeout(socket_handle socket) {
 
 } // namespace
 
-bool endpoint_to_string(const endpoint *endpoint, char *out_text, std::size_t out_text_size) {
-    if (endpoint == nullptr || out_text == nullptr || out_text_size == 0) {
+bool endpoint_to_string(const endpoint &endpoint, std::span<char> out_text) {
+    if (out_text.empty()) {
         return false;
     }
 
     char host[INET6_ADDRSTRLEN] = {};
 
-    switch (endpoint->family) {
+    switch (endpoint.family) {
         case address_family::inet:
-            if (::inet_ntop(AF_INET, endpoint->address, host, sizeof(host)) == nullptr) {
+            if (::inet_ntop(AF_INET, endpoint.address, host, sizeof(host)) == nullptr) {
                 return false;
             }
-            std::snprintf(out_text, out_text_size, "%s:%u", host, static_cast<unsigned int>(endpoint->port));
+            std::snprintf(out_text.data(), out_text.size(), "%s:%u", host, static_cast<unsigned int>(endpoint.port));
             return true;
         case address_family::inet6:
-            if (::inet_ntop(AF_INET6, endpoint->address, host, sizeof(host)) == nullptr) {
+            if (::inet_ntop(AF_INET6, endpoint.address, host, sizeof(host)) == nullptr) {
                 return false;
             }
-            std::snprintf(out_text, out_text_size, "[%s]:%u", host, static_cast<unsigned int>(endpoint->port));
+            std::snprintf(out_text.data(), out_text.size(), "[%s]:%u", host, static_cast<unsigned int>(endpoint.port));
             return true;
         case address_family::unspecified:
             break;
@@ -251,22 +252,22 @@ void udp_close(socket_handle socket) {
     static_cast<void>(ams::socket::Close(socket));
 }
 
-socket_error udp_send(socket_handle socket, const endpoint *destination, const void *data, std::size_t size, std::size_t *out_sent) {
-    if (socket == InvalidSocket || destination == nullptr || data == nullptr) {
+socket_error udp_send(socket_handle socket, const endpoint &destination, std::span<const std::uint8_t> data, std::size_t *out_sent) {
+    if (socket == InvalidSocket) {
         return socket_error::invalid_endpoint;
     }
 
     sockaddr_storage native_address = {};
     socklen_t native_length = 0;
     if (!wgnx::sysmodule::platform::horizon::internal::DecodeEndpointToSockaddr(
-            std::addressof(native_address), std::addressof(native_length), *destination)) {
+            std::addressof(native_address), std::addressof(native_length), destination)) {
         return socket_error::invalid_endpoint;
     }
 
     const ssize_t rc = ams::socket::SendTo(
         socket,
-        data,
-        size,
+        data.data(),
+        data.size(),
         ams::socket::MsgFlag::Msg_None,
         reinterpret_cast<const ams::socket::SockAddr *>(std::addressof(native_address)),
         static_cast<ams::socket::SockLenT>(native_length));
@@ -283,8 +284,8 @@ socket_error udp_send(socket_handle socket, const endpoint *destination, const v
     return socket_error::none;
 }
 
-socket_error udp_receive(socket_handle socket, void *buffer, std::size_t capacity, std::size_t *out_received, endpoint *out_source) {
-    if (socket == InvalidSocket || buffer == nullptr) {
+socket_error udp_receive(socket_handle socket, std::span<std::uint8_t> buffer, std::size_t *out_received, endpoint *out_source) {
+    if (socket == InvalidSocket) {
         return socket_error::receive_failed;
     }
 
@@ -292,8 +293,8 @@ socket_error udp_receive(socket_handle socket, void *buffer, std::size_t capacit
     ams::socket::SockLenT native_length = sizeof(native_address);
     const ssize_t rc = ams::socket::RecvFrom(
         socket,
-        buffer,
-        capacity,
+        buffer.data(),
+        buffer.size(),
         ams::socket::MsgFlag::Msg_None,
         reinterpret_cast<ams::socket::SockAddr *>(std::addressof(native_address)),
         std::addressof(native_length));

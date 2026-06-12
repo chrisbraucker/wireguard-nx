@@ -7,6 +7,8 @@
 #include <cstring>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <span>
+#include <string_view>
 #include <sys/socket.h>
 
 #include <algorithm>
@@ -51,82 +53,70 @@ bool IsAsciiSpace(char ch) {
     return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n';
 }
 
-void TrimSpan(const char **begin, const char **end) {
-    while (*begin < *end && IsAsciiSpace(**begin)) {
-        ++(*begin);
+std::string_view TrimView(std::string_view value) {
+    while (!value.empty() && IsAsciiSpace(value.front())) {
+        value.remove_prefix(1);
     }
-    while (*begin < *end && IsAsciiSpace(*((*end) - 1))) {
-        --(*end);
+    while (!value.empty() && IsAsciiSpace(value.back())) {
+        value.remove_suffix(1);
     }
+
+    return value;
 }
 
-bool CopySpan(char *dst, std::size_t dst_size, const char *begin, const char *end) {
-    if (dst == nullptr || dst_size == 0 || begin == nullptr || end == nullptr || begin > end) {
+bool CopyView(std::span<char> dst, std::string_view value) {
+    if (dst.empty()) {
         return false;
     }
 
-    const std::size_t length = static_cast<std::size_t>(end - begin);
-    if (length == 0 || length >= dst_size) {
+    if (value.empty() || value.size() >= dst.size()) {
         return false;
     }
 
-    std::memcpy(dst, begin, length);
-    dst[length] = '\0';
+    std::memcpy(dst.data(), value.data(), value.size());
+    dst[value.size()] = '\0';
     return true;
 }
 
-bool ParseEndpointParts(const char *configured_endpoint, EndpointParts *out) {
-    if (configured_endpoint == nullptr || out == nullptr) {
+bool ParseEndpointParts(std::string_view configured_endpoint, EndpointParts *out) {
+    if (out == nullptr) {
         return false;
     }
 
-    const char *begin = configured_endpoint;
-    const char *end = configured_endpoint + std::strlen(configured_endpoint);
-    TrimSpan(&begin, &end);
-    if (begin == end) {
+    const std::string_view endpoint = TrimView(configured_endpoint);
+    if (endpoint.empty()) {
         return false;
     }
 
-    if (*begin == '[') {
-        const char *closing = static_cast<const char *>(std::memchr(begin, ']', static_cast<std::size_t>(end - begin)));
-        if (closing == nullptr || closing == begin + 1 || closing + 1 >= end || closing[1] != ':') {
+    if (endpoint.front() == '[') {
+        const std::size_t closing = endpoint.find(']');
+        if (closing == std::string_view::npos || closing == 1 || (closing + 1) >= endpoint.size() || endpoint[closing + 1] != ':') {
             return false;
         }
 
-        const char *host_begin = begin + 1;
-        const char *host_end = closing;
-        const char *service_begin = closing + 2;
-        const char *service_end = end;
-        TrimSpan(&host_begin, &host_end);
-        TrimSpan(&service_begin, &service_end);
-        return CopySpan(out->host, sizeof(out->host), host_begin, host_end) &&
-               CopySpan(out->service, sizeof(out->service), service_begin, service_end);
+        const std::string_view host = TrimView(endpoint.substr(1, closing - 1));
+        const std::string_view service = TrimView(endpoint.substr(closing + 2));
+        return CopyView(out->host, host) && CopyView(out->service, service);
     }
 
-    const char *separator = nullptr;
-    for (const char *it = end; it != begin;) {
-        --it;
-        if (*it == ':') {
-            separator = it;
+    std::size_t separator = std::string_view::npos;
+    for (std::size_t i = endpoint.size(); i-- > 0;) {
+        if (endpoint[i] == ':') {
+            separator = i;
             break;
         }
     }
-    if (separator == nullptr || separator == begin || separator + 1 >= end) {
+    if (separator == std::string_view::npos || separator == 0 || (separator + 1) >= endpoint.size()) {
         return false;
     }
 
-    if (std::memchr(begin, ':', static_cast<std::size_t>(separator - begin)) != nullptr) {
+    if (endpoint.substr(0, separator).find(':') != std::string_view::npos) {
         return false;
     }
 
-    const char *host_begin = begin;
-    const char *host_end = separator;
-    const char *service_begin = separator + 1;
-    const char *service_end = end;
-    TrimSpan(&host_begin, &host_end);
-    TrimSpan(&service_begin, &service_end);
-    return CopySpan(out->host, sizeof(out->host), host_begin, host_end) &&
-           CopySpan(out->service, sizeof(out->service), service_begin, service_end);
+    const std::string_view host = TrimView(endpoint.substr(0, separator));
+    const std::string_view service = TrimView(endpoint.substr(separator + 1));
+    return CopyView(out->host, host) && CopyView(out->service, service);
 }
 
 bool ParsePort(const char *service) {
@@ -155,7 +145,7 @@ bool IsNumericHost(const char *host) {
 }
 
 bool StoreResolvedText(endpoint_resolution_result *out) {
-    return out != nullptr && endpoint_to_string(std::addressof(out->resolved), out->text, sizeof(out->text));
+    return out != nullptr && endpoint_to_string(out->resolved, out->text);
 }
 
 size_t SerializeHints(const addrinfo &hints, std::uint8_t *buffer, std::size_t buffer_size) {
@@ -279,7 +269,7 @@ bool ResolveNumericEndpoint(const EndpointParts &parts, endpoint_resolution_resu
 
 } // namespace
 
-endpoint_resolution_result resolve_endpoint(const char *configured_endpoint) {
+endpoint_resolution_result resolve_endpoint(std::string_view configured_endpoint) {
     endpoint_resolution_result result{};
 
     EndpointParts parts = {};

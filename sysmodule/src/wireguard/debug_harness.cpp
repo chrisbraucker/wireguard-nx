@@ -13,6 +13,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <span>
 
 namespace wgnx::wireguard {
 
@@ -192,11 +193,10 @@ void CountCookieReply(void *context, const message_handshake_cookie &) {
 void CountTransportData(
     void *context,
     const message_transport_data &,
-    const std::uint8_t *,
-    std::size_t payload_size) {
+    std::span<const std::uint8_t> payload) {
     auto *dispatch_context = static_cast<DispatchTestContext *>(context);
     dispatch_context->transport_count++;
-    dispatch_context->last_payload_size = payload_size;
+    dispatch_context->last_payload_size = payload.size();
 }
 
 template<typename Message>
@@ -652,8 +652,7 @@ bool TestHandshakeResponseAndSessionDerivation() {
     const TransportDataError keepalive_error = noise_consume_transport_data_packet(
         &keepalive_buffer.packet,
         &responder->current_keypair,
-        nullptr,
-        0,
+        {},
         &keepalive_result);
     if (keepalive_error != TransportDataError::None) {
         return false;
@@ -674,8 +673,7 @@ bool TestHandshakeResponseAndSessionDerivation() {
     if (noise_create_transport_data_packet(
             &payload_buffer.packet,
             initiator->current_keypair,
-            g_core_self_test_storage.payload_plaintext,
-            sizeof(g_core_self_test_storage.payload_plaintext)) != TransportDataError::None) {
+            g_core_self_test_storage.payload_plaintext) != TransportDataError::None) {
         return false;
     }
 
@@ -686,7 +684,6 @@ bool TestHandshakeResponseAndSessionDerivation() {
         &payload_buffer.packet,
         &responder->current_keypair,
         g_core_self_test_storage.decrypted_payload,
-        sizeof(g_core_self_test_storage.decrypted_payload),
         &payload_result);
     if (payload_error != TransportDataError::None) {
         return false;
@@ -706,7 +703,6 @@ bool TestHandshakeResponseAndSessionDerivation() {
         &payload_buffer.packet,
         &responder->current_keypair,
         g_core_self_test_storage.decrypted_payload,
-        sizeof(g_core_self_test_storage.decrypted_payload),
         nullptr);
     if (replay_error != TransportDataError::ReplayRejected) {
         return false;
@@ -725,7 +721,6 @@ bool TestHandshakeResponseAndSessionDerivation() {
         &mismatch_buffer.packet,
         &g_core_self_test_storage.responder_copy.current_keypair,
         g_core_self_test_storage.decrypted_payload,
-        sizeof(g_core_self_test_storage.decrypted_payload),
         nullptr);
     if (mismatch_error != TransportDataError::ReceiverIndexMismatch) {
         return false;
@@ -742,7 +737,6 @@ bool TestHandshakeResponseAndSessionDerivation() {
         &tampered_payload_buffer.packet,
         &g_core_self_test_storage.responder_copy.current_keypair,
         g_core_self_test_storage.decrypted_payload,
-        sizeof(g_core_self_test_storage.decrypted_payload),
         nullptr);
     if (tampered_payload_error != TransportDataError::AuthenticationFailed) {
         return false;
@@ -751,8 +745,7 @@ bool TestHandshakeResponseAndSessionDerivation() {
     if (noise_create_transport_data_packet(
             &payload_buffer.packet,
             initiator->current_keypair,
-            g_core_self_test_storage.payload_plaintext,
-            8) != TransportDataError::None) {
+            std::span<const std::uint8_t>(g_core_self_test_storage.payload_plaintext, 8)) != TransportDataError::None) {
         return false;
     }
 
@@ -762,7 +755,6 @@ bool TestHandshakeResponseAndSessionDerivation() {
         &responder_device,
         &g_core_self_test_storage.responder_copy,
         g_core_self_test_storage.decrypted_payload,
-        sizeof(g_core_self_test_storage.decrypted_payload),
         &incoming_result);
     if (incoming_error != TransportDataError::None) {
         return false;

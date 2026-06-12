@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 
 namespace wgnx::platform {
 
@@ -17,6 +18,22 @@ struct packet_buffer {
     std::uint8_t *data{nullptr};
     std::size_t len{0};
     std::size_t capacity{0};
+
+    std::span<std::uint8_t> bytes() {
+        return {data, len};
+    }
+
+    std::span<const std::uint8_t> bytes() const {
+        return {data, len};
+    }
+
+    std::span<std::uint8_t> storage() {
+        return {data, capacity};
+    }
+
+    std::span<const std::uint8_t> storage() const {
+        return {data, capacity};
+    }
 };
 
 inline void packet_init(packet_buffer *packet, void *data, std::size_t capacity) {

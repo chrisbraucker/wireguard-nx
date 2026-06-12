@@ -115,9 +115,8 @@ const char *GetTransportDataErrorName(TransportDataError error) {
 TransportDataError noise_create_transport_data_packet(
     wgnx::platform::packet_buffer *packet,
     const noise_keypair &keypair,
-    const std::uint8_t *payload,
-    std::size_t payload_size) {
-    if (packet == nullptr || (payload == nullptr && payload_size != 0)) {
+    std::span<const std::uint8_t> payload) {
+    if (packet == nullptr) {
         return TransportDataError::InvalidArgument;
     }
     if (!keypair.valid || !keypair.sending_key.valid || keypair.remote_index == 0) {
@@ -127,8 +126,8 @@ TransportDataError noise_create_transport_data_packet(
         return TransportDataError::CounterExhausted;
     }
 
-    const std::size_t required_size = TransportDataHeaderSize + payload_size + TransportDataTagSize;
-    if (required_size < payload_size || packet->capacity < required_size) {
+    const std::size_t required_size = TransportDataHeaderSize + payload.size() + TransportDataTagSize;
+    if (required_size < payload.size() || packet->capacity < required_size) {
         return TransportDataError::InsufficientCapacity;
     }
 
@@ -144,13 +143,13 @@ TransportDataError noise_create_transport_data_packet(
     std::uint8_t tag[TransportDataTagSize]{};
     std::uint8_t empty_payload = 0;
     std::uint8_t *ciphertext = packet->data + TransportDataHeaderSize;
-    const std::uint8_t *plaintext = payload != nullptr ? payload : &empty_payload;
+    const std::uint8_t *plaintext = payload.empty() ? &empty_payload : payload.data();
     BuildTransportNonce(nonce, header.counter);
     if (!crypto::chacha20poly1305_encrypt(
             ciphertext,
             tag,
             plaintext,
-            payload_size,
+            payload.size(),
             nullptr,
             0,
             keypair.sending_key.bytes,
@@ -161,7 +160,7 @@ TransportDataError noise_create_transport_data_packet(
         return TransportDataError::AuthenticationFailed;
     }
 
-    std::memcpy(ciphertext + payload_size, tag, sizeof(tag));
+    std::memcpy(ciphertext + payload.size(), tag, sizeof(tag));
     packet->len = required_size;
     crypto::secure_clear(nonce, sizeof(nonce));
     crypto::secure_clear(tag, sizeof(tag));
@@ -172,15 +171,14 @@ TransportDataError noise_create_transport_data_packet(
 bool noise_create_keepalive_packet(
     wgnx::platform::packet_buffer *packet,
     const noise_keypair &keypair) {
-    return noise_create_transport_data_packet(packet, keypair, nullptr, 0) ==
+    return noise_create_transport_data_packet(packet, keypair, {}) ==
            TransportDataError::None;
 }
 
 TransportDataError noise_consume_transport_data_packet(
     const wgnx::platform::packet_buffer *packet,
     noise_keypair *keypair,
-    std::uint8_t *out_payload,
-    std::size_t out_payload_capacity,
+    std::span<std::uint8_t> out_payload,
     TransportDataDecryptResult *out_result) {
     if (out_result != nullptr) {
         *out_result = {};
@@ -204,10 +202,10 @@ TransportDataError noise_consume_transport_data_packet(
     }
 
     const std::size_t payload_size = packet->len - TransportDataHeaderSize - TransportDataTagSize;
-    if (payload_size > out_payload_capacity) {
+    if (payload_size > out_payload.size()) {
         return TransportDataError::InsufficientCapacity;
     }
-    if (payload_size != 0 && out_payload == nullptr) {
+    if (payload_size != 0 && out_payload.empty()) {
         return TransportDataError::InvalidArgument;
     }
 
@@ -220,7 +218,7 @@ TransportDataError noise_consume_transport_data_packet(
     std::uint8_t empty_payload = 0;
     const std::uint8_t *ciphertext = packet->data + TransportDataHeaderSize;
     const std::uint8_t *tag = ciphertext + payload_size;
-    std::uint8_t *plaintext = payload_size != 0 ? out_payload : &empty_payload;
+    std::uint8_t *plaintext = payload_size != 0 ? out_payload.data() : &empty_payload;
     BuildTransportNonce(nonce, header.counter);
     const bool ok = crypto::chacha20poly1305_decrypt(
         plaintext,
@@ -249,8 +247,7 @@ TransportDataError noise_consume_incoming_transport_data_packet(
     const wgnx::platform::packet_buffer *packet,
     const wg_device *device,
     wg_peer *peer,
-    std::uint8_t *out_payload,
-    std::size_t out_payload_capacity,
+    std::span<std::uint8_t> out_payload,
     IncomingTransportDataResult *out_result) {
     if (out_result != nullptr) {
         *out_result = {};
@@ -276,7 +273,6 @@ TransportDataError noise_consume_incoming_transport_data_packet(
         packet,
         keypair,
         out_payload,
-        out_payload_capacity,
         &decrypt);
     if (error != TransportDataError::None) {
         return error;

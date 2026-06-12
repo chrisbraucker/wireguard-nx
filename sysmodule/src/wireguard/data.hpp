@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <span>
 
 namespace wgnx::wireguard {
 
@@ -38,23 +39,20 @@ const char *GetTransportDataErrorName(TransportDataError error);
 TransportDataError noise_create_transport_data_packet(
     wgnx::platform::packet_buffer *packet,
     const noise_keypair &keypair,
-    const std::uint8_t *payload,
-    std::size_t payload_size);
+    std::span<const std::uint8_t> payload);
 bool noise_create_keepalive_packet(
     wgnx::platform::packet_buffer *packet,
     const noise_keypair &keypair);
 TransportDataError noise_consume_transport_data_packet(
     const wgnx::platform::packet_buffer *packet,
     noise_keypair *keypair,
-    std::uint8_t *out_payload,
-    std::size_t out_payload_capacity,
+    std::span<std::uint8_t> out_payload,
     TransportDataDecryptResult *out_result);
 TransportDataError noise_consume_incoming_transport_data_packet(
     const wgnx::platform::packet_buffer *packet,
     const wg_device *device,
     wg_peer *peer,
-    std::uint8_t *out_payload,
-    std::size_t out_payload_capacity,
+    std::span<std::uint8_t> out_payload,
     IncomingTransportDataResult *out_result);
 
 } // namespace wgnx::wireguard
