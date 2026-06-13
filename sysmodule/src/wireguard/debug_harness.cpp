@@ -1,7 +1,9 @@
 #include "wireguard/debug_harness.hpp"
 
 #include "wireguard/data.hpp"
+#if WGNX_ENABLE_DEBUG_PROBE
 #include "wireguard/debug_probe.hpp"
+#endif
 #include "wireguard/device.hpp"
 #include "wireguard/dispatch.hpp"
 #include "wireguard/endian.hpp"
@@ -181,6 +183,7 @@ bool BuildHarnessCookieReply(
     return true;
 }
 
+#if WGNX_ENABLE_DEBUG_PROBE
 void StoreHarnessBigEndian16(std::uint8_t *dst, std::uint16_t value) {
     if (dst == nullptr) {
         return;
@@ -250,6 +253,7 @@ bool BuildHarnessDebugProbeReply(
         ComputeHarnessInternetChecksum(icmp, DebugProbeIcmpHeaderSize + DebugProbeIcmpPayloadSize));
     return true;
 }
+#endif
 
 void CountHandshakeInitiation(void *context, const message_handshake_initiation &) {
     static_cast<DispatchTestContext *>(context)->initiation_count++;
@@ -873,6 +877,20 @@ bool TestHandshakeResponseAndSessionDerivation() {
                NoiseMacSize) != 0;
 }
 
+#if WGNX_ENABLE_DEBUG_PROBE
+bool TestDebugProbeStatusTransitions() {
+    return CanTransitionDebugProbeStatus(wgnx::DebugProbeStatus::None, wgnx::DebugProbeStatus::Queued) &&
+           CanTransitionDebugProbeStatus(wgnx::DebugProbeStatus::Queued, wgnx::DebugProbeStatus::Sent) &&
+           CanTransitionDebugProbeStatus(wgnx::DebugProbeStatus::Sent, wgnx::DebugProbeStatus::ReplyValidated) &&
+           CanTransitionDebugProbeStatus(wgnx::DebugProbeStatus::Sent, wgnx::DebugProbeStatus::ReplyRejected) &&
+           CanTransitionDebugProbeStatus(wgnx::DebugProbeStatus::Sent, wgnx::DebugProbeStatus::TimedOut) &&
+           CanTransitionDebugProbeStatus(wgnx::DebugProbeStatus::ReplyValidated, wgnx::DebugProbeStatus::Queued) &&
+           CanTransitionDebugProbeStatus(wgnx::DebugProbeStatus::BuildFailed, wgnx::DebugProbeStatus::Queued) &&
+           !CanTransitionDebugProbeStatus(wgnx::DebugProbeStatus::Queued, wgnx::DebugProbeStatus::ReplyValidated) &&
+           !CanTransitionDebugProbeStatus(wgnx::DebugProbeStatus::TimedOut, wgnx::DebugProbeStatus::ReplyValidated) &&
+           !CanTransitionDebugProbeStatus(wgnx::DebugProbeStatus::ReplyRejected, wgnx::DebugProbeStatus::TimedOut);
+}
+
 bool TestDebugProbeIcmpRoundTrip() {
     std::array<std::uint8_t, DebugProbePacketSize> reply{};
     if (!BuildHarnessDebugProbeReply(
@@ -939,6 +957,7 @@ bool TestDebugProbeIcmpRoundTrip() {
 
     return true;
 }
+#endif
 
 } // namespace
 
@@ -979,8 +998,13 @@ bool RunCoreSelfTest() {
         TestDeviceAndPeerSkeleton() &&
         TestStaticIdentityParsing() &&
         TestHandshakeInitiationCreation() &&
-        TestHandshakeResponseAndSessionDerivation() &&
-        TestDebugProbeIcmpRoundTrip();
+        TestHandshakeResponseAndSessionDerivation()
+#if WGNX_ENABLE_DEBUG_PROBE
+        &&
+        TestDebugProbeStatusTransitions() &&
+        TestDebugProbeIcmpRoundTrip()
+#endif
+        ;
     ResetCoreSelfTestStorage();
 
     if (ok) {

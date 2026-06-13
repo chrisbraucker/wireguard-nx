@@ -4,6 +4,13 @@
 
 #include "wgnx/protocol.hpp"
 
+#if WGNX_ENABLE_DEBUG_PROBE
+#define WGNX_I_CONTROL_SERVICE_INTERFACE_DEBUG_INFO(C, H) \
+    AMS_SF_METHOD_INFO(C, H, static_cast<u32>(wgnx::CommandId::TriggerDebugPayload), ams::Result, TriggerDebugPayload, (const wgnx::DebugTriggerRequest &request),                         (request), ams::hos::Version_Min, ams::hos::Version_Max)
+#else
+#define WGNX_I_CONTROL_SERVICE_INTERFACE_DEBUG_INFO(C, H)
+#endif
+
 #define WGNX_I_CONTROL_SERVICE_INTERFACE_INFO(C, H) \
     AMS_SF_METHOD_INFO(C, H, static_cast<u32>(wgnx::CommandId::GetApiVersion),    ams::Result, GetApiVersion,    (ams::sf::Out<u32> out),                                                     (out), ams::hos::Version_Min, ams::hos::Version_Max) \
     AMS_SF_METHOD_INFO(C, H, static_cast<u32>(wgnx::CommandId::GetDaemonStatus),  ams::Result, GetDaemonStatus,  (ams::sf::Out<wgnx::DaemonStatus> out),                                      (out), ams::hos::Version_Min, ams::hos::Version_Max) \
@@ -11,7 +18,7 @@
     AMS_SF_METHOD_INFO(C, H, static_cast<u32>(wgnx::CommandId::GetBuildInfo),     ams::Result, GetBuildInfo,     (ams::sf::Out<wgnx::BuildInfo> out),                                         (out), ams::hos::Version_Min, ams::hos::Version_Max) \
     AMS_SF_METHOD_INFO(C, H, static_cast<u32>(wgnx::CommandId::SetActivePeer),    ams::Result, SetActivePeer,    (const wgnx::PeerSelectionRequest &request),                                 (request), ams::hos::Version_Min, ams::hos::Version_Max) \
     AMS_SF_METHOD_INFO(C, H, static_cast<u32>(wgnx::CommandId::SetAutoStartPeer), ams::Result, SetAutoStartPeer, (const wgnx::PeerSelectionRequest &request),                                 (request), ams::hos::Version_Min, ams::hos::Version_Max) \
-    AMS_SF_METHOD_INFO(C, H, static_cast<u32>(wgnx::CommandId::TriggerDebugPayload), ams::Result, TriggerDebugPayload, (const wgnx::DebugTriggerRequest &request),                         (request), ams::hos::Version_Min, ams::hos::Version_Max)
+    WGNX_I_CONTROL_SERVICE_INTERFACE_DEBUG_INFO(C, H)
 
 // Interface ID for Stratosphere's service framework.
 // 0x57474E58 is ASCII "WGNX", chosen as a stable, human-readable identifier
@@ -28,7 +35,9 @@ public:
     ams::Result ListPeers(ams::sf::Out<u32> out_count, const ams::sf::OutArray<wgnx::PeerInfo> &out);
     ams::Result SetActivePeer(const wgnx::PeerSelectionRequest &request);
     ams::Result SetAutoStartPeer(const wgnx::PeerSelectionRequest &request);
+#if WGNX_ENABLE_DEBUG_PROBE
     ams::Result TriggerDebugPayload(const wgnx::DebugTriggerRequest &request);
+#endif
 };
 static_assert(IsIControlService<ControlService>);
 

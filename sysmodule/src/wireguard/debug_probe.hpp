@@ -38,6 +38,7 @@ struct DebugProbeReplyInfo {
 };
 
 bool IsSupportedDebugTriggerAction(wgnx::DebugTriggerAction action);
+bool CanTransitionDebugProbeStatus(wgnx::DebugProbeStatus from, wgnx::DebugProbeStatus to);
 void CopyDebugTargetIpv4(wgnx::DebugTriggerAction action, std::array<std::uint8_t, 4> &out);
 void FormatIpv4Text(std::span<const std::uint8_t, 4> address, char *out, std::size_t out_size);
 const char *GetDebugProbeReplyValidationName(DebugProbeReplyValidation validation);

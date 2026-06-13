@@ -17,7 +17,9 @@ enum class CommandId : std::uint32_t {
     GetBuildInfo = 3,
     SetActivePeer = 10,
     SetAutoStartPeer = 11,
+#if WGNX_ENABLE_DEBUG_PROBE
     TriggerDebugPayload = 20,
+#endif
 };
 
 enum class DebugTriggerAction : std::uint32_t {

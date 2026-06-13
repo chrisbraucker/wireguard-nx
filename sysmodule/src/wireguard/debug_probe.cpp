@@ -84,6 +84,34 @@ bool IsSupportedDebugTriggerAction(wgnx::DebugTriggerAction action) {
     return false;
 }
 
+bool CanTransitionDebugProbeStatus(wgnx::DebugProbeStatus from, wgnx::DebugProbeStatus to) {
+    switch (to) {
+        case wgnx::DebugProbeStatus::None:
+            return true;
+        case wgnx::DebugProbeStatus::Queued:
+            return from == wgnx::DebugProbeStatus::None ||
+                   from == wgnx::DebugProbeStatus::ReplyValidated ||
+                   from == wgnx::DebugProbeStatus::ReplyRejected ||
+                   from == wgnx::DebugProbeStatus::TimedOut ||
+                   from == wgnx::DebugProbeStatus::StaleActivation ||
+                   from == wgnx::DebugProbeStatus::InvalidState ||
+                   from == wgnx::DebugProbeStatus::BuildFailed ||
+                   from == wgnx::DebugProbeStatus::SendFailed;
+        case wgnx::DebugProbeStatus::Sent:
+        case wgnx::DebugProbeStatus::BuildFailed:
+        case wgnx::DebugProbeStatus::SendFailed:
+        case wgnx::DebugProbeStatus::StaleActivation:
+        case wgnx::DebugProbeStatus::InvalidState:
+            return from == wgnx::DebugProbeStatus::Queued;
+        case wgnx::DebugProbeStatus::ReplyValidated:
+        case wgnx::DebugProbeStatus::ReplyRejected:
+        case wgnx::DebugProbeStatus::TimedOut:
+            return from == wgnx::DebugProbeStatus::Sent;
+    }
+
+    return false;
+}
+
 void CopyDebugTargetIpv4(wgnx::DebugTriggerAction action, std::array<std::uint8_t, 4> &out) {
     switch (action) {
         case wgnx::DebugTriggerAction::PingTunnelPeer:

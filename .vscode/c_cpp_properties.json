@@ -44,7 +44,8 @@
       "-DATMOSPHERE_ARCH_ARM64",
       "-DATMOSPHERE_ARCH_ARM_V8A",
       "-DATMOSPHERE_CPU_ARM_CORTEX_A57",
-      "-D__SWITCH__"
+      "-D__SWITCH__",
+      "-DWGNX_ENABLE_DEBUG_PROBE=1"
     ],
     "hacCompilerPath": "${env:DEVKITPRO}/devkitA64/bin/aarch64-none-elf-g++"
   },

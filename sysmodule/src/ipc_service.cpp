@@ -7,7 +7,9 @@
 #include "wgnx/platform/udp.hpp"
 #include "wgnx/platform/work.hpp"
 #include "wireguard/data.hpp"
+#if WGNX_ENABLE_DEBUG_PROBE
 #include "wireguard/debug_probe.hpp"
+#endif
 #include "wireguard/device.hpp"
 #include "wireguard/handshake.hpp"
 #include "wireguard/session.hpp"
@@ -100,8 +102,8 @@ wgnx::platform::workqueue_struct *g_resolver_workqueue = nullptr;
 struct PayloadSubmissionDispatcher {
     wgnx::platform::work_struct work{};
 };
-constinit PayloadSubmissionDispatcher g_payload_submission_dispatcher = {};
-wgnx::platform::workqueue_struct *g_payload_submission_workqueue = nullptr;
+[[maybe_unused]] constinit PayloadSubmissionDispatcher g_payload_submission_dispatcher = {};
+[[maybe_unused]] wgnx::platform::workqueue_struct *g_payload_submission_workqueue = nullptr;
 struct ReceiveDispatcher {
     wgnx::platform::work_struct work{};
 };
@@ -130,7 +132,9 @@ constinit PayloadProbeTimeoutDispatcher g_payload_probe_timeout_dispatcher = {};
 
 constexpr inline wgnx::platform::jiffies_t SimulatedHandshakeRetransmitJiffies = 5U * wgnx::platform::HZ;
 constexpr inline wgnx::platform::jiffies_t SimulatedRekeyJiffies = 120U * wgnx::platform::HZ;
+#if WGNX_ENABLE_DEBUG_PROBE
 constexpr inline wgnx::platform::jiffies_t DebugProbeTimeoutJiffies = 5U * wgnx::platform::HZ;
+#endif
 constexpr inline std::uint32_t MaxHandshakeSendAttempts = 5;
 constexpr inline std::size_t ReceivePacketCapacity = 4096;
 constexpr inline std::size_t MaxTransportPayloadSize = 1500;
@@ -141,8 +145,13 @@ const char *CStr(const std::array<char, Size> &value) {
     return value.data();
 }
 
-bool IsSupportedDebugTriggerAction(wgnx::DebugTriggerAction action) {
+[[maybe_unused]] bool IsSupportedDebugTriggerAction(wgnx::DebugTriggerAction action) {
+#if WGNX_ENABLE_DEBUG_PROBE
     return wgnx::wireguard::IsSupportedDebugTriggerAction(action);
+#else
+    static_cast<void>(action);
+    return false;
+#endif
 }
 
 const char *GetIndexSlotName(wgnx::wireguard::wg_index_slot slot) {
@@ -233,7 +242,7 @@ void ClearDebugProbeState(DaemonState::PeerRuntimeInfo *runtime) {
     runtime->debug_probe_state_changed_ns = 0;
 }
 
-void SetDebugProbeState(
+[[maybe_unused]] void SetDebugProbeState(
     DaemonState::PeerRuntimeInfo *runtime,
     wgnx::DebugTriggerAction action,
     wgnx::DebugProbeStatus status) {
@@ -241,12 +250,21 @@ void SetDebugProbeState(
         return;
     }
 
+#if WGNX_ENABLE_DEBUG_PROBE
+    if (!wgnx::wireguard::CanTransitionDebugProbeStatus(runtime->debug_probe_status, status)) {
+        logger::Log(
+            "Debug probe transition override old=%s new=%s action=%s",
+            wgnx::GetDebugProbeStatusName(runtime->debug_probe_status),
+            wgnx::GetDebugProbeStatusName(status),
+            wgnx::GetDebugTriggerActionName(action));
+    }
+#endif
     runtime->debug_probe_action = action;
     runtime->debug_probe_status = status;
     StampRuntimeNow(std::addressof(runtime->debug_probe_state_changed_ns));
 }
 
-bool IsDebugProbePending(const DaemonState::PeerRuntimeInfo &runtime) {
+[[maybe_unused]] bool IsDebugProbePending(const DaemonState::PeerRuntimeInfo &runtime) {
     return runtime.debug_probe_status == wgnx::DebugProbeStatus::Queued ||
            runtime.debug_probe_status == wgnx::DebugProbeStatus::Sent;
 }
@@ -297,7 +315,7 @@ wgnx::PeerErrorCode MapTransportDataErrorToPeerErrorCode(wgnx::wireguard::Transp
     return wgnx::PeerErrorCode::InternalFailure;
 }
 
-wgnx::PeerErrorStage GetPayloadSubmissionErrorStage(wgnx::PeerErrorCode code) {
+[[maybe_unused]] wgnx::PeerErrorStage GetPayloadSubmissionErrorStage(wgnx::PeerErrorCode code) {
     switch (code) {
         case wgnx::PeerErrorCode::TransportInitFailed:
         case wgnx::PeerErrorCode::TransportOpenFailed:
@@ -605,14 +623,18 @@ void CancelAllTransportTimers() {
     CancelProtocolTimer(peer_index, wgnx::wireguard::TimerHook::Rekey);
 }
 
-void SchedulePayloadProbeTimeout() {
+[[maybe_unused]] void SchedulePayloadProbeTimeout() {
+#if WGNX_ENABLE_DEBUG_PROBE
     wgnx::platform::mod_timer(
         std::addressof(g_payload_probe_timeout_dispatcher.timer),
         wgnx::platform::get_jiffies_64() + DebugProbeTimeoutJiffies);
+#endif
 }
 
 void CancelPayloadProbeTimeout() {
+#if WGNX_ENABLE_DEBUG_PROBE
     wgnx::platform::timer_delete(std::addressof(g_payload_probe_timeout_dispatcher.timer));
+#endif
 }
 
 void ScheduleProtocolSessionTimers(std::size_t peer_index, wgnx::wireguard::wg_peer *peer) {
@@ -886,7 +908,8 @@ void QueueReceiveWork() {
     static_cast<void>(wgnx::platform::queue_work(g_receive_workqueue, std::addressof(g_receive_dispatcher.work)));
 }
 
-void QueuePayloadSubmissionWork() {
+[[maybe_unused]] void QueuePayloadSubmissionWork() {
+#if WGNX_ENABLE_DEBUG_PROBE
     if (g_payload_submission_workqueue == nullptr) {
         return;
     }
@@ -894,9 +917,14 @@ void QueuePayloadSubmissionWork() {
     static_cast<void>(wgnx::platform::queue_work(
         g_payload_submission_workqueue,
         std::addressof(g_payload_submission_dispatcher.work)));
+#endif
 }
 
-bool QueuePayloadSubmissionRequestLocked(wgnx::DebugTriggerAction action) {
+[[maybe_unused]] bool QueuePayloadSubmissionRequestLocked(wgnx::DebugTriggerAction action) {
+#if !WGNX_ENABLE_DEBUG_PROBE
+    static_cast<void>(action);
+    return false;
+#else
     if (g_state.active_peer_index < 0) {
         return false;
     }
@@ -924,6 +952,7 @@ bool QueuePayloadSubmissionRequestLocked(wgnx::DebugTriggerAction action) {
     g_payload_submission_request.action = action;
     SetDebugProbeState(std::addressof(runtime), action, wgnx::DebugProbeStatus::Queued);
     return true;
+#endif
 }
 
 void StartPeerRuntime(std::size_t peer_index) {
@@ -1063,7 +1092,7 @@ bool DequeueResolveRequest(ResolveRequest *out_request) {
     return true;
 }
 
-bool DequeuePayloadSubmissionRequest(PayloadSubmissionRequest *out_request) {
+[[maybe_unused]] bool DequeuePayloadSubmissionRequest(PayloadSubmissionRequest *out_request) {
     std::scoped_lock lock(g_state_mutex);
     if (!g_payload_submission_request.pending || out_request == nullptr) {
         return false;
@@ -1242,14 +1271,15 @@ void CommitReceivedPacket(
             return;
         }
 
+#if WGNX_ENABLE_DEBUG_PROBE
         wgnx::wireguard::DebugProbeReplyInfo reply_info{};
         const wgnx::wireguard::DebugProbeReplyValidation reply_validation =
             wgnx::wireguard::ValidateDebugIcmpEchoReply(
-            std::span<const std::uint8_t>(g_receive_payload_buffer.data(), decrypt_result.decrypt.payload_size),
-            g_state.configured_peers[peer_index].address.data(),
-            peer_index,
-            activation_generation,
-            std::addressof(reply_info));
+                std::span<const std::uint8_t>(g_receive_payload_buffer.data(), decrypt_result.decrypt.payload_size),
+                g_state.configured_peers[peer_index].address.data(),
+                peer_index,
+                activation_generation,
+                std::addressof(reply_info));
         if (reply_validation == wgnx::wireguard::DebugProbeReplyValidation::Valid) {
             char inner_source[16] = {};
             char inner_destination[16] = {};
@@ -1284,6 +1314,7 @@ void CommitReceivedPacket(
                 decrypt_result.decrypt.payload_size);
             return;
         }
+#endif
 
         logger::Log(
             "Delivered non-debug decrypted payload for peer %zu bytes=%zu",
@@ -1362,7 +1393,10 @@ void CommitReceiveFailure(
     SetPeerError(peer_index, wgnx::PeerErrorStage::Transport, MapSocketErrorToPeerErrorCode(error));
 }
 
-void CommitPayloadSubmission(const PayloadSubmissionRequest &request) {
+[[maybe_unused]] void CommitPayloadSubmission(const PayloadSubmissionRequest &request) {
+#if !WGNX_ENABLE_DEBUG_PROBE
+    static_cast<void>(request);
+#else
     std::scoped_lock lock(g_state_mutex);
     if (request.peer_index >= g_state.peer_count ||
         g_state.active_peer_index != static_cast<std::int32_t>(request.peer_index)) {
@@ -1438,6 +1472,7 @@ void CommitPayloadSubmission(const PayloadSubmissionRequest &request) {
 
     SetDebugProbeState(std::addressof(runtime), request.action, wgnx::DebugProbeStatus::Sent);
     SchedulePayloadProbeTimeout();
+#endif
 }
 
 void ResolverWorkMain(wgnx::platform::work_struct *) {
@@ -1482,14 +1517,19 @@ void ReceiveWorkMain(wgnx::platform::work_struct *) {
     }
 }
 
-void PayloadSubmissionWorkMain(wgnx::platform::work_struct *) {
+[[maybe_unused]] void PayloadSubmissionWorkMain(wgnx::platform::work_struct *) {
+#if WGNX_ENABLE_DEBUG_PROBE
     PayloadSubmissionRequest request{};
     while (DequeuePayloadSubmissionRequest(std::addressof(request))) {
         CommitPayloadSubmission(request);
     }
+#else
+    return;
+#endif
 }
 
-void CommitPayloadProbeTimeout() {
+[[maybe_unused]] void CommitPayloadProbeTimeout() {
+#if WGNX_ENABLE_DEBUG_PROBE
     std::scoped_lock lock(g_state_mutex);
     if (g_state.active_peer_index < 0) {
         return;
@@ -1510,9 +1550,10 @@ void CommitPayloadProbeTimeout() {
         peer_index,
         wgnx::GetDebugTriggerActionName(action),
         runtime.activation_generation);
+#endif
 }
 
-void PayloadProbeTimeoutWorkMain(wgnx::platform::work_struct *) {
+[[maybe_unused]] void PayloadProbeTimeoutWorkMain(wgnx::platform::work_struct *) {
     CommitPayloadProbeTimeout();
 }
 
@@ -1633,12 +1674,14 @@ void RekeyTimerCallback(wgnx::platform::timer_list *) {
     }
 }
 
-void PayloadProbeTimeoutTimerCallback(wgnx::platform::timer_list *) {
+[[maybe_unused]] void PayloadProbeTimeoutTimerCallback(wgnx::platform::timer_list *) {
+#if WGNX_ENABLE_DEBUG_PROBE
     if (g_timer_action_workqueue != nullptr) {
         static_cast<void>(wgnx::platform::queue_work(
             g_timer_action_workqueue,
             std::addressof(g_payload_probe_timeout_dispatcher.work)));
     }
+#endif
 }
 
 void TimerActionWorkMain(wgnx::platform::work_struct *work) {
@@ -1656,7 +1699,9 @@ void TimerActionWorkMain(wgnx::platform::work_struct *work) {
     }
 
     if (work == std::addressof(g_payload_probe_timeout_dispatcher.work)) {
+#if WGNX_ENABLE_DEBUG_PROBE
         PayloadProbeTimeoutWorkMain(work);
+#endif
     }
 }
 
@@ -1671,7 +1716,10 @@ void InitializeResolverWorker() {
     logger::Log("Started endpoint resolver worker");
 }
 
-void InitializePayloadSubmissionWorker() {
+[[maybe_unused]] void InitializePayloadSubmissionWorker() {
+#if !WGNX_ENABLE_DEBUG_PROBE
+    return;
+#else
     if (g_payload_submission_workqueue != nullptr) {
         return;
     }
@@ -1680,6 +1728,7 @@ void InitializePayloadSubmissionWorker() {
     AMS_ABORT_UNLESS(g_payload_submission_workqueue != nullptr);
     wgnx::platform::INIT_WORK(std::addressof(g_payload_submission_dispatcher.work), PayloadSubmissionWorkMain);
     logger::Log("Started payload submission worker");
+#endif
 }
 
 void InitializeReceiveWorker() {
@@ -1703,13 +1752,17 @@ void InitializeTransportTimerExecutor() {
     wgnx::platform::INIT_WORK(std::addressof(g_retransmit_dispatcher.work), TimerActionWorkMain);
     wgnx::platform::INIT_WORK(std::addressof(g_keepalive_dispatcher.work), TimerActionWorkMain);
     wgnx::platform::INIT_WORK(std::addressof(g_rekey_dispatcher.work), TimerActionWorkMain);
+#if WGNX_ENABLE_DEBUG_PROBE
     wgnx::platform::INIT_WORK(std::addressof(g_payload_probe_timeout_dispatcher.work), TimerActionWorkMain);
+#endif
     wgnx::platform::timer_setup(std::addressof(g_retransmit_dispatcher.timer), RetransmitTimerCallback);
     wgnx::platform::timer_setup(std::addressof(g_keepalive_dispatcher.timer), KeepaliveTimerCallback);
     wgnx::platform::timer_setup(std::addressof(g_rekey_dispatcher.timer), RekeyTimerCallback);
+#if WGNX_ENABLE_DEBUG_PROBE
     wgnx::platform::timer_setup(
         std::addressof(g_payload_probe_timeout_dispatcher.timer),
         PayloadProbeTimeoutTimerCallback);
+#endif
     logger::Log("Started transport timer executor");
 }
 
@@ -1816,6 +1869,7 @@ ams::Result ControlService::SetAutoStartPeer(const wgnx::PeerSelectionRequest &r
     R_SUCCEED();
 }
 
+#if WGNX_ENABLE_DEBUG_PROBE
 ams::Result ControlService::TriggerDebugPayload(const wgnx::DebugTriggerRequest &request) {
     std::scoped_lock lock(g_state_mutex);
     InitializeState();
@@ -1832,6 +1886,7 @@ ams::Result ControlService::TriggerDebugPayload(const wgnx::DebugTriggerRequest 
     logger::Log("Queued debug payload trigger action=%s", wgnx::GetDebugTriggerActionName(action));
     R_SUCCEED();
 }
+#endif
 
 void RunIpcServer() {
     {
@@ -1839,7 +1894,9 @@ void RunIpcServer() {
         InitializeState();
     }
     InitializeResolverWorker();
+#if WGNX_ENABLE_DEBUG_PROBE
     InitializePayloadSubmissionWorker();
+#endif
     InitializeReceiveWorker();
     InitializeTransportTimerExecutor();
     logger::Log("Constructing IPC server");
