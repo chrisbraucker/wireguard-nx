@@ -259,67 +259,105 @@ This is the first milestone that proves practical WireGuard functionality withou
   - receive and decrypt response bytes
   - report success via IPC and logs
 
-## Milestone 8: Persistent Runtime Operations
+## Milestone 8: Horizon Integration Feasibility
 
 ### Goal
 
-Make start/stop/reconnect behavior robust enough for normal use during testing.
+Determine whether the project can realistically achieve OS-level or
+system-owned WireGuard traffic on Horizon before committing to a fallback
+cross-homebrew packet API.
+
+### Scope
+
+- identify the realistic packet ownership and interception points available on
+  Horizon
+- evaluate whether a system-owned packet path can be built without each app
+  implementing a custom WireGuard-aware IPC contract
+- document the technical constraints around routing, DNS, socket ownership,
+  coexistence with normal networking, and lifecycle behavior
+- decide what the first system-owned traffic class could be if the mainline
+  path is feasible
+- define the fallback conditions under which a cross-homebrew IPC packet API
+  becomes the practical backup plan
+- preserve the current validated debug and probe path as a development tool,
+  not as the default product architecture
+
+### Success Criteria
+
+- the repo has a documented decision on whether OS-level or system-owned
+  traffic integration is feasible enough to pursue next
+- the first concrete mainline integration target is identified, or the repo
+  explicitly records why the fallback IPC path should be used instead
+- the technical risks and open constraints are clear enough to guide the next
+  implementation milestone
+
+## Milestone 9: First System-Owned Traffic Path
+
+### Goal
+
+Implement the first narrow class of Horizon traffic that uses the tunnel
+without requiring the originating app to speak a project-specific WireGuard
+IPC contract.
+
+### Scope
+
+- build the first feasible packet ingress/egress path identified by Milestone 8
+- connect decrypted and encrypted packet handling to that system-owned path
+- keep the scope intentionally narrow to one well-defined traffic class
+- document limitations, ownership boundaries, and assumptions explicitly
+- avoid prematurely freezing a public cross-homebrew packet ABI unless the
+  fallback path is activated
+
+### Success Criteria
+
+- a clearly defined class of non-test Switch traffic can traverse the tunnel
+  end-to-end
+- the path works without the originating app implementing a custom packet IPC
+- limitations are clearly documented and tied to the chosen integration method
+
+## Milestone 10: Runtime Hardening And Broader Integration
+
+### Goal
+
+Make the chosen integration path robust enough for repeated use and expand it
+toward broader console usefulness.
 
 ### Scope
 
 - explicit connect/disconnect actions
 - endpoint retry policy
-- backoff/rekey behavior
-- error recovery after network loss
+- backoff, rekey, and error recovery after network loss
 - autostart behavior on sysmodule boot
-- review and remove any remaining transport bring-up workarounds that are no longer justified once live UDP/session traffic is well-characterized
-
-### Success Criteria
-
-- overlay can reliably start and stop a peer
-- network interruptions do not permanently wedge the daemon
-- autostart state behaves predictably after reboot
-
-## Milestone 9: Packet Interface Strategy
-
-### Goal
-
-Choose and implement the first real packet path for non-test traffic.
-
-### Options To Evaluate
-
-- userspace packet injection path for homebrew-controlled apps
-- socket-layer redirection for selected traffic
-- deeper Horizon integration if feasible
-
-### Scope
-
-- define ingress/egress packet format
-- attach decrypted/encrypted packet handling to the engine
-- decide what "supported traffic" means for the first release
-
-### Success Criteria
-
-- non-test IP payloads can be carried through the engine in a controlled scenario
-- limitations are clearly documented
-
-## Milestone 10: Broader Horizon Integration
-
-### Goal
-
-Move from a validated transport engine toward console-wide usefulness.
-
-### Scope
-
-- routing strategy
-- DNS behavior
+- routing and DNS behavior for the chosen integration model
 - coexistence with normal networking
 - handling suspend/resume and network state changes
+- review and remove temporary bring-up workarounds that are no longer
+  justified once the chosen traffic path is stable
 
 ### Success Criteria
 
 - a clearly defined class of Switch traffic can use the tunnel end-to-end
 - behavior is stable enough for real-world testing
+
+## Contingency Track: Cross-Homebrew Packet IPC
+
+If Milestone 8 concludes that a practical OS-level or system-owned integration
+path is blocked or would create disproportionate friction, the fallback plan is
+to expose a narrow packet-oriented IPC contract for cooperating homebrew.
+
+This is explicitly a contingency architecture, not the preferred mainline.
+
+Its value would be:
+
+- apps can delegate WireGuard transport to the sysmodule instead of embedding
+  the protocol stack themselves
+- the project still produces something useful even if deeper Horizon
+  integration proves infeasible
+- the repo can preserve the existing debug and probe work as the foundation for
+  a more formal app-facing seam if needed
+
+But it should only be prioritized if the mainline Horizon integration path does
+not survive the Milestone 8 feasibility work.
 
 ## Recommended Immediate Order
 
@@ -330,8 +368,19 @@ Move from a validated transport engine toward console-wide usefulness.
 5. Milestone 5: Cryptographic Handshake
 6. Milestone 6: UDP Transport
 7. Milestone 7: App-Owned Payload Transport
+8. Milestone 8: Horizon Integration Feasibility
+9. Milestone 9: First System-Owned Traffic Path
+10. Milestone 10: Runtime Hardening And Broader Integration
 
-This preserves momentum and gets you to a meaningful "WireGuard works on Switch for app-owned traffic" checkpoint before tackling the much harder OS-level tunnel problem.
+This preserves momentum and gets you to a meaningful "WireGuard works on
+Switch for app-owned traffic" checkpoint before committing to the much harder
+question of how Switch software should actually use the tunnel.
+
+After Milestone 7, the recommended next step is now a feasibility milestone
+rather than a packet-API milestone. The rationale is that the repo should
+first determine whether a system-owned Horizon integration path is practical.
+Only if that path proves unworkable or too costly should the project detour
+into a cross-homebrew packet IPC fallback.
 
 ## Non-Goals For The Near Term
 
