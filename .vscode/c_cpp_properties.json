@@ -14,11 +14,18 @@
       "${workspaceFolder}/sysmodule/src/**"
     ],
     "defaultDefines": [
-      "__aarch64__",
       "APP_TITLE=\"\"",
       "VERSION=\"\"",
-      "BUILD_ID=\"\"",
-      "ATMOSPHERE_IS_STRATOSPHERE"
+      "BUILD_ID=\"\""
+    ],
+    "atmosphereDefines": [
+      "ATMOSPHERE",
+      "ATMOSPHERE_IS_STRATOSPHERE",
+      "ATMOSPHERE_BOARD_NINTENDO_NX",
+      "ATMOSPHERE_OS_HORIZON",
+      "ATMOSPHERE_ARCH_ARM64",
+      "ATMOSPHERE_ARCH_ARM_V8A",
+      "ATMOSPHERE_CPU_ARM_CORTEX_A57"
     ],
 
     "hacIncludePaths": [
@@ -26,7 +33,20 @@
       "${env:DEVKITPRO}/libnx/include/**",
       "${env:DEVKITPRO}/portlibs/switch/include/**"
     ],
-    "hacDefines": ["__SWITCH__", "__BSD_VISIBLE"],
+    "hacDefines": ["__SWITCH__", "_GNU_SOURCE"],
+    "hacCompilerArgs": [
+      "-std=gnu++23",
+      "-D_GNU_SOURCE",
+      "-DATMOSPHERE",
+      "-DATMOSPHERE_IS_STRATOSPHERE",
+      "-DATMOSPHERE_BOARD_NINTENDO_NX",
+      "-DATMOSPHERE_OS_HORIZON",
+      "-DATMOSPHERE_ARCH_ARM64",
+      "-DATMOSPHERE_ARCH_ARM_V8A",
+      "-DATMOSPHERE_CPU_ARM_CORTEX_A57",
+      "-D__SWITCH__",
+      "-DWGNX_ENABLE_DEBUG_PROBE=1"
+    ],
     "hacCompilerPath": "${env:DEVKITPRO}/devkitA64/bin/aarch64-none-elf-g++"
   },
 
@@ -34,10 +54,11 @@
     {
       "name": "Switch",
       "includePath": ["${env:defaultIncludePath}", "${env:overlayIncludePath}", "${env:sysmoduleIncludePath}", "${env:hacIncludePaths}"],
-      "defines": ["${env:defaultDefines}", "${env:hacDefines}"],
+      "defines": ["${env:defaultDefines}", "${env:atmosphereDefines}", "${env:hacDefines}"],
       "compilerPath": "${env:hacCompilerPath}",
+      "compilerArgs": ["${env:hacCompilerArgs}"],
       "cStandard": "c11",
-      "cppStandard": "c++26",
+      "cppStandard": "gnu++23",
       "intelliSenseMode": "linux-gcc-arm64"
     }
   ],

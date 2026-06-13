@@ -1,5 +1,9 @@
 #include "wireguard/debug_harness.hpp"
 
+#include "wireguard/data.hpp"
+#if WGNX_ENABLE_DEBUG_PROBE
+#include "wireguard/debug_probe.hpp"
+#endif
 #include "wireguard/device.hpp"
 #include "wireguard/dispatch.hpp"
 #include "wireguard/endian.hpp"
@@ -11,7 +15,10 @@
 #include "wireguard/timers.hpp"
 
 #include <cstdio>
+#include <algorithm>
+#include <array>
 #include <cstring>
+#include <span>
 
 namespace wgnx::wireguard {
 
@@ -65,12 +72,19 @@ struct CoreSelfTestStorage {
     wgnx::PeerConfigEntry secondary_config{};
     wg_device secondary_device{};
     wg_peer peer_copy{};
+    wg_peer responder_copy{};
     message_handshake_response response{};
     message_handshake_response tampered_response{};
     message_handshake_cookie cookie{};
     wgnx::platform::static_packet_buffer<HandshakeResponseSize> response_buffer{};
     wgnx::platform::static_packet_buffer<HandshakeResponseSize> tampered_buffer{};
     wgnx::platform::static_packet_buffer<HandshakeCookieSize> cookie_buffer{};
+    wgnx::platform::static_packet_buffer<TransportDataHeaderSize + NoiseTagSize> keepalive_buffer{};
+    wgnx::platform::static_packet_buffer<256> payload_buffer{};
+    wgnx::platform::static_packet_buffer<256> mismatch_buffer{};
+    wgnx::platform::static_packet_buffer<256> tampered_payload_buffer{};
+    std::uint8_t payload_plaintext[128]{};
+    std::uint8_t decrypted_payload[128]{};
 };
 
 CoreSelfTestStorage g_core_self_test_storage{};
@@ -89,6 +103,22 @@ void ResetCoreSelfTestStorage() {
         &g_core_self_test_storage.cookie_buffer.packet,
         g_core_self_test_storage.cookie_buffer.storage.data(),
         g_core_self_test_storage.cookie_buffer.storage.size());
+    wgnx::platform::packet_init(
+        &g_core_self_test_storage.keepalive_buffer.packet,
+        g_core_self_test_storage.keepalive_buffer.storage.data(),
+        g_core_self_test_storage.keepalive_buffer.storage.size());
+    wgnx::platform::packet_init(
+        &g_core_self_test_storage.payload_buffer.packet,
+        g_core_self_test_storage.payload_buffer.storage.data(),
+        g_core_self_test_storage.payload_buffer.storage.size());
+    wgnx::platform::packet_init(
+        &g_core_self_test_storage.mismatch_buffer.packet,
+        g_core_self_test_storage.mismatch_buffer.storage.data(),
+        g_core_self_test_storage.mismatch_buffer.storage.size());
+    wgnx::platform::packet_init(
+        &g_core_self_test_storage.tampered_payload_buffer.packet,
+        g_core_self_test_storage.tampered_payload_buffer.storage.data(),
+        g_core_self_test_storage.tampered_payload_buffer.storage.size());
 }
 
 bool ComputeHarnessCookieKey(
@@ -153,6 +183,78 @@ bool BuildHarnessCookieReply(
     return true;
 }
 
+#if WGNX_ENABLE_DEBUG_PROBE
+void StoreHarnessBigEndian16(std::uint8_t *dst, std::uint16_t value) {
+    if (dst == nullptr) {
+        return;
+    }
+
+    dst[0] = static_cast<std::uint8_t>((value >> 8) & 0xFFu);
+    dst[1] = static_cast<std::uint8_t>(value & 0xFFu);
+}
+
+std::uint16_t ComputeHarnessInternetChecksum(const std::uint8_t *data, std::size_t size) {
+    std::uint32_t sum = 0;
+    std::size_t index = 0;
+    while ((index + 1) < size) {
+        sum += (static_cast<std::uint32_t>(data[index]) << 8) |
+               static_cast<std::uint32_t>(data[index + 1]);
+        index += 2;
+    }
+
+    if (index < size) {
+        sum += static_cast<std::uint32_t>(data[index]) << 8;
+    }
+
+    while ((sum >> 16) != 0) {
+        sum = (sum & 0xFFFFu) + (sum >> 16);
+    }
+
+    return static_cast<std::uint16_t>(~sum & 0xFFFFu);
+}
+
+bool BuildHarnessDebugProbeReply(
+    std::array<std::uint8_t, DebugProbePacketSize> *out_reply,
+    wgnx::DebugTriggerAction action,
+    std::uint32_t activation_generation,
+    std::size_t peer_index) {
+    if (out_reply == nullptr) {
+        return false;
+    }
+
+    *out_reply = {};
+    const std::size_t request_size = BuildDebugIcmpEchoRequest(
+        *out_reply,
+        "10.13.13.2/32",
+        action,
+        activation_generation,
+        peer_index,
+        0x11223344U);
+    if (request_size != DebugProbePacketSize) {
+        return false;
+    }
+
+    std::swap((*out_reply)[12], (*out_reply)[16]);
+    std::swap((*out_reply)[13], (*out_reply)[17]);
+    std::swap((*out_reply)[14], (*out_reply)[18]);
+    std::swap((*out_reply)[15], (*out_reply)[19]);
+    (*out_reply)[10] = 0;
+    (*out_reply)[11] = 0;
+    StoreHarnessBigEndian16(
+        out_reply->data() + 10,
+        ComputeHarnessInternetChecksum(out_reply->data(), DebugProbeIpv4HeaderSize));
+
+    std::uint8_t *icmp = out_reply->data() + DebugProbeIpv4HeaderSize;
+    icmp[0] = 0;
+    icmp[2] = 0;
+    icmp[3] = 0;
+    StoreHarnessBigEndian16(
+        icmp + 2,
+        ComputeHarnessInternetChecksum(icmp, DebugProbeIcmpHeaderSize + DebugProbeIcmpPayloadSize));
+    return true;
+}
+#endif
+
 void CountHandshakeInitiation(void *context, const message_handshake_initiation &) {
     static_cast<DispatchTestContext *>(context)->initiation_count++;
 }
@@ -168,11 +270,10 @@ void CountCookieReply(void *context, const message_handshake_cookie &) {
 void CountTransportData(
     void *context,
     const message_transport_data &,
-    const std::uint8_t *,
-    std::size_t payload_size) {
+    std::span<const std::uint8_t> payload) {
     auto *dispatch_context = static_cast<DispatchTestContext *>(context);
     dispatch_context->transport_count++;
-    dispatch_context->last_payload_size = payload_size;
+    dispatch_context->last_payload_size = payload.size();
 }
 
 template<typename Message>
@@ -364,14 +465,14 @@ bool TestTransportFixedVector() {
 bool TestDeviceAndPeerSkeleton() {
     ResetCoreSelfTestStorage();
     wgnx::PeerConfigEntry &config = g_core_self_test_storage.config;
-    std::snprintf(config.name, sizeof(config.name), "%s", "harness-peer");
-    std::snprintf(config.address, sizeof(config.address), "%s", "10.66.66.2/32");
-    std::snprintf(config.endpoint, sizeof(config.endpoint), "%s", "vpn.example.test:51820");
-    std::snprintf(config.private_key, sizeof(config.private_key), "%s", HarnessLocalPrivateKey);
-    std::snprintf(config.public_key, sizeof(config.public_key), "%s", HarnessRemotePublicKey);
-    std::snprintf(config.preshared_key, sizeof(config.preshared_key), "%s", HarnessPresharedKey);
-    std::snprintf(config.allowed_ips, sizeof(config.allowed_ips), "%s", "0.0.0.0/0, ::/0");
-    std::snprintf(config.dns, sizeof(config.dns), "%s", "1.1.1.1");
+    std::snprintf(config.name.data(), config.name.size(), "%s", "harness-peer");
+    std::snprintf(config.address.data(), config.address.size(), "%s", "10.66.66.2/32");
+    std::snprintf(config.endpoint.data(), config.endpoint.size(), "%s", "vpn.example.test:51820");
+    std::snprintf(config.private_key.data(), config.private_key.size(), "%s", HarnessLocalPrivateKey);
+    std::snprintf(config.public_key.data(), config.public_key.size(), "%s", HarnessRemotePublicKey);
+    std::snprintf(config.preshared_key.data(), config.preshared_key.size(), "%s", HarnessPresharedKey);
+    std::snprintf(config.allowed_ips.data(), config.allowed_ips.size(), "%s", "0.0.0.0/0, ::/0");
+    std::snprintf(config.dns.data(), config.dns.size(), "%s", "1.1.1.1");
     config.listen_port = 51820;
     config.persistent_keepalive = 25;
     config.mtu = 1420;
@@ -473,13 +574,13 @@ bool TestStaticIdentityParsing() {
 bool TestHandshakeInitiationCreation() {
     ResetCoreSelfTestStorage();
     wgnx::PeerConfigEntry &config = g_core_self_test_storage.config;
-    std::snprintf(config.name, sizeof(config.name), "%s", "handshake-peer");
-    std::snprintf(config.address, sizeof(config.address), "%s", "10.66.66.2/32");
-    std::snprintf(config.endpoint, sizeof(config.endpoint), "%s", "vpn.example.test:51820");
-    std::snprintf(config.private_key, sizeof(config.private_key), "%s", HarnessLocalPrivateKey);
-    std::snprintf(config.public_key, sizeof(config.public_key), "%s", HarnessRemotePublicKey);
-    std::snprintf(config.preshared_key, sizeof(config.preshared_key), "%s", HarnessPresharedKey);
-    std::snprintf(config.allowed_ips, sizeof(config.allowed_ips), "%s", "0.0.0.0/0, ::/0");
+    std::snprintf(config.name.data(), config.name.size(), "%s", "handshake-peer");
+    std::snprintf(config.address.data(), config.address.size(), "%s", "10.66.66.2/32");
+    std::snprintf(config.endpoint.data(), config.endpoint.size(), "%s", "vpn.example.test:51820");
+    std::snprintf(config.private_key.data(), config.private_key.size(), "%s", HarnessLocalPrivateKey);
+    std::snprintf(config.public_key.data(), config.public_key.size(), "%s", HarnessRemotePublicKey);
+    std::snprintf(config.preshared_key.data(), config.preshared_key.size(), "%s", HarnessPresharedKey);
+    std::snprintf(config.allowed_ips.data(), config.allowed_ips.size(), "%s", "0.0.0.0/0, ::/0");
 
     wg_device &device = g_core_self_test_storage.device;
     if (!wg_device_init_from_config_entry(&device, config)) {
@@ -524,13 +625,13 @@ bool TestHandshakeResponseAndSessionDerivation() {
 
     ResetCoreSelfTestStorage();
     wgnx::PeerConfigEntry &initiator_config = g_core_self_test_storage.config;
-    std::snprintf(initiator_config.name, sizeof(initiator_config.name), "%s", "initiator-peer");
-    std::snprintf(initiator_config.address, sizeof(initiator_config.address), "%s", "10.66.66.2/32");
-    std::snprintf(initiator_config.endpoint, sizeof(initiator_config.endpoint), "%s", "vpn.example.test:51820");
-    std::snprintf(initiator_config.private_key, sizeof(initiator_config.private_key), "%s", HarnessLocalPrivateKey);
-    std::snprintf(initiator_config.public_key, sizeof(initiator_config.public_key), "%s", HarnessRemotePublicKey);
-    std::snprintf(initiator_config.preshared_key, sizeof(initiator_config.preshared_key), "%s", HarnessPresharedKey);
-    std::snprintf(initiator_config.allowed_ips, sizeof(initiator_config.allowed_ips), "%s", "0.0.0.0/0, ::/0");
+    std::snprintf(initiator_config.name.data(), initiator_config.name.size(), "%s", "initiator-peer");
+    std::snprintf(initiator_config.address.data(), initiator_config.address.size(), "%s", "10.66.66.2/32");
+    std::snprintf(initiator_config.endpoint.data(), initiator_config.endpoint.size(), "%s", "vpn.example.test:51820");
+    std::snprintf(initiator_config.private_key.data(), initiator_config.private_key.size(), "%s", HarnessLocalPrivateKey);
+    std::snprintf(initiator_config.public_key.data(), initiator_config.public_key.size(), "%s", HarnessRemotePublicKey);
+    std::snprintf(initiator_config.preshared_key.data(), initiator_config.preshared_key.size(), "%s", HarnessPresharedKey);
+    std::snprintf(initiator_config.allowed_ips.data(), initiator_config.allowed_ips.size(), "%s", "0.0.0.0/0, ::/0");
 
     wg_device &initiator_device = g_core_self_test_storage.device;
     if (!wg_device_init_from_config_entry(&initiator_device, initiator_config)) {
@@ -542,13 +643,13 @@ bool TestHandshakeResponseAndSessionDerivation() {
     }
 
     wgnx::PeerConfigEntry &responder_config = g_core_self_test_storage.secondary_config;
-    std::snprintf(responder_config.name, sizeof(responder_config.name), "%s", "responder-peer");
-    std::snprintf(responder_config.address, sizeof(responder_config.address), "%s", "10.66.66.1/32");
-    std::snprintf(responder_config.endpoint, sizeof(responder_config.endpoint), "%s", "0.0.0.0:0");
-    std::snprintf(responder_config.private_key, sizeof(responder_config.private_key), "%s", HarnessRemotePrivateKey);
-    std::snprintf(responder_config.public_key, sizeof(responder_config.public_key), "%s", HarnessLocalPublicKey);
-    std::snprintf(responder_config.preshared_key, sizeof(responder_config.preshared_key), "%s", HarnessPresharedKey);
-    std::snprintf(responder_config.allowed_ips, sizeof(responder_config.allowed_ips), "%s", "10.66.66.2/32");
+    std::snprintf(responder_config.name.data(), responder_config.name.size(), "%s", "responder-peer");
+    std::snprintf(responder_config.address.data(), responder_config.address.size(), "%s", "10.66.66.1/32");
+    std::snprintf(responder_config.endpoint.data(), responder_config.endpoint.size(), "%s", "0.0.0.0:0");
+    std::snprintf(responder_config.private_key.data(), responder_config.private_key.size(), "%s", HarnessRemotePrivateKey);
+    std::snprintf(responder_config.public_key.data(), responder_config.public_key.size(), "%s", HarnessLocalPublicKey);
+    std::snprintf(responder_config.preshared_key.data(), responder_config.preshared_key.size(), "%s", HarnessPresharedKey);
+    std::snprintf(responder_config.allowed_ips.data(), responder_config.allowed_ips.size(), "%s", "10.66.66.2/32");
 
     wg_device &responder_device = g_core_self_test_storage.secondary_device;
     if (!wg_device_init_from_config_entry(&responder_device, responder_config)) {
@@ -619,36 +720,130 @@ bool TestHandshakeResponseAndSessionDerivation() {
         return false;
     }
 
-    wgnx::platform::static_packet_buffer<TransportDataHeaderSize + NoiseMacSize> keepalive_buffer;
+    auto &keepalive_buffer = g_core_self_test_storage.keepalive_buffer;
     if (!noise_create_keepalive_packet(&keepalive_buffer.packet, initiator->current_keypair)) {
         return false;
     }
 
-    message_transport_data keepalive_header{};
-    if (!ParseTransportDataHeader(&keepalive_buffer.packet, &keepalive_header).success) {
+    TransportDataDecryptResult keepalive_result{};
+    const TransportDataError keepalive_error = noise_consume_transport_data_packet(
+        &keepalive_buffer.packet,
+        &responder->current_keypair,
+        {},
+        &keepalive_result);
+    if (keepalive_error != TransportDataError::None) {
         return false;
     }
     if (keepalive_buffer.packet.len != (TransportDataHeaderSize + NoiseMacSize) ||
-        keepalive_header.receiver_index != initiator->current_keypair.remote_index ||
-        keepalive_header.counter != initiator->current_keypair.send_counter) {
+        keepalive_result.header.receiver_index != initiator->current_keypair.remote_index ||
+        keepalive_result.header.counter != initiator->current_keypair.send_counter ||
+        keepalive_result.payload_size != 0) {
+        return false;
+    }
+    ++initiator->current_keypair.send_counter;
+
+    for (std::size_t i = 0; i < sizeof(g_core_self_test_storage.payload_plaintext); ++i) {
+        g_core_self_test_storage.payload_plaintext[i] = static_cast<std::uint8_t>(0x30U + i);
+    }
+
+    auto &payload_buffer = g_core_self_test_storage.payload_buffer;
+    if (noise_create_transport_data_packet(
+            &payload_buffer.packet,
+            initiator->current_keypair,
+            g_core_self_test_storage.payload_plaintext) != TransportDataError::None) {
         return false;
     }
 
-    std::uint8_t nonce[crypto::ChaCha20NonceSize]{};
-    std::uint8_t decrypted_empty = 0;
-    StoreLe64(nonce + sizeof(std::uint32_t), keepalive_header.counter);
-    const bool keepalive_decrypted = crypto::chacha20poly1305_decrypt(
-        &decrypted_empty,
-        keepalive_buffer.packet.data + TransportDataHeaderSize,
-        0,
-        keepalive_buffer.packet.data + TransportDataHeaderSize,
-        nullptr,
-        0,
-        responder->current_keypair.receiving_key.bytes,
-        nonce);
-    crypto::secure_clear(nonce, sizeof(nonce));
-    crypto::secure_clear(&decrypted_empty, sizeof(decrypted_empty));
-    if (!keepalive_decrypted) {
+    g_core_self_test_storage.responder_copy = *responder;
+
+    TransportDataDecryptResult payload_result{};
+    const TransportDataError payload_error = noise_consume_transport_data_packet(
+        &payload_buffer.packet,
+        &responder->current_keypair,
+        g_core_self_test_storage.decrypted_payload,
+        &payload_result);
+    if (payload_error != TransportDataError::None) {
+        return false;
+    }
+    if (payload_result.header.receiver_index != initiator->current_keypair.remote_index ||
+        payload_result.header.counter != initiator->current_keypair.send_counter ||
+        payload_result.payload_size != sizeof(g_core_self_test_storage.payload_plaintext) ||
+        std::memcmp(
+            g_core_self_test_storage.payload_plaintext,
+            g_core_self_test_storage.decrypted_payload,
+            sizeof(g_core_self_test_storage.payload_plaintext)) != 0) {
+        return false;
+    }
+    ++initiator->current_keypair.send_counter;
+
+    const TransportDataError replay_error = noise_consume_transport_data_packet(
+        &payload_buffer.packet,
+        &responder->current_keypair,
+        g_core_self_test_storage.decrypted_payload,
+        nullptr);
+    if (replay_error != TransportDataError::ReplayRejected) {
+        return false;
+    }
+
+    auto &mismatch_buffer = g_core_self_test_storage.mismatch_buffer;
+    std::memcpy(
+        mismatch_buffer.packet.data,
+        payload_buffer.packet.data,
+        payload_buffer.packet.len);
+    mismatch_buffer.packet.len = payload_buffer.packet.len;
+    StoreLe32(
+        mismatch_buffer.packet.data + sizeof(std::uint32_t),
+        g_core_self_test_storage.responder_copy.current_keypair.local_index ^ 0x00FF00FFU);
+    const TransportDataError mismatch_error = noise_consume_transport_data_packet(
+        &mismatch_buffer.packet,
+        &g_core_self_test_storage.responder_copy.current_keypair,
+        g_core_self_test_storage.decrypted_payload,
+        nullptr);
+    if (mismatch_error != TransportDataError::ReceiverIndexMismatch) {
+        return false;
+    }
+
+    auto &tampered_payload_buffer = g_core_self_test_storage.tampered_payload_buffer;
+    std::memcpy(
+        tampered_payload_buffer.packet.data,
+        payload_buffer.packet.data,
+        payload_buffer.packet.len);
+    tampered_payload_buffer.packet.len = payload_buffer.packet.len;
+    tampered_payload_buffer.packet.data[tampered_payload_buffer.packet.len - 1] ^= 0x80U;
+    const TransportDataError tampered_payload_error = noise_consume_transport_data_packet(
+        &tampered_payload_buffer.packet,
+        &g_core_self_test_storage.responder_copy.current_keypair,
+        g_core_self_test_storage.decrypted_payload,
+        nullptr);
+    if (tampered_payload_error != TransportDataError::AuthenticationFailed) {
+        return false;
+    }
+
+    if (noise_create_transport_data_packet(
+            &payload_buffer.packet,
+            initiator->current_keypair,
+            std::span<const std::uint8_t>(g_core_self_test_storage.payload_plaintext, 8)) != TransportDataError::None) {
+        return false;
+    }
+
+    IncomingTransportDataResult incoming_result{};
+    const TransportDataError incoming_error = noise_consume_incoming_transport_data_packet(
+        &payload_buffer.packet,
+        &responder_device,
+        &g_core_self_test_storage.responder_copy,
+        g_core_self_test_storage.decrypted_payload,
+        &incoming_result);
+    if (incoming_error != TransportDataError::None) {
+        return false;
+    }
+    if (incoming_result.slot != wg_index_slot::CurrentKeypair ||
+        incoming_result.decrypt.header.receiver_index != initiator->current_keypair.remote_index ||
+        incoming_result.decrypt.header.counter != initiator->current_keypair.send_counter ||
+        incoming_result.decrypt.payload_size != 8 ||
+        std::memcmp(
+            g_core_self_test_storage.payload_plaintext,
+            g_core_self_test_storage.decrypted_payload,
+            incoming_result.decrypt.payload_size) != 0) {
         return false;
     }
 
@@ -666,6 +861,8 @@ bool TestHandshakeResponseAndSessionDerivation() {
            responder->current_keypair.receiving_key.valid &&
            initiator->cookie.valid &&
            initiator->has_last_initiation &&
+           responder->current_keypair.has_receive_counter &&
+           responder->current_keypair.receive_counter == payload_result.header.counter &&
            std::memcmp(
                initiator->current_keypair.sending_key.bytes,
                responder->current_keypair.receiving_key.bytes,
@@ -679,6 +876,88 @@ bool TestHandshakeResponseAndSessionDerivation() {
                ZeroMac,
                NoiseMacSize) != 0;
 }
+
+#if WGNX_ENABLE_DEBUG_PROBE
+bool TestDebugProbeStatusTransitions() {
+    return CanTransitionDebugProbeStatus(wgnx::DebugProbeStatus::None, wgnx::DebugProbeStatus::Queued) &&
+           CanTransitionDebugProbeStatus(wgnx::DebugProbeStatus::Queued, wgnx::DebugProbeStatus::Sent) &&
+           CanTransitionDebugProbeStatus(wgnx::DebugProbeStatus::Sent, wgnx::DebugProbeStatus::ReplyValidated) &&
+           CanTransitionDebugProbeStatus(wgnx::DebugProbeStatus::Sent, wgnx::DebugProbeStatus::ReplyRejected) &&
+           CanTransitionDebugProbeStatus(wgnx::DebugProbeStatus::Sent, wgnx::DebugProbeStatus::TimedOut) &&
+           CanTransitionDebugProbeStatus(wgnx::DebugProbeStatus::ReplyValidated, wgnx::DebugProbeStatus::Queued) &&
+           CanTransitionDebugProbeStatus(wgnx::DebugProbeStatus::BuildFailed, wgnx::DebugProbeStatus::Queued) &&
+           !CanTransitionDebugProbeStatus(wgnx::DebugProbeStatus::Queued, wgnx::DebugProbeStatus::ReplyValidated) &&
+           !CanTransitionDebugProbeStatus(wgnx::DebugProbeStatus::TimedOut, wgnx::DebugProbeStatus::ReplyValidated) &&
+           !CanTransitionDebugProbeStatus(wgnx::DebugProbeStatus::ReplyRejected, wgnx::DebugProbeStatus::TimedOut);
+}
+
+bool TestDebugProbeIcmpRoundTrip() {
+    std::array<std::uint8_t, DebugProbePacketSize> reply{};
+    if (!BuildHarnessDebugProbeReply(
+            std::addressof(reply),
+            wgnx::DebugTriggerAction::PingTunnelPeer,
+            0x01020304U,
+            2)) {
+        wgnx::sysmodule::logger::Log("Debug probe self-test: failed to build synthetic reply");
+        return false;
+    }
+
+    DebugProbeReplyInfo info{};
+    const DebugProbeReplyValidation validation = ValidateDebugIcmpEchoReply(
+        reply,
+        "10.13.13.2/32",
+        2,
+        0x01020304U,
+        std::addressof(info));
+    if (validation != DebugProbeReplyValidation::Valid) {
+        wgnx::sysmodule::logger::Log(
+            "Debug probe self-test: unexpected validation=%s",
+            GetDebugProbeReplyValidationName(validation));
+        return false;
+    }
+    if (info.action != wgnx::DebugTriggerAction::PingTunnelPeer ||
+        info.activation_generation != 0x01020304U ||
+        info.peer_index != 2 ||
+        info.source_ipv4 != std::array<std::uint8_t, 4>{10, 13, 13, 1} ||
+        info.destination_ipv4 != std::array<std::uint8_t, 4>{10, 13, 13, 2}) {
+        wgnx::sysmodule::logger::Log(
+            "Debug probe self-test: info mismatch action=%s activation=%u peer=%u src=%u.%u.%u.%u dst=%u.%u.%u.%u",
+            wgnx::GetDebugTriggerActionName(info.action),
+            info.activation_generation,
+            static_cast<unsigned int>(info.peer_index),
+            static_cast<unsigned int>(info.source_ipv4[0]),
+            static_cast<unsigned int>(info.source_ipv4[1]),
+            static_cast<unsigned int>(info.source_ipv4[2]),
+            static_cast<unsigned int>(info.source_ipv4[3]),
+            static_cast<unsigned int>(info.destination_ipv4[0]),
+            static_cast<unsigned int>(info.destination_ipv4[1]),
+            static_cast<unsigned int>(info.destination_ipv4[2]),
+            static_cast<unsigned int>(info.destination_ipv4[3]));
+        return false;
+    }
+
+    reply[12] ^= 0x01U;
+    reply[10] = 0;
+    reply[11] = 0;
+    StoreHarnessBigEndian16(
+        reply.data() + 10,
+        ComputeHarnessInternetChecksum(reply.data(), DebugProbeIpv4HeaderSize));
+    const DebugProbeReplyValidation mismatch_validation = ValidateDebugIcmpEchoReply(
+        reply,
+        "10.13.13.2/32",
+        2,
+        0x01020304U,
+        nullptr);
+    if (mismatch_validation != DebugProbeReplyValidation::SourceMismatch) {
+        wgnx::sysmodule::logger::Log(
+            "Debug probe self-test: expected source_mismatch got=%s",
+            GetDebugProbeReplyValidationName(mismatch_validation));
+        return false;
+    }
+
+    return true;
+}
+#endif
 
 } // namespace
 
@@ -719,7 +998,13 @@ bool RunCoreSelfTest() {
         TestDeviceAndPeerSkeleton() &&
         TestStaticIdentityParsing() &&
         TestHandshakeInitiationCreation() &&
-        TestHandshakeResponseAndSessionDerivation();
+        TestHandshakeResponseAndSessionDerivation()
+#if WGNX_ENABLE_DEBUG_PROBE
+        &&
+        TestDebugProbeStatusTransitions() &&
+        TestDebugProbeIcmpRoundTrip()
+#endif
+        ;
     ResetCoreSelfTestStorage();
 
     if (ok) {

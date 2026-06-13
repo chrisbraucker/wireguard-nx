@@ -32,6 +32,7 @@ INCLUDES	+=	../common/include \
 			$(TOPDIR)/lib/Atmosphere-libs/libstratosphere/include \
 			$(TOPDIR)/lib/Atmosphere-libs/libvapours/include
 LIBNAMES	:= Atmosphere-libs/libstratosphere
+WGNX_ENABLE_DEBUG_PROBE ?= 0
 
 HOST_CXX	?= g++
 HOST_CC		?= cc
@@ -42,6 +43,7 @@ HOST_TEST_CPP_SOURCES := \
 	src/wireguard/dispatch.cpp \
 	src/wireguard/index_allocator.cpp \
 	src/wireguard/session.cpp \
+	src/wireguard/data.cpp \
 	src/wireguard/handshake.cpp \
 	src/wireguard/timers.cpp \
 	src/wireguard/peer.cpp \
@@ -50,6 +52,9 @@ HOST_TEST_CPP_SOURCES := \
 	src/wireguard/crypto/primitives.cpp \
 	test/host/host_stubs.cpp \
 	test/host/main.cpp
+ifeq ($(WGNX_ENABLE_DEBUG_PROBE),1)
+HOST_TEST_CPP_SOURCES += src/wireguard/debug_probe.cpp
+endif
 HOST_TEST_C_SOURCES := src/wireguard/crypto/monocypher.c
 HOST_TEST_INCLUDES := \
 	-I$(CURDIR)/test/host/include \
@@ -68,11 +73,12 @@ BUILD_ID		:= $(shell git describe --always --dirty 2>/dev/null || echo "unknown"
 DEFINES	+=	-DDISABLE_IPC -D__SWITCH__ \
 	-DTARGET="\"$(TARGET)\"" \
 	-DVERSION="\"$(APP_VERSION)\"" \
-	-DBUILD_ID="\"$(BUILD_ID)\""
+	-DBUILD_ID="\"$(BUILD_ID)\"" \
+	-DWGNX_ENABLE_DEBUG_PROBE=$(WGNX_ENABLE_DEBUG_PROBE)
 
 CFLAGS	+= $(INCLUDE) -Wno-unused-result
 
-CXXFLAGS	+= $(CFLAGS)
+CXXFLAGS	+= $(CFLAGS) -std=c++23
 
 #---------------------------------------------------------------------------------
 # list of directories containing libraries, this must be the top level containing
@@ -89,6 +95,7 @@ ifneq ($(BUILD),$(notdir $(CURDIR)))
 
 export OUTPUT	:=	$(CURDIR)/$(OUTDIR)/$(TARGET)
 export TOPDIR	:=	$(CURDIR)
+export WGNX_ENABLE_DEBUG_PROBE := $(WGNX_ENABLE_DEBUG_PROBE)
 
 export VPATH	:=	$(foreach dir,$(SOURCES),$(CURDIR)/$(dir)) \
 			$(foreach dir,$(DATA),$(CURDIR)/$(dir))
@@ -97,6 +104,9 @@ export DEPSDIR	:=	$(CURDIR)/$(BUILD)
 
 CFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
 CPPFILES	:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))
+ifeq ($(WGNX_ENABLE_DEBUG_PROBE),0)
+	CPPFILES := $(filter-out debug_probe.cpp,$(CPPFILES))
+endif
 SFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.s)))
 BINFILES	:=	$(foreach dir,$(DATA),$(notdir $(wildcard $(dir)/*.*)))
 
@@ -148,7 +158,7 @@ test: $(HOST_TEST_TARGET)
 $(HOST_TEST_TARGET): $(HOST_TEST_CPP_SOURCES) $(HOST_TEST_C_SOURCES)
 	@[ -d $(HOST_TEST_DIR) ] || mkdir -p $(HOST_TEST_DIR)
 	@$(HOST_CC) -std=c11 -I$(CURDIR)/src/wireguard/crypto -c $(CURDIR)/src/wireguard/crypto/monocypher.c -o $(HOST_TEST_DIR)/monocypher.o
-	@$(HOST_CXX) -std=c++20 $(HOST_TEST_INCLUDES) $(addprefix $(CURDIR)/,$(HOST_TEST_CPP_SOURCES)) $(HOST_TEST_DIR)/monocypher.o -o $(HOST_TEST_TARGET)
+	@$(HOST_CXX) -std=c++23 -DWGNX_ENABLE_DEBUG_PROBE=$(WGNX_ENABLE_DEBUG_PROBE) $(HOST_TEST_INCLUDES) $(addprefix $(CURDIR)/,$(HOST_TEST_CPP_SOURCES)) $(HOST_TEST_DIR)/monocypher.o -o $(HOST_TEST_TARGET)
 
 libs	:
 	@$(foreach lib,$(LIBNAMES),$(MAKE) --no-print-directory -C $(TOPDIR)/lib/$(lib) && ) true

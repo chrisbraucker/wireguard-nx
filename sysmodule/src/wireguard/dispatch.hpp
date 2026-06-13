@@ -4,6 +4,8 @@
 
 #include "wireguard/messages.hpp"
 
+#include <span>
+
 namespace wgnx::wireguard {
 
 struct PacketDispatchHandlers {
@@ -14,8 +16,7 @@ struct PacketDispatchHandlers {
     void (*transport_data)(
         void *context,
         const message_transport_data &header,
-        const std::uint8_t *payload,
-        std::size_t payload_size){nullptr};
+        std::span<const std::uint8_t> payload){nullptr};
 };
 
 ParseResult DispatchPacket(

@@ -16,7 +16,10 @@ struct WireGuardPeer {
     std::int32_t lastHandshake;
     std::int32_t lastRx;
     std::int32_t lastTx;
+    std::int32_t lastDebugProbe;
     std::uint32_t lastErrorCode;
+    std::uint32_t debugProbeAction;
+    std::uint32_t debugProbeStatus;
     std::uint16_t persistentKeepaliveInterval;
     std::uint8_t runtimeState;
     std::uint8_t errorStage;

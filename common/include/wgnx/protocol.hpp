@@ -17,6 +17,28 @@ enum class CommandId : std::uint32_t {
     GetBuildInfo = 3,
     SetActivePeer = 10,
     SetAutoStartPeer = 11,
+#if WGNX_ENABLE_DEBUG_PROBE
+    TriggerDebugPayload = 20,
+#endif
+};
+
+enum class DebugTriggerAction : std::uint32_t {
+    None = 0,
+    PingTunnelPeer = 1,
+    PingPublicDns = 2,
+};
+
+enum class DebugProbeStatus : std::uint32_t {
+    None = 0,
+    Queued = 1,
+    Sent = 2,
+    ReplyValidated = 3,
+    ReplyRejected = 4,
+    TimedOut = 5,
+    StaleActivation = 6,
+    InvalidState = 7,
+    BuildFailed = 8,
+    SendFailed = 9,
 };
 
 enum PeerFlags : std::uint8_t {
@@ -81,7 +103,10 @@ struct PeerInfo {
     std::int32_t last_handshake_seconds;
     std::int32_t last_rx_seconds;
     std::int32_t last_tx_seconds;
+    std::int32_t last_debug_probe_seconds;
     std::uint32_t last_error_code;
+    std::uint32_t debug_probe_action;
+    std::uint32_t debug_probe_status;
     std::uint16_t persistent_keepalive_interval;
     std::uint8_t runtime_state;
     std::uint8_t error_stage;
@@ -113,6 +138,11 @@ struct BuildInfo {
 
 struct PeerSelectionRequest {
     std::int32_t peer_index;
+    std::uint32_t reserved;
+};
+
+struct DebugTriggerRequest {
+    std::uint32_t action;
     std::uint32_t reserved;
 };
 
@@ -198,6 +228,46 @@ constexpr inline const char *GetPeerResolvedFamilyName(PeerResolvedFamily family
     return "unknown";
 }
 
+constexpr inline const char *GetDebugTriggerActionName(DebugTriggerAction action) {
+    switch (action) {
+        case DebugTriggerAction::None:
+            return "none";
+        case DebugTriggerAction::PingTunnelPeer:
+            return "ping-tunnel-peer";
+        case DebugTriggerAction::PingPublicDns:
+            return "ping-public-dns";
+    }
+
+    return "unknown";
+}
+
+constexpr inline const char *GetDebugProbeStatusName(DebugProbeStatus status) {
+    switch (status) {
+        case DebugProbeStatus::None:
+            return "none";
+        case DebugProbeStatus::Queued:
+            return "queued";
+        case DebugProbeStatus::Sent:
+            return "sent";
+        case DebugProbeStatus::ReplyValidated:
+            return "reply validated";
+        case DebugProbeStatus::ReplyRejected:
+            return "reply rejected";
+        case DebugProbeStatus::TimedOut:
+            return "timed out";
+        case DebugProbeStatus::StaleActivation:
+            return "stale activation";
+        case DebugProbeStatus::InvalidState:
+            return "invalid state";
+        case DebugProbeStatus::BuildFailed:
+            return "build failed";
+        case DebugProbeStatus::SendFailed:
+            return "send failed";
+    }
+
+    return "unknown";
+}
+
 static_assert(std::is_standard_layout_v<PeerInfo>);
 static_assert(std::is_trivially_copyable_v<PeerInfo>);
 static_assert(std::is_standard_layout_v<DaemonStatus>);
@@ -206,5 +276,7 @@ static_assert(std::is_standard_layout_v<BuildInfo>);
 static_assert(std::is_trivially_copyable_v<BuildInfo>);
 static_assert(std::is_standard_layout_v<PeerSelectionRequest>);
 static_assert(std::is_trivially_copyable_v<PeerSelectionRequest>);
+static_assert(std::is_standard_layout_v<DebugTriggerRequest>);
+static_assert(std::is_trivially_copyable_v<DebugTriggerRequest>);
 
 } // namespace wgnx

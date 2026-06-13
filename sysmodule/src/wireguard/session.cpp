@@ -4,6 +4,8 @@
 
 #include <cstddef>
 #include <cstring>
+#include <span>
+#include <string_view>
 
 namespace wgnx::wireguard {
 
@@ -53,19 +55,18 @@ void ClampX25519PrivateKey(std::uint8_t bytes[NoisePublicKeySize]) {
     bytes[31] |= 64U;
 }
 
-bool DecodeWireGuardKey(std::uint8_t out[NoisePublicKeySize], const char *text) {
-    if (out == nullptr || text == nullptr) {
+bool DecodeWireGuardKey(std::uint8_t out[NoisePublicKeySize], std::string_view text) {
+    if (out == nullptr) {
         return false;
     }
 
-    const std::size_t length = std::strlen(text);
-    if (length != WireGuardEncodedKeySize || text[WireGuardEncodedKeySize - 1] != '=') {
+    if (text.size() != WireGuardEncodedKeySize || text.back() != '=') {
         return false;
     }
 
     std::size_t out_index = 0;
-    for (std::size_t i = 0; i < length; i += 4) {
-        const bool last_group = (i + 4) == length;
+    for (std::size_t i = 0; i < text.size(); i += 4) {
+        const bool last_group = (i + 4) == text.size();
         const int a = DecodeBase64Char(text[i]);
         const int b = DecodeBase64Char(text[i + 1]);
         const int c = text[i + 2] == '=' ? -2 : DecodeBase64Char(text[i + 2]);
@@ -111,8 +112,8 @@ bool DecodeWireGuardKey(std::uint8_t out[NoisePublicKeySize], const char *text) 
     return out_index == NoisePublicKeySize;
 }
 
-bool EncodeWireGuardKey(char *out_text, std::size_t out_size, const std::uint8_t bytes[NoisePublicKeySize]) {
-    if (out_text == nullptr || bytes == nullptr || out_size < (WireGuardEncodedKeySize + 1)) {
+bool EncodeWireGuardKey(std::span<char> out_text, const std::uint8_t bytes[NoisePublicKeySize]) {
+    if (bytes == nullptr || out_text.size() < (WireGuardEncodedKeySize + 1)) {
         return false;
     }
 
@@ -188,11 +189,8 @@ void noise_keypair_reset(noise_keypair *keypair) {
     crypto::secure_clear(keypair, sizeof(*keypair));
 }
 
-bool noise_is_valid_encoded_key(const char *text, bool allow_empty) {
-    if (text == nullptr) {
-        return false;
-    }
-    if (text[0] == '\0') {
+bool noise_is_valid_encoded_key(std::string_view text, bool allow_empty) {
+    if (text.empty()) {
         return allow_empty;
     }
 
@@ -202,8 +200,8 @@ bool noise_is_valid_encoded_key(const char *text, bool allow_empty) {
     return ok;
 }
 
-bool noise_parse_private_key(noise_private_key *out_key, const char *text) {
-    if (out_key == nullptr || text == nullptr) {
+bool noise_parse_private_key(noise_private_key *out_key, std::string_view text) {
+    if (out_key == nullptr) {
         return false;
     }
 
@@ -223,8 +221,8 @@ bool noise_parse_private_key(noise_private_key *out_key, const char *text) {
     return true;
 }
 
-bool noise_parse_public_key(noise_public_key *out_key, const char *text) {
-    if (out_key == nullptr || text == nullptr) {
+bool noise_parse_public_key(noise_public_key *out_key, std::string_view text) {
+    if (out_key == nullptr) {
         return false;
     }
 
@@ -238,8 +236,8 @@ bool noise_parse_public_key(noise_public_key *out_key, const char *text) {
     return true;
 }
 
-bool noise_parse_preshared_key(noise_symmetric_key *out_key, const char *text) {
-    if (out_key == nullptr || text == nullptr || text[0] == '\0') {
+bool noise_parse_preshared_key(noise_symmetric_key *out_key, std::string_view text) {
+    if (out_key == nullptr || text.empty()) {
         return false;
     }
 
@@ -253,19 +251,15 @@ bool noise_parse_preshared_key(noise_symmetric_key *out_key, const char *text) {
     return true;
 }
 
-bool noise_public_key_to_text(char *out_text, std::size_t out_size, const noise_public_key *key) {
-    if (out_text == nullptr || key == nullptr || !key->valid) {
+bool noise_public_key_to_text(std::span<char> out_text, const noise_public_key *key) {
+    if (key == nullptr || !key->valid) {
         return false;
     }
 
-    return EncodeWireGuardKey(out_text, out_size, key->bytes);
+    return EncodeWireGuardKey(out_text, key->bytes);
 }
 
-bool noise_derive_public_key_text(char *out_text, std::size_t out_size, const char *private_key_text) {
-    if (out_text == nullptr || private_key_text == nullptr) {
-        return false;
-    }
-
+bool noise_derive_public_key_text(std::span<char> out_text, std::string_view private_key_text) {
     noise_private_key private_key{};
     noise_public_key public_key{};
     if (!noise_parse_private_key(&private_key, private_key_text) ||
@@ -276,7 +270,7 @@ bool noise_derive_public_key_text(char *out_text, std::size_t out_size, const ch
     }
 
     public_key.valid = true;
-    const bool ok = noise_public_key_to_text(out_text, out_size, &public_key);
+    const bool ok = noise_public_key_to_text(out_text, &public_key);
     crypto::secure_clear(&private_key, sizeof(private_key));
     crypto::secure_clear(&public_key, sizeof(public_key));
     return ok;
@@ -284,11 +278,10 @@ bool noise_derive_public_key_text(char *out_text, std::size_t out_size, const ch
 
 bool noise_static_identity_init(
     noise_static_identity *identity,
-    const char *private_key_text,
-    const char *peer_public_key_text,
-    const char *preshared_key_text) {
-    if (identity == nullptr || private_key_text == nullptr || peer_public_key_text == nullptr ||
-        preshared_key_text == nullptr) {
+    std::string_view private_key_text,
+    std::string_view peer_public_key_text,
+    std::string_view preshared_key_text) {
+    if (identity == nullptr) {
         return false;
     }
 
@@ -306,7 +299,7 @@ bool noise_static_identity_init(
         noise_static_identity_reset(identity);
         return false;
     }
-    if (preshared_key_text[0] != '\0' &&
+    if (!preshared_key_text.empty() &&
         !noise_parse_preshared_key(&identity->preshared_key, preshared_key_text)) {
         noise_static_identity_reset(identity);
         return false;

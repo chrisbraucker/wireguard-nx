@@ -120,8 +120,30 @@ tsl::elm::Element* GuiMain::createUI() {
             renderer->drawString("Last RX: " + moment(peer.lastRx) + ",   Last TX: " + moment(peer.lastTx), false, x + 15, y + 110, 15, tsl::infoTextColor);
             renderer->drawString("RX: " + formatBytes(peer.rxBytes) + ",   TX: " + formatBytes(peer.txBytes), false, x + 15, y + 130, 15, tsl::infoTextColor);
             renderer->drawString("Keepalive: " + (peer.persistentKeepaliveInterval > 0 ? (std::to_string(peer.persistentKeepaliveInterval) + "s") : std::string("false")), false, x + 15, y + 150, 15, tsl::infoTextColor);
+#if WGNX_ENABLE_DEBUG_PROBE
+            if (peer.debugProbeStatus != static_cast<std::uint32_t>(wgnx::DebugProbeStatus::None)) {
+                renderer->drawString(
+                    "Probe: " +
+                        std::string(wgnx::GetDebugTriggerActionName(static_cast<wgnx::DebugTriggerAction>(peer.debugProbeAction))) +
+                        " / " +
+                        std::string(wgnx::GetDebugProbeStatusName(static_cast<wgnx::DebugProbeStatus>(peer.debugProbeStatus))) +
+                        " / " +
+                        moment(peer.lastDebugProbe),
+                    false,
+                    x + 15,
+                    y + 170,
+                    15,
+                    peer.debugProbeStatus == static_cast<std::uint32_t>(wgnx::DebugProbeStatus::ReplyValidated)
+                        ? tsl::infoTextColor
+                        : tsl::warningTextColor);
+            }
+#endif
             if (peer.hasError) {
+#if WGNX_ENABLE_DEBUG_PROBE
+                renderer->drawString("Error: " + peerErrorStage(peer.errorStage) + " / " + peerErrorCode(peer.lastErrorCode), false, x + 15, y + (peer.debugProbeStatus != static_cast<std::uint32_t>(wgnx::DebugProbeStatus::None) ? 190 : 170), 15, tsl::warningTextColor);
+#else
                 renderer->drawString("Error: " + peerErrorStage(peer.errorStage) + " / " + peerErrorCode(peer.lastErrorCode), false, x + 15, y + 170, 15, tsl::warningTextColor);
+#endif
             }
         });
         peerList->addItem(m_peerInfoDrawer);
@@ -183,7 +205,10 @@ bool GuiMain::getPeers(std::vector<WireGuardPeer>& peers) {
             .lastHandshake = remote.last_handshake_seconds,
             .lastRx = remote.last_rx_seconds,
             .lastTx = remote.last_tx_seconds,
+            .lastDebugProbe = remote.last_debug_probe_seconds,
             .lastErrorCode = remote.last_error_code,
+            .debugProbeAction = remote.debug_probe_action,
+            .debugProbeStatus = remote.debug_probe_status,
             .persistentKeepaliveInterval = remote.persistent_keepalive_interval,
             .runtimeState = remote.runtime_state,
             .errorStage = remote.error_stage,
@@ -220,7 +245,10 @@ bool GuiMain::refreshPeers() {
         peer.lastHandshake = remote_peer->lastHandshake;
         peer.lastRx = remote_peer->lastRx;
         peer.lastTx = remote_peer->lastTx;
+        peer.lastDebugProbe = remote_peer->lastDebugProbe;
         peer.lastErrorCode = remote_peer->lastErrorCode;
+        peer.debugProbeAction = remote_peer->debugProbeAction;
+        peer.debugProbeStatus = remote_peer->debugProbeStatus;
         peer.persistentKeepaliveInterval = remote_peer->persistentKeepaliveInterval;
         peer.runtimeState = remote_peer->runtimeState;
         peer.errorStage = remote_peer->errorStage;

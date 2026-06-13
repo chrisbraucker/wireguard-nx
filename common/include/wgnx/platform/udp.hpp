@@ -1,7 +1,10 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <span>
+#include <string_view>
 
 #include "wgnx/protocol.hpp"
 
@@ -20,7 +23,7 @@ static_assert(static_cast<std::uint8_t>(address_family::inet6) == static_cast<st
 struct endpoint {
     address_family family{address_family::unspecified};
     std::uint16_t port{0};
-    std::uint8_t address[16]{};
+    std::array<std::uint8_t, 16> address{};
 };
 
 struct endpoint_resolution_result {
@@ -28,7 +31,7 @@ struct endpoint_resolution_result {
     wgnx::PeerErrorStage error_stage{wgnx::PeerErrorStage::None};
     wgnx::PeerErrorCode error_code{wgnx::PeerErrorCode::None};
     endpoint resolved{};
-    char text[sizeof(wgnx::PeerInfo::resolved_endpoint)]{};
+    std::array<char, sizeof(wgnx::PeerInfo::resolved_endpoint)> text{};
 };
 
 using socket_handle = std::int32_t;
@@ -49,8 +52,8 @@ enum class socket_error : std::uint32_t {
  * code stay independent of Horizon networking headers, while the Horizon
  * adapter remains responsible for translating to native socket types.
  */
-endpoint_resolution_result resolve_endpoint(const char *configured_endpoint);
-bool endpoint_to_string(const endpoint *endpoint, char *out_text, std::size_t out_text_size);
+endpoint_resolution_result resolve_endpoint(std::string_view configured_endpoint);
+bool endpoint_to_string(const endpoint &endpoint, std::span<char> out_text);
 
 /*
  * Deviation from Linux:
@@ -62,7 +65,15 @@ constexpr inline socket_handle InvalidSocket = -1;
 
 socket_error udp_open(socket_handle *out_socket, address_family family);
 void udp_close(socket_handle socket);
-socket_error udp_send(socket_handle socket, const endpoint *destination, const void *data, std::size_t size, std::size_t *out_sent);
-socket_error udp_receive(socket_handle socket, void *buffer, std::size_t capacity, std::size_t *out_received, endpoint *out_source);
+socket_error udp_send(
+    socket_handle socket,
+    const endpoint &destination,
+    std::span<const std::uint8_t> data,
+    std::size_t *out_sent);
+socket_error udp_receive(
+    socket_handle socket,
+    std::span<std::uint8_t> buffer,
+    std::size_t *out_received,
+    endpoint *out_source);
 
 } // namespace wgnx::platform

@@ -70,7 +70,7 @@ void SetError(ConfigParseError *error, std::size_t line, const char *message) {
 }
 
 template<std::size_t Size>
-bool CopyField(char (&dst)[Size], const char *value, ConfigParseError *error, std::size_t line, const char *field_name) {
+bool CopyField(std::array<char, Size> &dst, const char *value, ConfigParseError *error, std::size_t line, const char *field_name) {
     if (value == nullptr) {
         SetError(error, line, "value is null");
         return false;
@@ -84,7 +84,7 @@ bool CopyField(char (&dst)[Size], const char *value, ConfigParseError *error, st
         return false;
     }
 
-    std::memcpy(dst, value, length + 1);
+    std::memcpy(dst.data(), value, length + 1);
     return true;
 }
 
@@ -394,14 +394,14 @@ bool LoadConnectionFile(wgnx::PeerConfigEntry *out, const ConfigFileCandidate &c
     }
 
     std::array<char, MaxResolvedPathBytes> resolved_path = {};
-    const ams::Result resolve_rc = fs_runtime::ResolveSdPath(resolved_path.data(), resolved_path.size(), config_path.data());
+    const ams::Result resolve_rc = fs_runtime::ResolveSdPath(resolved_path, config_path.data());
     if (R_FAILED(resolve_rc)) {
         logger::Log("Connection config path '%s' is invalid: rc=0x%08x", config_path.data(), static_cast<u32>(resolve_rc.GetValue()));
         return false;
     }
 
     std::size_t size = 0;
-    const ams::Result read_rc = fs_runtime::ReadTextFile(config_path.data(), g_config_buffer.data(), g_config_buffer.size(), &size);
+    const ams::Result read_rc = fs_runtime::ReadTextFile(config_path.data(), g_config_buffer, &size);
     if (R_FAILED(read_rc)) {
         logger::Log("Connection config '%s' could not be read: rc=0x%08x", resolved_path.data(), static_cast<u32>(read_rc.GetValue()));
         return false;
@@ -451,7 +451,7 @@ bool LoadConnectionFile(wgnx::PeerConfigEntry *out, const ConfigFileCandidate &c
         return false;
     }
 
-    std::snprintf(out->name, sizeof(out->name), "%s", candidate.peer_name);
+    std::snprintf(out->name.data(), out->name.size(), "%s", candidate.peer_name);
     logger::Log("Loaded connection '%s' from '%s'", out->name, resolved_path.data());
     return true;
 }
@@ -471,7 +471,7 @@ bool LoadPeerConfig(wgnx::PeerConfigSet *out) {
     }
 
     std::array<char, MaxResolvedPathBytes> config_dir_path = {};
-    const ams::Result resolve_rc = fs_runtime::ResolveSdPath(config_dir_path.data(), config_dir_path.size(), wgnx::ConfigPath);
+    const ams::Result resolve_rc = fs_runtime::ResolveSdPath(config_dir_path, wgnx::ConfigPath);
     if (R_FAILED(resolve_rc)) {
         logger::Log("Config directory path '%s' is invalid: rc=0x%08x", wgnx::ConfigPath, static_cast<u32>(resolve_rc.GetValue()));
         return false;
@@ -561,7 +561,7 @@ bool LoadAutoStartPeerName(char *out_name, std::size_t out_name_size) {
 
     std::array<char, MaxAutoStartBytes + 1> buffer{};
     std::size_t size = 0;
-    const ams::Result rc = fs_runtime::ReadTextFile(wgnx::AutoStartPath, buffer.data(), buffer.size(), &size);
+    const ams::Result rc = fs_runtime::ReadTextFile(wgnx::AutoStartPath, buffer, &size);
     if (R_FAILED(rc)) {
         if (!ams::fs::ResultPathNotFound::Includes(rc)) {
             logger::Log("Autostart file '%s' could not be read: rc=0x%08x", wgnx::AutoStartPath, static_cast<u32>(rc.GetValue()));
@@ -608,7 +608,7 @@ ams::Result StoreAutoStartPeerName(const char *name) {
 
     const std::size_t length = std::strlen(name);
     R_UNLESS(length < sizeof(wgnx::PeerInfo::name), ams::fs::ResultTooLongPath());
-    R_TRY(fs_runtime::WriteTextFile(wgnx::AutoStartPath, name, length));
+    R_TRY(fs_runtime::WriteTextFile(wgnx::AutoStartPath, std::string_view{name, length}));
     logger::Log("Stored autostart peer '%s'", name);
     R_SUCCEED();
 }

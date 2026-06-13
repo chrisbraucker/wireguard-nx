@@ -54,10 +54,10 @@ bool wg_device_init_from_config_entry(wg_device *device, const wgnx::PeerConfigE
     }
 
     wg_device_reset(device);
-    std::snprintf(device->name, sizeof(device->name), "%s", config.name);
-    std::snprintf(device->interface_address, sizeof(device->interface_address), "%s", config.address);
-    std::snprintf(device->private_key, sizeof(device->private_key), "%s", config.private_key);
-    std::snprintf(device->dns, sizeof(device->dns), "%s", config.dns);
+    std::snprintf(device->name, sizeof(device->name), "%s", config.name.data());
+    std::snprintf(device->interface_address, sizeof(device->interface_address), "%s", config.address.data());
+    std::snprintf(device->private_key, sizeof(device->private_key), "%s", config.private_key.data());
+    std::snprintf(device->dns, sizeof(device->dns), "%s", config.dns.data());
     device->listen_port = config.listen_port;
     device->mtu = config.mtu;
     device->has_private_key = config.private_key[0] != '\0';
@@ -66,7 +66,7 @@ bool wg_device_init_from_config_entry(wg_device *device, const wgnx::PeerConfigE
     wg_device_clear_index_registry(device);
 
     wg_peer_init_from_config(&device->peers[0], config);
-    if (!wg_peer_prepare_static_identity(&device->peers[0], config.private_key)) {
+    if (!wg_peer_prepare_static_identity(&device->peers[0], config.private_key.data())) {
         wg_device_reset(device);
         return false;
     }
@@ -161,6 +161,30 @@ bool wg_device_index_matches_slot(const wg_device *device, wg_index_slot slot, s
     }
 
     return false;
+}
+
+noise_keypair *wg_peer_keypair_for_slot(wg_peer *peer, wg_index_slot slot) {
+    if (peer == nullptr) {
+        return nullptr;
+    }
+
+    switch (slot) {
+        case wg_index_slot::CurrentKeypair:
+            return &peer->current_keypair;
+        case wg_index_slot::NextKeypair:
+            return &peer->next_keypair;
+        case wg_index_slot::PreviousKeypair:
+            return &peer->previous_keypair;
+        case wg_index_slot::Handshake:
+        case wg_index_slot::None:
+            return nullptr;
+    }
+
+    return nullptr;
+}
+
+const noise_keypair *wg_peer_keypair_for_slot(const wg_peer *peer, wg_index_slot slot) {
+    return wg_peer_keypair_for_slot(const_cast<wg_peer *>(peer), slot);
 }
 
 wg_peer *wg_device_first_peer(wg_device *device) {
