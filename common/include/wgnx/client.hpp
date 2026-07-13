@@ -137,6 +137,44 @@ inline Result TriggerDebugPayload(DebugTriggerAction action) {
 
     return serviceDispatchIn(service.get(), static_cast<std::uint32_t>(CommandId::TriggerDebugPayload), request);
 }
+
+inline Result SubmitInnerIpv4Packet(
+    const void *packet,
+    std::size_t packet_size,
+    PacketSubmissionResult *out_result) {
+    ScopedService service;
+    Result rc = service.open();
+    if (R_FAILED(rc)) {
+        return rc;
+    }
+
+    return serviceDispatchOut(
+        service.get(),
+        static_cast<std::uint32_t>(CommandId::SubmitInnerIpv4Packet),
+        *out_result,
+        .buffer_attrs = { SfBufferAttr_HipcMapAlias | SfBufferAttr_In },
+        .buffers = { { packet, packet_size } },
+        .in_send_pid = true);
+}
+
+inline Result ReceiveInnerIpv4Packet(
+    void *packet,
+    std::size_t packet_capacity,
+    PacketReceiveResult *out_result) {
+    ScopedService service;
+    Result rc = service.open();
+    if (R_FAILED(rc)) {
+        return rc;
+    }
+
+    return serviceDispatchOut(
+        service.get(),
+        static_cast<std::uint32_t>(CommandId::ReceiveInnerIpv4Packet),
+        *out_result,
+        .buffer_attrs = { SfBufferAttr_HipcMapAlias | SfBufferAttr_Out },
+        .buffers = { { packet, packet_capacity } },
+        .in_send_pid = true);
+}
 #endif
 
 } // namespace wgnx::client

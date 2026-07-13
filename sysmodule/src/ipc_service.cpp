@@ -12,6 +12,7 @@
 #endif
 #include "wireguard/device.hpp"
 #include "wireguard/handshake.hpp"
+#include "wireguard/inner_packet.hpp"
 #include "wireguard/session.hpp"
 #include "wireguard/timers.hpp"
 
@@ -129,6 +130,19 @@ struct PayloadProbeTimeoutDispatcher {
     wgnx::platform::timer_list timer{};
 };
 constinit PayloadProbeTimeoutDispatcher g_payload_probe_timeout_dispatcher = {};
+#if WGNX_ENABLE_DEBUG_PROBE
+constexpr inline std::size_t InnerPacketQueueCapacity = 8;
+wgnx::wireguard::InnerPacketQueue<InnerPacketQueueCapacity> g_inner_packet_tx_queue{};
+wgnx::wireguard::InnerPacketQueue<InnerPacketQueueCapacity> g_inner_packet_rx_queue{};
+std::uint64_t g_inner_packet_owner_process_id = 0;
+std::uint64_t g_next_inner_packet_id = 1;
+struct InnerPacketSubmissionDispatcher {
+    wgnx::platform::work_struct work{};
+};
+constinit InnerPacketSubmissionDispatcher g_inner_packet_submission_dispatcher = {};
+wgnx::platform::workqueue_struct *g_inner_packet_submission_workqueue = nullptr;
+bool g_inner_packet_authorization_ready = false;
+#endif
 
 constexpr inline wgnx::platform::jiffies_t SimulatedHandshakeRetransmitJiffies = 5U * wgnx::platform::HZ;
 constexpr inline wgnx::platform::jiffies_t SimulatedRekeyJiffies = 120U * wgnx::platform::HZ;
@@ -138,7 +152,11 @@ constexpr inline wgnx::platform::jiffies_t DebugProbeTimeoutJiffies = 5U * wgnx:
 constexpr inline std::uint32_t MaxHandshakeSendAttempts = 5;
 constexpr inline std::size_t ReceivePacketCapacity = 4096;
 constexpr inline std::size_t MaxTransportPayloadSize = 1500;
+static_assert(MaxTransportPayloadSize == wgnx::MaxInnerIpv4PacketSize);
+static_assert(MaxTransportPayloadSize == wgnx::wireguard::MaxInnerIpv4PacketSize);
 constinit std::array<std::uint8_t, MaxTransportPayloadSize> g_receive_payload_buffer = {};
+
+void QueueInnerPacketSubmissionWork();
 
 template<std::size_t Size>
 const char *CStr(const std::array<char, Size> &value) {
@@ -545,6 +563,24 @@ wgnx::PeerErrorCode SendProtocolPeerPayload(
     return wgnx::PeerErrorCode::None;
 }
 
+[[maybe_unused]] wgnx::PeerErrorCode SendInnerIpv4PacketLocked(
+    std::size_t peer_index,
+    std::span<const std::uint8_t> packet,
+    const char *reason) {
+    const auto validation = wgnx::wireguard::ValidateInnerIpv4Packet(packet);
+    if (validation != wgnx::wireguard::InnerIpv4ValidationError::None) {
+        logger::Log(
+            "Rejected inner IPv4 send for peer %zu bytes=%zu reason=%s validation=%s",
+            peer_index,
+            packet.size(),
+            reason != nullptr ? reason : "unspecified",
+            wgnx::wireguard::GetInnerIpv4ValidationErrorName(validation));
+        return wgnx::PeerErrorCode::InternalFailure;
+    }
+
+    return SendProtocolPeerPayload(peer_index, packet.data(), packet.size(), reason);
+}
+
 wgnx::PeerErrorCode SendProtocolPeerKeepalive(std::size_t peer_index) {
     auto &runtime = g_state.runtime[peer_index];
     wgnx::wireguard::wg_peer *peer = GetProtocolPeer(peer_index);
@@ -804,10 +840,30 @@ void RefreshDerivedPublicKey(std::size_t peer_index) {
     }
 }
 
+void ClearInnerPacketStateLocked(const char *reason) {
+#if WGNX_ENABLE_DEBUG_PROBE
+    const std::size_t tx_count = g_inner_packet_tx_queue.Size();
+    const std::size_t rx_count = g_inner_packet_rx_queue.Size();
+    g_inner_packet_tx_queue.Clear();
+    g_inner_packet_rx_queue.Clear();
+    g_inner_packet_owner_process_id = 0;
+    if (tx_count != 0 || rx_count != 0) {
+        logger::Log(
+            "Cleared inner packet state reason=%s tx=%zu rx=%zu",
+            reason != nullptr ? reason : "unspecified",
+            tx_count,
+            rx_count);
+    }
+#else
+    static_cast<void>(reason);
+#endif
+}
+
 void SetPeerInactive(std::size_t peer_index) {
     const auto &config = g_state.configured_peers[peer_index];
     auto &runtime = g_state.runtime[peer_index];
     CancelPayloadProbeTimeout();
+    ClearInnerPacketStateLocked("peer inactive");
     CloseRuntimeSocket(std::addressof(runtime));
     ResetProtocolPeer(peer_index);
     runtime = {};
@@ -857,11 +913,13 @@ void SetPeerActive(std::size_t peer_index) {
     runtime.established = true;
     StampRuntimeNow(std::addressof(runtime.state_changed_ns));
     StampRuntimeNow(std::addressof(runtime.last_handshake_ns));
+    QueueInnerPacketSubmissionWork();
 }
 
 void SetPeerError(std::size_t peer_index, wgnx::PeerErrorStage stage, wgnx::PeerErrorCode code) {
     auto &runtime = g_state.runtime[peer_index];
     CancelPayloadProbeTimeout();
+    ClearInnerPacketStateLocked("peer error");
     CloseRuntimeSocket(std::addressof(runtime));
     runtime.state = wgnx::PeerRuntimeState::Error;
     runtime.error_stage = stage;
@@ -917,6 +975,16 @@ void QueueReceiveWork() {
     static_cast<void>(wgnx::platform::queue_work(
         g_payload_submission_workqueue,
         std::addressof(g_payload_submission_dispatcher.work)));
+#endif
+}
+
+void QueueInnerPacketSubmissionWork() {
+#if WGNX_ENABLE_DEBUG_PROBE
+    if (g_inner_packet_submission_workqueue != nullptr) {
+        static_cast<void>(wgnx::platform::queue_work(
+            g_inner_packet_submission_workqueue,
+            std::addressof(g_inner_packet_submission_dispatcher.work)));
+    }
 #endif
 }
 
@@ -1182,6 +1250,74 @@ void CommitResolveResult(const ResolveRequest &request, const wgnx::platform::en
         runtime.resolved_endpoint_text);
 }
 
+[[maybe_unused]] std::uint64_t AllocateInnerPacketIdLocked() {
+#if WGNX_ENABLE_DEBUG_PROBE
+    const std::uint64_t packet_id = g_next_inner_packet_id++;
+    if (g_next_inner_packet_id == 0) {
+        g_next_inner_packet_id = 1;
+    }
+    return packet_id;
+#else
+    return 0;
+#endif
+}
+
+void EnqueueReceivedInnerIpv4PacketLocked(
+    std::size_t peer_index,
+    std::uint32_t activation_generation,
+    std::span<const std::uint8_t> packet) {
+#if WGNX_ENABLE_DEBUG_PROBE
+    if (g_inner_packet_owner_process_id == 0) {
+        logger::Log(
+            "Dropped decrypted inner packet peer=%zu activation=%u bytes=%zu reason=no_consumer",
+            peer_index,
+            activation_generation,
+            packet.size());
+        return;
+    }
+
+    const auto validation = wgnx::wireguard::ValidateInnerIpv4Packet(packet);
+    if (validation != wgnx::wireguard::InnerIpv4ValidationError::None) {
+        logger::Log(
+            "Dropped decrypted inner packet peer=%zu activation=%u bytes=%zu validation=%s",
+            peer_index,
+            activation_generation,
+            packet.size(),
+            wgnx::wireguard::GetInnerIpv4ValidationErrorName(validation));
+        return;
+    }
+
+    wgnx::wireguard::InnerPacketRecord record{};
+    record.packet_id = AllocateInnerPacketIdLocked();
+    record.owner_process_id = g_inner_packet_owner_process_id;
+    record.activation_generation = activation_generation;
+    record.peer_index = static_cast<std::uint32_t>(peer_index);
+    record.size = static_cast<std::uint16_t>(packet.size());
+    std::memcpy(record.bytes.data(), packet.data(), packet.size());
+    if (!g_inner_packet_rx_queue.Push(record)) {
+        logger::Log(
+            "Dropped decrypted inner packet peer=%zu activation=%u bytes=%zu reason=rx_queue_full capacity=%zu",
+            peer_index,
+            activation_generation,
+            packet.size(),
+            g_inner_packet_rx_queue.CapacityValue());
+        return;
+    }
+
+    logger::Log(
+        "Queued decrypted inner packet id=%llu peer=%zu activation=%u bytes=%zu depth=%zu",
+        static_cast<unsigned long long>(record.packet_id),
+        peer_index,
+        activation_generation,
+        packet.size(),
+        g_inner_packet_rx_queue.Size());
+#else
+    static_cast<void>(peer_index);
+    static_cast<void>(activation_generation);
+    static_cast<void>(packet);
+#endif
+}
+
 void CommitReceivedPacket(
     std::size_t peer_index,
     std::uint32_t activation_generation,
@@ -1316,10 +1452,12 @@ void CommitReceivedPacket(
         }
 #endif
 
-        logger::Log(
-            "Delivered non-debug decrypted payload for peer %zu bytes=%zu",
+        EnqueueReceivedInnerIpv4PacketLocked(
             peer_index,
-            decrypt_result.decrypt.payload_size);
+            activation_generation,
+            std::span<const std::uint8_t>(
+                g_receive_payload_buffer.data(),
+                decrypt_result.decrypt.payload_size));
         return;
     }
 
@@ -1459,10 +1597,9 @@ void CommitReceiveFailure(
         g_state.configured_peers[request.peer_index].address.data(),
         target_text,
         payload_size);
-    const wgnx::PeerErrorCode send_error = SendProtocolPeerPayload(
+    const wgnx::PeerErrorCode send_error = SendInnerIpv4PacketLocked(
         request.peer_index,
-        payload.data(),
-        payload_size,
+        std::span<const std::uint8_t>(payload.data(), payload_size),
         wgnx::GetDebugTriggerActionName(request.action));
     if (send_error != wgnx::PeerErrorCode::None) {
         SetDebugProbeState(std::addressof(runtime), request.action, wgnx::DebugProbeStatus::SendFailed);
@@ -1525,6 +1662,78 @@ void ReceiveWorkMain(wgnx::platform::work_struct *) {
     }
 #else
     return;
+#endif
+}
+
+[[maybe_unused]] void InnerPacketSubmissionWorkMain(wgnx::platform::work_struct *) {
+#if WGNX_ENABLE_DEBUG_PROBE
+    while (true) {
+        std::scoped_lock lock(g_state_mutex);
+        const auto *front = g_inner_packet_tx_queue.Front();
+        if (front == nullptr) {
+            return;
+        }
+
+        if (front->peer_index >= g_state.peer_count ||
+            g_state.active_peer_index != static_cast<std::int32_t>(front->peer_index)) {
+            wgnx::wireguard::InnerPacketRecord stale{};
+            static_cast<void>(g_inner_packet_tx_queue.Pop(std::addressof(stale)));
+            logger::Log(
+                "Discarded queued inner packet id=%llu reason=stale_peer",
+                static_cast<unsigned long long>(stale.packet_id));
+            continue;
+        }
+
+        auto &runtime = g_state.runtime[front->peer_index];
+        if (runtime.activation_generation != front->activation_generation) {
+            wgnx::wireguard::InnerPacketRecord stale{};
+            static_cast<void>(g_inner_packet_tx_queue.Pop(std::addressof(stale)));
+            logger::Log(
+                "Discarded queued inner packet id=%llu reason=stale_activation queued=%u current=%u",
+                static_cast<unsigned long long>(stale.packet_id),
+                stale.activation_generation,
+                runtime.activation_generation);
+            continue;
+        }
+        if (runtime.state == wgnx::PeerRuntimeState::ResolvingEndpoint ||
+            runtime.state == wgnx::PeerRuntimeState::Handshaking) {
+            return;
+        }
+        if (runtime.state != wgnx::PeerRuntimeState::Active) {
+            wgnx::wireguard::InnerPacketRecord unavailable{};
+            static_cast<void>(g_inner_packet_tx_queue.Pop(std::addressof(unavailable)));
+            logger::Log(
+                "Discarded queued inner packet id=%llu reason=tunnel_unavailable state=%s",
+                static_cast<unsigned long long>(unavailable.packet_id),
+                wgnx::GetPeerRuntimeStateName(runtime.state));
+            continue;
+        }
+
+        wgnx::wireguard::InnerPacketRecord record{};
+        static_cast<void>(g_inner_packet_tx_queue.Pop(std::addressof(record)));
+        const wgnx::PeerErrorCode send_error = SendInnerIpv4PacketLocked(
+            record.peer_index,
+            std::span<const std::uint8_t>(record.bytes.data(), record.size),
+            "packet-api");
+        if (send_error != wgnx::PeerErrorCode::None) {
+            logger::Log(
+                "Failed queued inner packet id=%llu peer=%u activation=%u error=%s",
+                static_cast<unsigned long long>(record.packet_id),
+                record.peer_index,
+                record.activation_generation,
+                wgnx::GetPeerErrorCodeName(send_error));
+            SetPeerError(record.peer_index, GetPayloadSubmissionErrorStage(send_error), send_error);
+            return;
+        }
+
+        logger::Log(
+            "Sent queued inner packet id=%llu peer=%u activation=%u bytes=%u remaining=%zu",
+            static_cast<unsigned long long>(record.packet_id),
+            record.peer_index,
+            record.activation_generation,
+            static_cast<unsigned int>(record.size),
+            g_inner_packet_tx_queue.Size());
+    }
 #endif
 }
 
@@ -1731,6 +1940,65 @@ void InitializeResolverWorker() {
 #endif
 }
 
+[[maybe_unused]] void InitializeInnerPacketSubmissionWorker() {
+#if WGNX_ENABLE_DEBUG_PROBE
+    if (g_inner_packet_submission_workqueue != nullptr) {
+        return;
+    }
+
+    g_inner_packet_submission_workqueue = wgnx::platform::alloc_ordered_workqueue("wgnx-inner-tx");
+    AMS_ABORT_UNLESS(g_inner_packet_submission_workqueue != nullptr);
+    wgnx::platform::INIT_WORK(
+        std::addressof(g_inner_packet_submission_dispatcher.work),
+        InnerPacketSubmissionWorkMain);
+    logger::Log("Started inner packet submission worker");
+#endif
+}
+
+[[maybe_unused]] void InitializeInnerPacketAuthorization() {
+#if WGNX_ENABLE_DEBUG_PROBE
+    const Result rc = pminfoInitialize();
+    g_inner_packet_authorization_ready = R_SUCCEEDED(rc);
+    logger::Log(
+        "Initialized inner packet caller authorization ready=%u allowed_program_id=0x%016llx rc=0x%08x",
+        g_inner_packet_authorization_ready ? 1U : 0U,
+        static_cast<unsigned long long>(WGNX_DEBUG_PACKET_CLIENT_PROGRAM_ID),
+        static_cast<unsigned int>(rc));
+#endif
+}
+
+[[maybe_unused]] bool IsAuthorizedInnerPacketClient(const ams::sf::ClientProcessId &client_pid) {
+#if !WGNX_ENABLE_DEBUG_PROBE
+    static_cast<void>(client_pid);
+    return false;
+#else
+    if (!g_inner_packet_authorization_ready) {
+        return false;
+    }
+
+    ams::ncm::ProgramId program_id{};
+    const ams::Result rc = ams::pm::info::GetProgramId(
+        std::addressof(program_id),
+        client_pid.GetValue());
+    if (R_FAILED(rc)) {
+        logger::Log(
+            "Failed to resolve packet API caller pid=%llu rc=0x%08x",
+            static_cast<unsigned long long>(client_pid.GetValue().value),
+            static_cast<unsigned int>(rc.GetValue()));
+        return false;
+    }
+
+    const bool allowed = program_id.value == static_cast<std::uint64_t>(WGNX_DEBUG_PACKET_CLIENT_PROGRAM_ID);
+    if (!allowed) {
+        logger::Log(
+            "Rejected packet API caller pid=%llu program_id=0x%016llx",
+            static_cast<unsigned long long>(client_pid.GetValue().value),
+            static_cast<unsigned long long>(program_id.value));
+    }
+    return allowed;
+#endif
+}
+
 void InitializeReceiveWorker() {
     if (g_receive_workqueue != nullptr) {
         return;
@@ -1886,6 +2154,184 @@ ams::Result ControlService::TriggerDebugPayload(const wgnx::DebugTriggerRequest 
     logger::Log("Queued debug payload trigger action=%s", wgnx::GetDebugTriggerActionName(action));
     R_SUCCEED();
 }
+
+ams::Result ControlService::SubmitInnerIpv4Packet(
+    ams::sf::Out<wgnx::PacketSubmissionResult> out,
+    const ams::sf::InBuffer &packet,
+    const ams::sf::ClientProcessId &client_pid) {
+    wgnx::PacketSubmissionResult result = {
+        .packet_id = 0,
+        .status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::InternalError),
+        .packet_size = static_cast<std::uint32_t>(packet.GetSize()),
+        .activation_generation = 0,
+        .peer_index = -1,
+    };
+
+    if (!IsAuthorizedInnerPacketClient(client_pid)) {
+        result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::AccessDenied);
+        out.SetValue(result);
+        R_SUCCEED();
+    }
+
+    const auto packet_bytes = std::span<const std::uint8_t>(
+        static_cast<const std::uint8_t *>(packet.GetPointer()),
+        packet.GetSize());
+    const auto validation = wgnx::wireguard::ValidateInnerIpv4Packet(packet_bytes);
+    if (validation != wgnx::wireguard::InnerIpv4ValidationError::None) {
+        result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::MalformedPacket);
+        logger::Log(
+            "Rejected packet API submission pid=%llu bytes=%zu validation=%s",
+            static_cast<unsigned long long>(client_pid.GetValue().value),
+            packet.GetSize(),
+            wgnx::wireguard::GetInnerIpv4ValidationErrorName(validation));
+        out.SetValue(result);
+        R_SUCCEED();
+    }
+
+    bool queue_worker = false;
+    {
+        std::scoped_lock lock(g_state_mutex);
+        InitializeState();
+        if (g_state.active_peer_index < 0) {
+            result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::TunnelUnavailable);
+            out.SetValue(result);
+            R_SUCCEED();
+        }
+
+        const std::size_t peer_index = static_cast<std::size_t>(g_state.active_peer_index);
+        auto &runtime = g_state.runtime[peer_index];
+        result.peer_index = static_cast<std::int32_t>(peer_index);
+        result.activation_generation = runtime.activation_generation;
+        if (runtime.state != wgnx::PeerRuntimeState::ResolvingEndpoint &&
+            runtime.state != wgnx::PeerRuntimeState::Handshaking &&
+            runtime.state != wgnx::PeerRuntimeState::Active) {
+            result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::TunnelUnavailable);
+            out.SetValue(result);
+            R_SUCCEED();
+        }
+
+        const std::uint64_t process_id = client_pid.GetValue().value;
+        if (g_inner_packet_owner_process_id != process_id) {
+            const std::size_t old_tx_count = g_inner_packet_tx_queue.Size();
+            const std::size_t old_rx_count = g_inner_packet_rx_queue.Size();
+            g_inner_packet_tx_queue.Clear();
+            g_inner_packet_rx_queue.Clear();
+            g_inner_packet_owner_process_id = process_id;
+            logger::Log(
+                "Transferred packet API ownership pid=%llu discarded_tx=%zu discarded_rx=%zu",
+                static_cast<unsigned long long>(process_id),
+                old_tx_count,
+                old_rx_count);
+        }
+
+        wgnx::wireguard::InnerPacketRecord record{};
+        record.packet_id = AllocateInnerPacketIdLocked();
+        record.owner_process_id = process_id;
+        record.activation_generation = runtime.activation_generation;
+        record.peer_index = static_cast<std::uint32_t>(peer_index);
+        record.size = static_cast<std::uint16_t>(packet_bytes.size());
+        std::memcpy(record.bytes.data(), packet_bytes.data(), packet_bytes.size());
+        if (!g_inner_packet_tx_queue.Push(record)) {
+            result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::QueueFull);
+            logger::Log(
+                "Rejected packet API submission pid=%llu reason=tx_queue_full capacity=%zu",
+                static_cast<unsigned long long>(process_id),
+                g_inner_packet_tx_queue.CapacityValue());
+            out.SetValue(result);
+            R_SUCCEED();
+        }
+
+        result.packet_id = record.packet_id;
+        result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::Queued);
+        queue_worker = runtime.state == wgnx::PeerRuntimeState::Active;
+        logger::Log(
+            "Queued packet API submission id=%llu pid=%llu peer=%zu activation=%u bytes=%zu depth=%zu state=%s",
+            static_cast<unsigned long long>(record.packet_id),
+            static_cast<unsigned long long>(process_id),
+            peer_index,
+            runtime.activation_generation,
+            packet_bytes.size(),
+            g_inner_packet_tx_queue.Size(),
+            wgnx::GetPeerRuntimeStateName(runtime.state));
+    }
+
+    if (queue_worker) {
+        QueueInnerPacketSubmissionWork();
+    }
+    out.SetValue(result);
+    R_SUCCEED();
+}
+
+ams::Result ControlService::ReceiveInnerIpv4Packet(
+    ams::sf::Out<wgnx::PacketReceiveResult> out,
+    const ams::sf::OutBuffer &packet,
+    const ams::sf::ClientProcessId &client_pid) {
+    wgnx::PacketReceiveResult result = {
+        .packet_id = 0,
+        .status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::QueueEmpty),
+        .packet_size = 0,
+        .activation_generation = 0,
+        .peer_index = -1,
+    };
+
+    if (!IsAuthorizedInnerPacketClient(client_pid)) {
+        result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::AccessDenied);
+        out.SetValue(result);
+        R_SUCCEED();
+    }
+
+    std::scoped_lock lock(g_state_mutex);
+    InitializeState();
+    const std::uint64_t process_id = client_pid.GetValue().value;
+    if (g_inner_packet_owner_process_id != process_id) {
+        result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::AccessDenied);
+        out.SetValue(result);
+        R_SUCCEED();
+    }
+
+    const auto *front = g_inner_packet_rx_queue.Front();
+    if (front == nullptr) {
+        out.SetValue(result);
+        R_SUCCEED();
+    }
+
+    result.packet_id = front->packet_id;
+    result.packet_size = front->size;
+    result.activation_generation = front->activation_generation;
+    result.peer_index = static_cast<std::int32_t>(front->peer_index);
+    if (front->peer_index >= g_state.peer_count ||
+        g_state.active_peer_index != static_cast<std::int32_t>(front->peer_index) ||
+        g_state.runtime[front->peer_index].activation_generation != front->activation_generation) {
+        wgnx::wireguard::InnerPacketRecord stale{};
+        static_cast<void>(g_inner_packet_rx_queue.Pop(std::addressof(stale)));
+        result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::StaleActivation);
+        logger::Log(
+            "Discarded packet API receive id=%llu reason=stale_activation",
+            static_cast<unsigned long long>(stale.packet_id));
+        out.SetValue(result);
+        R_SUCCEED();
+    }
+    if (packet.GetSize() < front->size) {
+        result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::OutputBufferTooSmall);
+        out.SetValue(result);
+        R_SUCCEED();
+    }
+
+    std::memcpy(packet.GetPointer(), front->bytes.data(), front->size);
+    wgnx::wireguard::InnerPacketRecord delivered{};
+    static_cast<void>(g_inner_packet_rx_queue.Pop(std::addressof(delivered)));
+    result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::Success);
+    logger::Log(
+        "Delivered packet API receive id=%llu pid=%llu peer=%u activation=%u bytes=%u remaining=%zu",
+        static_cast<unsigned long long>(delivered.packet_id),
+        static_cast<unsigned long long>(process_id),
+        delivered.peer_index,
+        delivered.activation_generation,
+        static_cast<unsigned int>(delivered.size),
+        g_inner_packet_rx_queue.Size());
+    out.SetValue(result);
+    R_SUCCEED();
+}
 #endif
 
 void RunIpcServer() {
@@ -1896,6 +2342,8 @@ void RunIpcServer() {
     InitializeResolverWorker();
 #if WGNX_ENABLE_DEBUG_PROBE
     InitializePayloadSubmissionWorker();
+    InitializeInnerPacketSubmissionWorker();
+    InitializeInnerPacketAuthorization();
 #endif
     InitializeReceiveWorker();
     InitializeTransportTimerExecutor();

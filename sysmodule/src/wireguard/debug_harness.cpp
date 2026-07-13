@@ -8,6 +8,7 @@
 #include "wireguard/dispatch.hpp"
 #include "wireguard/endian.hpp"
 #include "wireguard/handshake.hpp"
+#include "wireguard/inner_packet.hpp"
 #include "logger.hpp"
 #include "wireguard/crypto/primitives.hpp"
 #include "wireguard/messages.hpp"
@@ -183,7 +184,6 @@ bool BuildHarnessCookieReply(
     return true;
 }
 
-#if WGNX_ENABLE_DEBUG_PROBE
 void StoreHarnessBigEndian16(std::uint8_t *dst, std::uint16_t value) {
     if (dst == nullptr) {
         return;
@@ -213,6 +213,7 @@ std::uint16_t ComputeHarnessInternetChecksum(const std::uint8_t *data, std::size
     return static_cast<std::uint16_t>(~sum & 0xFFFFu);
 }
 
+#if WGNX_ENABLE_DEBUG_PROBE
 bool BuildHarnessDebugProbeReply(
     std::array<std::uint8_t, DebugProbePacketSize> *out_reply,
     wgnx::DebugTriggerAction action,
@@ -396,6 +397,58 @@ bool TestMalformedLengthRejected() {
     message_handshake_initiation parsed = {};
     const ParseResult result = ParseHandshakeInitiation(&buffer.packet, &parsed);
     return !result.success && result.error == ParseError::InvalidLength;
+}
+
+bool TestInnerIpv4PacketBoundary() {
+    std::array<std::uint8_t, 20> packet = {
+        0x45, 0x00, 0x00, 0x14,
+        0x12, 0x34, 0x00, 0x00,
+        0x40, 0x11, 0x00, 0x00,
+        10, 13, 13, 2,
+        10, 13, 13, 1,
+    };
+    StoreHarnessBigEndian16(
+        packet.data() + 10,
+        ComputeHarnessInternetChecksum(packet.data(), packet.size()));
+    if (ValidateInnerIpv4Packet(packet) != InnerIpv4ValidationError::None) {
+        return false;
+    }
+
+    auto malformed = packet;
+    malformed[0] = 0x65;
+    if (ValidateInnerIpv4Packet(malformed) != InnerIpv4ValidationError::InvalidVersion) {
+        return false;
+    }
+    malformed = packet;
+    malformed[3] = 0x15;
+    if (ValidateInnerIpv4Packet(malformed) != InnerIpv4ValidationError::LengthMismatch) {
+        return false;
+    }
+    malformed = packet;
+    malformed[8] ^= 0x01U;
+    if (ValidateInnerIpv4Packet(malformed) != InnerIpv4ValidationError::InvalidHeaderChecksum) {
+        return false;
+    }
+
+    InnerPacketQueue<2> queue;
+    InnerPacketRecord first{};
+    first.packet_id = 1;
+    InnerPacketRecord second{};
+    second.packet_id = 2;
+    InnerPacketRecord overflow{};
+    overflow.packet_id = 3;
+    if (!queue.Push(first) || !queue.Push(second) || queue.Push(overflow) || queue.Size() != 2) {
+        return false;
+    }
+    InnerPacketRecord popped{};
+    if (!queue.Pop(std::addressof(popped)) || popped.packet_id != 1 ||
+        !queue.Pop(std::addressof(popped)) || popped.packet_id != 2 ||
+        queue.Pop(std::addressof(popped))) {
+        return false;
+    }
+    static_cast<void>(queue.Push(first));
+    queue.Clear();
+    return queue.Size() == 0 && queue.Front() == nullptr;
 }
 
 bool TestPacketDispatch() {
@@ -969,6 +1022,7 @@ bool RunMessageSelfTest() {
         TestTransportDataHeader() &&
         TestUnknownTypeRejected() &&
         TestMalformedLengthRejected() &&
+        TestInnerIpv4PacketBoundary() &&
         TestPacketDispatch() &&
         TestTransportFixedVector();
 

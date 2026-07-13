@@ -33,6 +33,7 @@ INCLUDES	+=	../common/include \
 			$(TOPDIR)/lib/Atmosphere-libs/libvapours/include
 LIBNAMES	:= Atmosphere-libs/libstratosphere
 WGNX_ENABLE_DEBUG_PROBE ?= 0
+WGNX_DEBUG_PACKET_CLIENT_PROGRAM_ID ?= 0x05720820ABC97000
 
 HOST_CXX	?= g++
 HOST_CC		?= cc
@@ -44,6 +45,7 @@ HOST_TEST_CPP_SOURCES := \
 	src/wireguard/index_allocator.cpp \
 	src/wireguard/session.cpp \
 	src/wireguard/data.cpp \
+	src/wireguard/inner_packet.cpp \
 	src/wireguard/handshake.cpp \
 	src/wireguard/timers.cpp \
 	src/wireguard/peer.cpp \
@@ -74,7 +76,8 @@ DEFINES	+=	-DDISABLE_IPC -D__SWITCH__ \
 	-DTARGET="\"$(TARGET)\"" \
 	-DVERSION="\"$(APP_VERSION)\"" \
 	-DBUILD_ID="\"$(BUILD_ID)\"" \
-	-DWGNX_ENABLE_DEBUG_PROBE=$(WGNX_ENABLE_DEBUG_PROBE)
+	-DWGNX_ENABLE_DEBUG_PROBE=$(WGNX_ENABLE_DEBUG_PROBE) \
+	-DWGNX_DEBUG_PACKET_CLIENT_PROGRAM_ID=$(WGNX_DEBUG_PACKET_CLIENT_PROGRAM_ID)
 
 CFLAGS	+= $(INCLUDE) -Wno-unused-result
 

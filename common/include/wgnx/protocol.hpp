@@ -7,8 +7,10 @@
 namespace wgnx {
 
 constexpr inline char ServiceName[] = "wgnx:ctl";
-constexpr inline std::uint32_t IpcApiVersion = 1;
+// Increment whenever the public IPC command set or wire contract changes.
+constexpr inline std::uint32_t IpcApiVersion = 2;
 constexpr inline std::size_t MaxPeers = 8;
+constexpr inline std::size_t MaxInnerIpv4PacketSize = 1500;
 
 enum class CommandId : std::uint32_t {
     GetApiVersion = 0,
@@ -19,7 +21,22 @@ enum class CommandId : std::uint32_t {
     SetAutoStartPeer = 11,
 #if WGNX_ENABLE_DEBUG_PROBE
     TriggerDebugPayload = 20,
+    SubmitInnerIpv4Packet = 21,
+    ReceiveInnerIpv4Packet = 22,
 #endif
+};
+
+enum class PacketApiStatus : std::uint32_t {
+    Success = 0,
+    Queued = 1,
+    QueueEmpty = 2,
+    QueueFull = 3,
+    TunnelUnavailable = 4,
+    MalformedPacket = 5,
+    OutputBufferTooSmall = 6,
+    StaleActivation = 7,
+    AccessDenied = 8,
+    InternalError = 9,
 };
 
 enum class DebugTriggerAction : std::uint32_t {
@@ -146,6 +163,22 @@ struct DebugTriggerRequest {
     std::uint32_t reserved;
 };
 
+struct PacketSubmissionResult {
+    std::uint64_t packet_id;
+    std::uint32_t status;
+    std::uint32_t packet_size;
+    std::uint32_t activation_generation;
+    std::int32_t peer_index;
+};
+
+struct PacketReceiveResult {
+    std::uint64_t packet_id;
+    std::uint32_t status;
+    std::uint32_t packet_size;
+    std::uint32_t activation_generation;
+    std::int32_t peer_index;
+};
+
 constexpr inline const char *GetPeerRuntimeStateName(PeerRuntimeState state) {
     switch (state) {
         case PeerRuntimeState::Inactive:
@@ -268,6 +301,33 @@ constexpr inline const char *GetDebugProbeStatusName(DebugProbeStatus status) {
     return "unknown";
 }
 
+constexpr inline const char *GetPacketApiStatusName(PacketApiStatus status) {
+    switch (status) {
+        case PacketApiStatus::Success:
+            return "success";
+        case PacketApiStatus::Queued:
+            return "queued";
+        case PacketApiStatus::QueueEmpty:
+            return "queue empty";
+        case PacketApiStatus::QueueFull:
+            return "queue full";
+        case PacketApiStatus::TunnelUnavailable:
+            return "tunnel unavailable";
+        case PacketApiStatus::MalformedPacket:
+            return "malformed packet";
+        case PacketApiStatus::OutputBufferTooSmall:
+            return "output buffer too small";
+        case PacketApiStatus::StaleActivation:
+            return "stale activation";
+        case PacketApiStatus::AccessDenied:
+            return "access denied";
+        case PacketApiStatus::InternalError:
+            return "internal error";
+    }
+
+    return "unknown";
+}
+
 static_assert(std::is_standard_layout_v<PeerInfo>);
 static_assert(std::is_trivially_copyable_v<PeerInfo>);
 static_assert(std::is_standard_layout_v<DaemonStatus>);
@@ -278,5 +338,11 @@ static_assert(std::is_standard_layout_v<PeerSelectionRequest>);
 static_assert(std::is_trivially_copyable_v<PeerSelectionRequest>);
 static_assert(std::is_standard_layout_v<DebugTriggerRequest>);
 static_assert(std::is_trivially_copyable_v<DebugTriggerRequest>);
+static_assert(std::is_standard_layout_v<PacketSubmissionResult>);
+static_assert(std::is_trivially_copyable_v<PacketSubmissionResult>);
+static_assert(sizeof(PacketSubmissionResult) == 24);
+static_assert(std::is_standard_layout_v<PacketReceiveResult>);
+static_assert(std::is_trivially_copyable_v<PacketReceiveResult>);
+static_assert(sizeof(PacketReceiveResult) == 24);
 
 } // namespace wgnx
