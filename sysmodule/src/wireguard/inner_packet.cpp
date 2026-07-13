@@ -54,6 +54,50 @@ InnerIpv4ValidationError ValidateInnerIpv4Packet(std::span<const std::uint8_t> p
     return InnerIpv4ValidationError::None;
 }
 
+InnerIpv4ValidationError ValidatePaddedInnerIpv4Packet(
+    std::span<const std::uint8_t> payload,
+    std::size_t *out_packet_size) {
+    constexpr std::size_t MinimumIpv4HeaderSize = 20;
+    constexpr std::size_t MaximumPaddingSize = 15;
+    if (out_packet_size == nullptr) {
+        return InnerIpv4ValidationError::LengthMismatch;
+    }
+    *out_packet_size = 0;
+
+    if (payload.size() < MinimumIpv4HeaderSize) {
+        return InnerIpv4ValidationError::TooShort;
+    }
+
+    const std::size_t packet_size = LoadBigEndian16(payload.data() + 2);
+    if (packet_size < MinimumIpv4HeaderSize) {
+        return InnerIpv4ValidationError::LengthMismatch;
+    }
+    if (packet_size > MaxInnerIpv4PacketSize) {
+        return InnerIpv4ValidationError::TooLarge;
+    }
+    if (packet_size > payload.size()) {
+        return InnerIpv4ValidationError::LengthMismatch;
+    }
+
+    const std::size_t padding_size = payload.size() - packet_size;
+    if (padding_size > MaximumPaddingSize) {
+        return InnerIpv4ValidationError::InvalidPadding;
+    }
+    for (const std::uint8_t byte : payload.subspan(packet_size)) {
+        if (byte != 0) {
+            return InnerIpv4ValidationError::InvalidPadding;
+        }
+    }
+
+    const auto validation = ValidateInnerIpv4Packet(payload.first(packet_size));
+    if (validation != InnerIpv4ValidationError::None) {
+        return validation;
+    }
+
+    *out_packet_size = packet_size;
+    return InnerIpv4ValidationError::None;
+}
+
 const char *GetInnerIpv4ValidationErrorName(InnerIpv4ValidationError error) {
     switch (error) {
         case InnerIpv4ValidationError::None:
@@ -70,6 +114,8 @@ const char *GetInnerIpv4ValidationErrorName(InnerIpv4ValidationError error) {
             return "length_mismatch";
         case InnerIpv4ValidationError::InvalidHeaderChecksum:
             return "invalid_header_checksum";
+        case InnerIpv4ValidationError::InvalidPadding:
+            return "invalid_padding";
     }
 
     return "unknown";

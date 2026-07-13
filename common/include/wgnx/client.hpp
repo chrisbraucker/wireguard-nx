@@ -148,9 +148,12 @@ inline Result SubmitInnerIpv4Packet(
         return rc;
     }
 
-    return serviceDispatchOut(
+    const std::uint64_t pid_placeholder = 0;
+
+    return serviceDispatchInOut(
         service.get(),
         static_cast<std::uint32_t>(CommandId::SubmitInnerIpv4Packet),
+        pid_placeholder,
         *out_result,
         .buffer_attrs = { SfBufferAttr_HipcMapAlias | SfBufferAttr_In },
         .buffers = { { packet, packet_size } },
@@ -167,9 +170,12 @@ inline Result ReceiveInnerIpv4Packet(
         return rc;
     }
 
-    return serviceDispatchOut(
+    const std::uint64_t pid_placeholder = 0;
+
+    return serviceDispatchInOut(
         service.get(),
         static_cast<std::uint32_t>(CommandId::ReceiveInnerIpv4Packet),
+        pid_placeholder,
         *out_result,
         .buffer_attrs = { SfBufferAttr_HipcMapAlias | SfBufferAttr_Out },
         .buffers = { { packet, packet_capacity } },

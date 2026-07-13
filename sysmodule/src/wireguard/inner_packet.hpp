@@ -18,9 +18,13 @@ enum class InnerIpv4ValidationError : std::uint8_t {
     InvalidHeaderLength,
     LengthMismatch,
     InvalidHeaderChecksum,
+    InvalidPadding,
 };
 
 InnerIpv4ValidationError ValidateInnerIpv4Packet(std::span<const std::uint8_t> packet);
+InnerIpv4ValidationError ValidatePaddedInnerIpv4Packet(
+    std::span<const std::uint8_t> payload,
+    std::size_t *out_packet_size);
 const char *GetInnerIpv4ValidationErrorName(InnerIpv4ValidationError error);
 
 struct InnerPacketRecord {

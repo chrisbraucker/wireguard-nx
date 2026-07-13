@@ -126,8 +126,14 @@ TransportDataError noise_create_transport_data_packet(
         return TransportDataError::CounterExhausted;
     }
 
-    const std::size_t required_size = TransportDataHeaderSize + payload.size() + TransportDataTagSize;
-    if (required_size < payload.size() || packet->capacity < required_size) {
+    if (payload.size() >
+        std::numeric_limits<std::size_t>::max() - (TransportDataPaddingBlockSize - 1)) {
+        return TransportDataError::InsufficientCapacity;
+    }
+    const std::size_t padded_payload_size = GetPaddedTransportPayloadSize(payload.size());
+    const std::size_t required_size =
+        TransportDataHeaderSize + padded_payload_size + TransportDataTagSize;
+    if (required_size < padded_payload_size || packet->capacity < required_size) {
         return TransportDataError::InsufficientCapacity;
     }
 
@@ -143,13 +149,17 @@ TransportDataError noise_create_transport_data_packet(
     std::uint8_t tag[TransportDataTagSize]{};
     std::uint8_t empty_payload = 0;
     std::uint8_t *ciphertext = packet->data + TransportDataHeaderSize;
-    const std::uint8_t *plaintext = payload.empty() ? &empty_payload : payload.data();
+    if (!payload.empty()) {
+        std::memmove(ciphertext, payload.data(), payload.size());
+        std::memset(ciphertext + payload.size(), 0, padded_payload_size - payload.size());
+    }
+    const std::uint8_t *plaintext = payload.empty() ? &empty_payload : ciphertext;
     BuildTransportNonce(nonce, header.counter);
     if (!crypto::chacha20poly1305_encrypt(
             ciphertext,
             tag,
             plaintext,
-            payload.size(),
+            padded_payload_size,
             nullptr,
             0,
             keypair.sending_key.bytes,
@@ -160,7 +170,7 @@ TransportDataError noise_create_transport_data_packet(
         return TransportDataError::AuthenticationFailed;
     }
 
-    std::memcpy(ciphertext + payload.size(), tag, sizeof(tag));
+    std::memcpy(ciphertext + padded_payload_size, tag, sizeof(tag));
     packet->len = required_size;
     crypto::secure_clear(nonce, sizeof(nonce));
     crypto::secure_clear(tag, sizeof(tag));

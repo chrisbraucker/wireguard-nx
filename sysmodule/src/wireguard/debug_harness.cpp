@@ -430,6 +430,46 @@ bool TestInnerIpv4PacketBoundary() {
         return false;
     }
 
+    std::size_t packet_size = 0;
+    if (ValidatePaddedInnerIpv4Packet(packet, std::addressof(packet_size)) !=
+            InnerIpv4ValidationError::None ||
+        packet_size != packet.size()) {
+        return false;
+    }
+
+    std::array<std::uint8_t, 32> padded{};
+    std::memcpy(padded.data(), packet.data(), packet.size());
+    if (ValidatePaddedInnerIpv4Packet(padded, std::addressof(packet_size)) !=
+            InnerIpv4ValidationError::None ||
+        packet_size != packet.size()) {
+        return false;
+    }
+    padded.back() = 1;
+    if (ValidatePaddedInnerIpv4Packet(padded, std::addressof(packet_size)) !=
+        InnerIpv4ValidationError::InvalidPadding) {
+        return false;
+    }
+
+    std::array<std::uint8_t, 36> excessive_padding{};
+    std::memcpy(excessive_padding.data(), packet.data(), packet.size());
+    if (ValidatePaddedInnerIpv4Packet(excessive_padding, std::addressof(packet_size)) !=
+        InnerIpv4ValidationError::InvalidPadding) {
+        return false;
+    }
+
+    malformed = packet;
+    malformed[3] = 0x15;
+    if (ValidatePaddedInnerIpv4Packet(malformed, std::addressof(packet_size)) !=
+        InnerIpv4ValidationError::LengthMismatch) {
+        return false;
+    }
+    malformed = packet;
+    malformed[3] = 0x13;
+    if (ValidatePaddedInnerIpv4Packet(malformed, std::addressof(packet_size)) !=
+        InnerIpv4ValidationError::LengthMismatch) {
+        return false;
+    }
+
     InnerPacketQueue<2> queue;
     InnerPacketRecord first{};
     first.packet_id = 1;
@@ -892,11 +932,21 @@ bool TestHandshakeResponseAndSessionDerivation() {
     if (incoming_result.slot != wg_index_slot::CurrentKeypair ||
         incoming_result.decrypt.header.receiver_index != initiator->current_keypair.remote_index ||
         incoming_result.decrypt.header.counter != initiator->current_keypair.send_counter ||
-        incoming_result.decrypt.payload_size != 8 ||
+        incoming_result.decrypt.payload_size != TransportDataPaddingBlockSize ||
         std::memcmp(
             g_core_self_test_storage.payload_plaintext,
             g_core_self_test_storage.decrypted_payload,
-            incoming_result.decrypt.payload_size) != 0) {
+            8) != 0) {
+        return false;
+    }
+    for (std::size_t i = 8; i < incoming_result.decrypt.payload_size; ++i) {
+        if (g_core_self_test_storage.decrypted_payload[i] != 0) {
+            return false;
+        }
+    }
+
+    if (payload_buffer.packet.len !=
+        TransportDataHeaderSize + TransportDataPaddingBlockSize + NoiseTagSize) {
         return false;
     }
 

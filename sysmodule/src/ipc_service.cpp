@@ -104,7 +104,7 @@ struct PayloadSubmissionDispatcher {
     wgnx::platform::work_struct work{};
 };
 [[maybe_unused]] constinit PayloadSubmissionDispatcher g_payload_submission_dispatcher = {};
-[[maybe_unused]] wgnx::platform::workqueue_struct *g_payload_submission_workqueue = nullptr;
+[[maybe_unused]] wgnx::platform::workqueue_struct *g_submission_workqueue = nullptr;
 struct ReceiveDispatcher {
     wgnx::platform::work_struct work{};
 };
@@ -140,7 +140,6 @@ struct InnerPacketSubmissionDispatcher {
     wgnx::platform::work_struct work{};
 };
 constinit InnerPacketSubmissionDispatcher g_inner_packet_submission_dispatcher = {};
-wgnx::platform::workqueue_struct *g_inner_packet_submission_workqueue = nullptr;
 bool g_inner_packet_authorization_ready = false;
 #endif
 
@@ -152,9 +151,11 @@ constexpr inline wgnx::platform::jiffies_t DebugProbeTimeoutJiffies = 5U * wgnx:
 constexpr inline std::uint32_t MaxHandshakeSendAttempts = 5;
 constexpr inline std::size_t ReceivePacketCapacity = 4096;
 constexpr inline std::size_t MaxTransportPayloadSize = 1500;
+constexpr inline std::size_t MaxPaddedTransportPayloadSize =
+    wgnx::wireguard::GetPaddedTransportPayloadSize(MaxTransportPayloadSize);
 static_assert(MaxTransportPayloadSize == wgnx::MaxInnerIpv4PacketSize);
 static_assert(MaxTransportPayloadSize == wgnx::wireguard::MaxInnerIpv4PacketSize);
-constinit std::array<std::uint8_t, MaxTransportPayloadSize> g_receive_payload_buffer = {};
+constinit std::array<std::uint8_t, MaxPaddedTransportPayloadSize> g_receive_payload_buffer = {};
 
 void QueueInnerPacketSubmissionWork();
 
@@ -513,7 +514,7 @@ wgnx::PeerErrorCode SendProtocolPeerPayload(
     }
 
     wgnx::platform::static_packet_buffer<
-        wgnx::wireguard::TransportDataHeaderSize + MaxTransportPayloadSize + wgnx::wireguard::NoiseMacSize>
+        wgnx::wireguard::TransportDataHeaderSize + MaxPaddedTransportPayloadSize + wgnx::wireguard::NoiseMacSize>
         packet;
     const auto payload_span = payload != nullptr ? std::span<const std::uint8_t>(payload, payload_size)
                                                  : std::span<const std::uint8_t>{};
@@ -968,21 +969,21 @@ void QueueReceiveWork() {
 
 [[maybe_unused]] void QueuePayloadSubmissionWork() {
 #if WGNX_ENABLE_DEBUG_PROBE
-    if (g_payload_submission_workqueue == nullptr) {
+    if (g_submission_workqueue == nullptr) {
         return;
     }
 
     static_cast<void>(wgnx::platform::queue_work(
-        g_payload_submission_workqueue,
+        g_submission_workqueue,
         std::addressof(g_payload_submission_dispatcher.work)));
 #endif
 }
 
 void QueueInnerPacketSubmissionWork() {
 #if WGNX_ENABLE_DEBUG_PROBE
-    if (g_inner_packet_submission_workqueue != nullptr) {
+    if (g_submission_workqueue != nullptr) {
         static_cast<void>(wgnx::platform::queue_work(
-            g_inner_packet_submission_workqueue,
+            g_submission_workqueue,
             std::addressof(g_inner_packet_submission_dispatcher.work)));
     }
 #endif
@@ -1407,11 +1408,37 @@ void CommitReceivedPacket(
             return;
         }
 
+        const auto padded_payload = std::span<const std::uint8_t>(
+            g_receive_payload_buffer.data(),
+            decrypt_result.decrypt.payload_size);
+        std::size_t inner_packet_size = 0;
+        const auto inner_validation = wgnx::wireguard::ValidatePaddedInnerIpv4Packet(
+            padded_payload,
+            std::addressof(inner_packet_size));
+        if (inner_validation != wgnx::wireguard::InnerIpv4ValidationError::None) {
+            logger::Log(
+                "Dropped decrypted inner packet peer=%zu activation=%u bytes=%zu validation=%s",
+                peer_index,
+                activation_generation,
+                padded_payload.size(),
+                wgnx::wireguard::GetInnerIpv4ValidationErrorName(inner_validation));
+            return;
+        }
+        const auto inner_packet = padded_payload.first(inner_packet_size);
+        if (inner_packet.size() != padded_payload.size()) {
+            logger::Log(
+                "Removed WG transport padding for peer %zu payload=%zu inner=%zu padding=%zu",
+                peer_index,
+                padded_payload.size(),
+                inner_packet.size(),
+                padded_payload.size() - inner_packet.size());
+        }
+
 #if WGNX_ENABLE_DEBUG_PROBE
         wgnx::wireguard::DebugProbeReplyInfo reply_info{};
         const wgnx::wireguard::DebugProbeReplyValidation reply_validation =
             wgnx::wireguard::ValidateDebugIcmpEchoReply(
-                std::span<const std::uint8_t>(g_receive_payload_buffer.data(), decrypt_result.decrypt.payload_size),
+                inner_packet,
                 g_state.configured_peers[peer_index].address.data(),
                 peer_index,
                 activation_generation,
@@ -1455,9 +1482,7 @@ void CommitReceivedPacket(
         EnqueueReceivedInnerIpv4PacketLocked(
             peer_index,
             activation_generation,
-            std::span<const std::uint8_t>(
-                g_receive_payload_buffer.data(),
-                decrypt_result.decrypt.payload_size));
+            inner_packet);
         return;
     }
 
@@ -1925,33 +1950,21 @@ void InitializeResolverWorker() {
     logger::Log("Started endpoint resolver worker");
 }
 
-[[maybe_unused]] void InitializePayloadSubmissionWorker() {
+[[maybe_unused]] void InitializeSubmissionWorker() {
 #if !WGNX_ENABLE_DEBUG_PROBE
     return;
 #else
-    if (g_payload_submission_workqueue != nullptr) {
+    if (g_submission_workqueue != nullptr) {
         return;
     }
 
-    g_payload_submission_workqueue = wgnx::platform::alloc_ordered_workqueue("wgnx-payload");
-    AMS_ABORT_UNLESS(g_payload_submission_workqueue != nullptr);
+    g_submission_workqueue = wgnx::platform::alloc_ordered_workqueue("wgnx-submit");
+    AMS_ABORT_UNLESS(g_submission_workqueue != nullptr);
     wgnx::platform::INIT_WORK(std::addressof(g_payload_submission_dispatcher.work), PayloadSubmissionWorkMain);
-    logger::Log("Started payload submission worker");
-#endif
-}
-
-[[maybe_unused]] void InitializeInnerPacketSubmissionWorker() {
-#if WGNX_ENABLE_DEBUG_PROBE
-    if (g_inner_packet_submission_workqueue != nullptr) {
-        return;
-    }
-
-    g_inner_packet_submission_workqueue = wgnx::platform::alloc_ordered_workqueue("wgnx-inner-tx");
-    AMS_ABORT_UNLESS(g_inner_packet_submission_workqueue != nullptr);
     wgnx::platform::INIT_WORK(
         std::addressof(g_inner_packet_submission_dispatcher.work),
         InnerPacketSubmissionWorkMain);
-    logger::Log("Started inner packet submission worker");
+    logger::Log("Started shared payload and inner packet submission worker");
 #endif
 }
 
@@ -2341,8 +2354,7 @@ void RunIpcServer() {
     }
     InitializeResolverWorker();
 #if WGNX_ENABLE_DEBUG_PROBE
-    InitializePayloadSubmissionWorker();
-    InitializeInnerPacketSubmissionWorker();
+    InitializeSubmissionWorker();
     InitializeInnerPacketAuthorization();
 #endif
     InitializeReceiveWorker();

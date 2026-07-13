@@ -12,6 +12,15 @@
 
 namespace wgnx::wireguard {
 
+constexpr inline std::size_t TransportDataPaddingBlockSize = 16;
+
+constexpr std::size_t GetPaddedTransportPayloadSize(std::size_t payload_size) {
+    return payload_size == 0
+               ? 0
+               : ((payload_size + TransportDataPaddingBlockSize - 1) /
+                  TransportDataPaddingBlockSize) * TransportDataPaddingBlockSize;
+}
+
 enum class TransportDataError : std::uint8_t {
     None = 0,
     InvalidArgument,

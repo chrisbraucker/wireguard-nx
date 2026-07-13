@@ -110,7 +110,7 @@ def download_file(ftp: ftplib.FTP, remote_path: PurePosixPath, local_path: Path,
     local_path.parent.mkdir(parents=True, exist_ok=True)
     with local_path.open("wb") as handle:
         ftp.retrbinary(f"RETR {remote_path}", handle.write)
-    print(f"downloaded {remote_path} -> {local_path.relative_to(REPO_ROOT)}")
+    print(f"downloaded {remote_path} -> {local_path}")
     if delete_remote:
         ftp.delete(str(remote_path))
         print(f"deleted remote {remote_path}")
