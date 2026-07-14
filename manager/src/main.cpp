@@ -43,10 +43,8 @@ int main(int argc, char **argv)
         diagAbortWithResult(rc);
 
     printf("Exit by pressing + or -\n");
-#if WGNX_ENABLE_DEBUG_PROBE
     printf("Press ZL to send a debug ping to 10.13.13.1 through the tunnel\n");
     printf("Press ZR to send a debug ping to 1.1.1.1 through the tunnel\n");
-#endif
 
     // Display arguments sent from nxlink
     printf("%d arguments\n", argc);
@@ -108,13 +106,11 @@ int main(int argc, char **argv)
                     wgnx::GetPeerErrorStageName(static_cast<wgnx::PeerErrorStage>(peer.error_stage)),
                     peer.flags,
                     peer.last_handshake_seconds, peer.last_rx_seconds, peer.last_tx_seconds);
-#if WGNX_ENABLE_DEBUG_PROBE
                 printf(
                     " | probe=%s/%s/%ds",
                     wgnx::GetDebugTriggerActionName(static_cast<wgnx::DebugTriggerAction>(peer.debug_probe_action)),
                     wgnx::GetDebugProbeStatusName(static_cast<wgnx::DebugProbeStatus>(peer.debug_probe_status)),
                     peer.last_debug_probe_seconds);
-#endif
                 printf(
                     " | ka=%us err=%s (0x%08X)\n",
                     peer.persistent_keepalive_interval,
@@ -144,7 +140,6 @@ int main(int argc, char **argv)
         if (kDown & HidNpadButton_Plus) break;
         if (kDown & HidNpadButton_Minus) break;
 
-#if WGNX_ENABLE_DEBUG_PROBE
         if (kDown & (HidNpadButton_ZL | HidNpadButton_ZR)) {
             const wgnx::DebugTriggerAction action = (kDown & HidNpadButton_ZL) != 0
                 ? wgnx::DebugTriggerAction::PingTunnelPeer
@@ -161,7 +156,6 @@ int main(int argc, char **argv)
                     trigger_rc);
             }
         }
-#endif
 
         consoleUpdate(NULL);
     }

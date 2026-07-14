@@ -7,9 +7,7 @@
 #include "wgnx/platform/udp.hpp"
 #include "wgnx/platform/work.hpp"
 #include "wireguard/data.hpp"
-#if WGNX_ENABLE_DEBUG_PROBE
 #include "wireguard/debug_probe.hpp"
-#endif
 #include "wireguard/device.hpp"
 #include "wireguard/handshake.hpp"
 #include "wireguard/inner_packet.hpp"
@@ -130,7 +128,6 @@ struct PayloadProbeTimeoutDispatcher {
     wgnx::platform::timer_list timer{};
 };
 constinit PayloadProbeTimeoutDispatcher g_payload_probe_timeout_dispatcher = {};
-#if WGNX_ENABLE_DEBUG_PROBE
 constexpr inline std::size_t InnerPacketQueueCapacity = 8;
 wgnx::wireguard::InnerPacketQueue<InnerPacketQueueCapacity> g_inner_packet_tx_queue{};
 wgnx::wireguard::InnerPacketQueue<InnerPacketQueueCapacity> g_inner_packet_rx_queue{};
@@ -140,14 +137,10 @@ struct InnerPacketSubmissionDispatcher {
     wgnx::platform::work_struct work{};
 };
 constinit InnerPacketSubmissionDispatcher g_inner_packet_submission_dispatcher = {};
-bool g_inner_packet_authorization_ready = false;
-#endif
 
 constexpr inline wgnx::platform::jiffies_t SimulatedHandshakeRetransmitJiffies = 5U * wgnx::platform::HZ;
 constexpr inline wgnx::platform::jiffies_t SimulatedRekeyJiffies = 120U * wgnx::platform::HZ;
-#if WGNX_ENABLE_DEBUG_PROBE
 constexpr inline wgnx::platform::jiffies_t DebugProbeTimeoutJiffies = 5U * wgnx::platform::HZ;
-#endif
 constexpr inline std::uint32_t MaxHandshakeSendAttempts = 5;
 constexpr inline std::size_t ReceivePacketCapacity = 4096;
 constexpr inline std::size_t MaxTransportPayloadSize = 1500;
@@ -165,12 +158,7 @@ const char *CStr(const std::array<char, Size> &value) {
 }
 
 [[maybe_unused]] bool IsSupportedDebugTriggerAction(wgnx::DebugTriggerAction action) {
-#if WGNX_ENABLE_DEBUG_PROBE
     return wgnx::wireguard::IsSupportedDebugTriggerAction(action);
-#else
-    static_cast<void>(action);
-    return false;
-#endif
 }
 
 const char *GetIndexSlotName(wgnx::wireguard::wg_index_slot slot) {
@@ -269,7 +257,6 @@ void ClearDebugProbeState(DaemonState::PeerRuntimeInfo *runtime) {
         return;
     }
 
-#if WGNX_ENABLE_DEBUG_PROBE
     if (!wgnx::wireguard::CanTransitionDebugProbeStatus(runtime->debug_probe_status, status)) {
         logger::Log(
             "Debug probe transition override old=%s new=%s action=%s",
@@ -277,7 +264,6 @@ void ClearDebugProbeState(DaemonState::PeerRuntimeInfo *runtime) {
             wgnx::GetDebugProbeStatusName(status),
             wgnx::GetDebugTriggerActionName(action));
     }
-#endif
     runtime->debug_probe_action = action;
     runtime->debug_probe_status = status;
     StampRuntimeNow(std::addressof(runtime->debug_probe_state_changed_ns));
@@ -332,6 +318,25 @@ wgnx::PeerErrorCode MapTransportDataErrorToPeerErrorCode(wgnx::wireguard::Transp
     }
 
     return wgnx::PeerErrorCode::InternalFailure;
+}
+
+bool IsRecoverableTransportIoError(wgnx::PeerErrorCode code) {
+    return code == wgnx::PeerErrorCode::TransportSendFailed ||
+           code == wgnx::PeerErrorCode::TransportReceiveFailed;
+}
+
+void LogRecoverableTransportIoError(
+    std::size_t peer_index,
+    wgnx::PeerErrorCode code,
+    const char *operation) {
+    const auto &runtime = g_state.runtime[peer_index];
+    logger::Log(
+        "Nonterminal WG transport I/O failure peer=%zu activation=%u state=%s operation=%s error=%s; preserving peer, socket, keys, and timers",
+        peer_index,
+        runtime.activation_generation,
+        wgnx::GetPeerRuntimeStateName(runtime.state),
+        operation != nullptr ? operation : "unspecified",
+        wgnx::GetPeerErrorCodeName(code));
 }
 
 [[maybe_unused]] wgnx::PeerErrorStage GetPayloadSubmissionErrorStage(wgnx::PeerErrorCode code) {
@@ -661,17 +666,13 @@ void CancelAllTransportTimers() {
 }
 
 [[maybe_unused]] void SchedulePayloadProbeTimeout() {
-#if WGNX_ENABLE_DEBUG_PROBE
     wgnx::platform::mod_timer(
         std::addressof(g_payload_probe_timeout_dispatcher.timer),
         wgnx::platform::get_jiffies_64() + DebugProbeTimeoutJiffies);
-#endif
 }
 
 void CancelPayloadProbeTimeout() {
-#if WGNX_ENABLE_DEBUG_PROBE
     wgnx::platform::timer_delete(std::addressof(g_payload_probe_timeout_dispatcher.timer));
-#endif
 }
 
 void ScheduleProtocolSessionTimers(std::size_t peer_index, wgnx::wireguard::wg_peer *peer) {
@@ -750,7 +751,10 @@ wgnx::PeerErrorCode RetryHandshakeSend(std::size_t peer_index, const char *reaso
 
     const wgnx::PeerErrorCode send_error = SendProtocolPeerInitiation(peer_index);
     if (send_error != wgnx::PeerErrorCode::None) {
-        return send_error;
+        if (!IsRecoverableTransportIoError(send_error)) {
+            return send_error;
+        }
+        LogRecoverableTransportIoError(peer_index, send_error, reason);
     }
 
     ++runtime.handshake_send_attempts;
@@ -842,7 +846,6 @@ void RefreshDerivedPublicKey(std::size_t peer_index) {
 }
 
 void ClearInnerPacketStateLocked(const char *reason) {
-#if WGNX_ENABLE_DEBUG_PROBE
     const std::size_t tx_count = g_inner_packet_tx_queue.Size();
     const std::size_t rx_count = g_inner_packet_rx_queue.Size();
     g_inner_packet_tx_queue.Clear();
@@ -855,9 +858,6 @@ void ClearInnerPacketStateLocked(const char *reason) {
             tx_count,
             rx_count);
     }
-#else
-    static_cast<void>(reason);
-#endif
 }
 
 void SetPeerInactive(std::size_t peer_index) {
@@ -968,7 +968,6 @@ void QueueReceiveWork() {
 }
 
 [[maybe_unused]] void QueuePayloadSubmissionWork() {
-#if WGNX_ENABLE_DEBUG_PROBE
     if (g_submission_workqueue == nullptr) {
         return;
     }
@@ -976,24 +975,17 @@ void QueueReceiveWork() {
     static_cast<void>(wgnx::platform::queue_work(
         g_submission_workqueue,
         std::addressof(g_payload_submission_dispatcher.work)));
-#endif
 }
 
 void QueueInnerPacketSubmissionWork() {
-#if WGNX_ENABLE_DEBUG_PROBE
     if (g_submission_workqueue != nullptr) {
         static_cast<void>(wgnx::platform::queue_work(
             g_submission_workqueue,
             std::addressof(g_inner_packet_submission_dispatcher.work)));
     }
-#endif
 }
 
 [[maybe_unused]] bool QueuePayloadSubmissionRequestLocked(wgnx::DebugTriggerAction action) {
-#if !WGNX_ENABLE_DEBUG_PROBE
-    static_cast<void>(action);
-    return false;
-#else
     if (g_state.active_peer_index < 0) {
         return false;
     }
@@ -1021,7 +1013,6 @@ void QueueInnerPacketSubmissionWork() {
     g_payload_submission_request.action = action;
     SetDebugProbeState(std::addressof(runtime), action, wgnx::DebugProbeStatus::Queued);
     return true;
-#endif
 }
 
 void StartPeerRuntime(std::size_t peer_index) {
@@ -1235,8 +1226,11 @@ void CommitResolveResult(const ResolveRequest &request, const wgnx::platform::en
     }
     const wgnx::PeerErrorCode send_error = SendProtocolPeerInitiation(request.peer_index);
     if (send_error != wgnx::PeerErrorCode::None) {
-        SetPeerError(request.peer_index, wgnx::PeerErrorStage::Transport, send_error);
-        return;
+        if (!IsRecoverableTransportIoError(send_error)) {
+            SetPeerError(request.peer_index, wgnx::PeerErrorStage::Transport, send_error);
+            return;
+        }
+        LogRecoverableTransportIoError(request.peer_index, send_error, "initial handshake");
     }
     runtime.handshake_send_attempts = 1;
     ScheduleProtocolTimer(
@@ -1252,22 +1246,17 @@ void CommitResolveResult(const ResolveRequest &request, const wgnx::platform::en
 }
 
 [[maybe_unused]] std::uint64_t AllocateInnerPacketIdLocked() {
-#if WGNX_ENABLE_DEBUG_PROBE
     const std::uint64_t packet_id = g_next_inner_packet_id++;
     if (g_next_inner_packet_id == 0) {
         g_next_inner_packet_id = 1;
     }
     return packet_id;
-#else
-    return 0;
-#endif
 }
 
 void EnqueueReceivedInnerIpv4PacketLocked(
     std::size_t peer_index,
     std::uint32_t activation_generation,
     std::span<const std::uint8_t> packet) {
-#if WGNX_ENABLE_DEBUG_PROBE
     if (g_inner_packet_owner_process_id == 0) {
         logger::Log(
             "Dropped decrypted inner packet peer=%zu activation=%u bytes=%zu reason=no_consumer",
@@ -1312,11 +1301,6 @@ void EnqueueReceivedInnerIpv4PacketLocked(
         activation_generation,
         packet.size(),
         g_inner_packet_rx_queue.Size());
-#else
-    static_cast<void>(peer_index);
-    static_cast<void>(activation_generation);
-    static_cast<void>(packet);
-#endif
 }
 
 void CommitReceivedPacket(
@@ -1434,7 +1418,6 @@ void CommitReceivedPacket(
                 padded_payload.size() - inner_packet.size());
         }
 
-#if WGNX_ENABLE_DEBUG_PROBE
         wgnx::wireguard::DebugProbeReplyInfo reply_info{};
         const wgnx::wireguard::DebugProbeReplyValidation reply_validation =
             wgnx::wireguard::ValidateDebugIcmpEchoReply(
@@ -1477,7 +1460,6 @@ void CommitReceivedPacket(
                 decrypt_result.decrypt.payload_size);
             return;
         }
-#endif
 
         EnqueueReceivedInnerIpv4PacketLocked(
             peer_index,
@@ -1521,8 +1503,11 @@ void CommitReceivedPacket(
             }
             const wgnx::PeerErrorCode keepalive_error = SendProtocolPeerKeepalive(peer_index);
             if (keepalive_error != wgnx::PeerErrorCode::None) {
-                SetPeerError(peer_index, wgnx::PeerErrorStage::Transport, keepalive_error);
-                return;
+                if (!IsRecoverableTransportIoError(keepalive_error)) {
+                    SetPeerError(peer_index, wgnx::PeerErrorStage::Transport, keepalive_error);
+                    return;
+                }
+                LogRecoverableTransportIoError(peer_index, keepalive_error, "session confirmation keepalive");
             }
             SetPeerActive(peer_index);
             return;
@@ -1553,13 +1538,20 @@ void CommitReceiveFailure(
         peer_index,
         runtime.resolved_endpoint_text,
         static_cast<unsigned int>(error));
-    SetPeerError(peer_index, wgnx::PeerErrorStage::Transport, MapSocketErrorToPeerErrorCode(error));
+    const wgnx::PeerErrorCode receive_error = MapSocketErrorToPeerErrorCode(error);
+    if (IsRecoverableTransportIoError(receive_error)) {
+        LogRecoverableTransportIoError(peer_index, receive_error, "receive worker");
+        logger::Log(
+            "WG receive worker stopped after nonterminal transport failure peer=%zu activation=%u socket=%d",
+            peer_index,
+            activation_generation,
+            static_cast<int>(socket));
+        return;
+    }
+    SetPeerError(peer_index, wgnx::PeerErrorStage::Transport, receive_error);
 }
 
 [[maybe_unused]] void CommitPayloadSubmission(const PayloadSubmissionRequest &request) {
-#if !WGNX_ENABLE_DEBUG_PROBE
-    static_cast<void>(request);
-#else
     std::scoped_lock lock(g_state_mutex);
     if (request.peer_index >= g_state.peer_count ||
         g_state.active_peer_index != static_cast<std::int32_t>(request.peer_index)) {
@@ -1628,13 +1620,16 @@ void CommitReceiveFailure(
         wgnx::GetDebugTriggerActionName(request.action));
     if (send_error != wgnx::PeerErrorCode::None) {
         SetDebugProbeState(std::addressof(runtime), request.action, wgnx::DebugProbeStatus::SendFailed);
-        SetPeerError(request.peer_index, GetPayloadSubmissionErrorStage(send_error), send_error);
+        if (IsRecoverableTransportIoError(send_error)) {
+            LogRecoverableTransportIoError(request.peer_index, send_error, "debug payload");
+        } else {
+            SetPeerError(request.peer_index, GetPayloadSubmissionErrorStage(send_error), send_error);
+        }
         return;
     }
 
     SetDebugProbeState(std::addressof(runtime), request.action, wgnx::DebugProbeStatus::Sent);
     SchedulePayloadProbeTimeout();
-#endif
 }
 
 void ResolverWorkMain(wgnx::platform::work_struct *) {
@@ -1680,18 +1675,13 @@ void ReceiveWorkMain(wgnx::platform::work_struct *) {
 }
 
 [[maybe_unused]] void PayloadSubmissionWorkMain(wgnx::platform::work_struct *) {
-#if WGNX_ENABLE_DEBUG_PROBE
     PayloadSubmissionRequest request{};
     while (DequeuePayloadSubmissionRequest(std::addressof(request))) {
         CommitPayloadSubmission(request);
     }
-#else
-    return;
-#endif
 }
 
 [[maybe_unused]] void InnerPacketSubmissionWorkMain(wgnx::platform::work_struct *) {
-#if WGNX_ENABLE_DEBUG_PROBE
     while (true) {
         std::scoped_lock lock(g_state_mutex);
         const auto *front = g_inner_packet_tx_queue.Front();
@@ -1747,6 +1737,10 @@ void ReceiveWorkMain(wgnx::platform::work_struct *) {
                 record.peer_index,
                 record.activation_generation,
                 wgnx::GetPeerErrorCodeName(send_error));
+            if (IsRecoverableTransportIoError(send_error)) {
+                LogRecoverableTransportIoError(record.peer_index, send_error, "packet API");
+                continue;
+            }
             SetPeerError(record.peer_index, GetPayloadSubmissionErrorStage(send_error), send_error);
             return;
         }
@@ -1759,11 +1753,9 @@ void ReceiveWorkMain(wgnx::platform::work_struct *) {
             static_cast<unsigned int>(record.size),
             g_inner_packet_tx_queue.Size());
     }
-#endif
 }
 
 [[maybe_unused]] void CommitPayloadProbeTimeout() {
-#if WGNX_ENABLE_DEBUG_PROBE
     std::scoped_lock lock(g_state_mutex);
     if (g_state.active_peer_index < 0) {
         return;
@@ -1784,7 +1776,6 @@ void ReceiveWorkMain(wgnx::platform::work_struct *) {
         peer_index,
         wgnx::GetDebugTriggerActionName(action),
         runtime.activation_generation);
-#endif
 }
 
 [[maybe_unused]] void PayloadProbeTimeoutWorkMain(wgnx::platform::work_struct *) {
@@ -1841,8 +1832,11 @@ void RunTimerAction(wgnx::wireguard::TimerHook hook) {
 
             const wgnx::PeerErrorCode keepalive_error = SendProtocolPeerKeepalive(peer_index);
             if (keepalive_error != wgnx::PeerErrorCode::None) {
-                SetPeerError(peer_index, wgnx::PeerErrorStage::Transport, keepalive_error);
-                return;
+                if (!IsRecoverableTransportIoError(keepalive_error)) {
+                    SetPeerError(peer_index, wgnx::PeerErrorStage::Transport, keepalive_error);
+                    return;
+                }
+                LogRecoverableTransportIoError(peer_index, keepalive_error, "persistent keepalive timer");
             }
 
             if (peer->persistent_keepalive_interval > 0) {
@@ -1868,8 +1862,11 @@ void RunTimerAction(wgnx::wireguard::TimerHook hook) {
             runtime.handshake_send_attempts = 0;
             const wgnx::PeerErrorCode send_error = SendProtocolPeerInitiation(peer_index);
             if (send_error != wgnx::PeerErrorCode::None) {
-                SetPeerError(peer_index, wgnx::PeerErrorStage::Transport, send_error);
-                return;
+                if (!IsRecoverableTransportIoError(send_error)) {
+                    SetPeerError(peer_index, wgnx::PeerErrorStage::Transport, send_error);
+                    return;
+                }
+                LogRecoverableTransportIoError(peer_index, send_error, "rekey initiation");
             }
 
             runtime.handshake_send_attempts = 1;
@@ -1909,13 +1906,11 @@ void RekeyTimerCallback(wgnx::platform::timer_list *) {
 }
 
 [[maybe_unused]] void PayloadProbeTimeoutTimerCallback(wgnx::platform::timer_list *) {
-#if WGNX_ENABLE_DEBUG_PROBE
     if (g_timer_action_workqueue != nullptr) {
         static_cast<void>(wgnx::platform::queue_work(
             g_timer_action_workqueue,
             std::addressof(g_payload_probe_timeout_dispatcher.work)));
     }
-#endif
 }
 
 void TimerActionWorkMain(wgnx::platform::work_struct *work) {
@@ -1933,9 +1928,7 @@ void TimerActionWorkMain(wgnx::platform::work_struct *work) {
     }
 
     if (work == std::addressof(g_payload_probe_timeout_dispatcher.work)) {
-#if WGNX_ENABLE_DEBUG_PROBE
         PayloadProbeTimeoutWorkMain(work);
-#endif
     }
 }
 
@@ -1951,9 +1944,6 @@ void InitializeResolverWorker() {
 }
 
 [[maybe_unused]] void InitializeSubmissionWorker() {
-#if !WGNX_ENABLE_DEBUG_PROBE
-    return;
-#else
     if (g_submission_workqueue != nullptr) {
         return;
     }
@@ -1965,51 +1955,6 @@ void InitializeResolverWorker() {
         std::addressof(g_inner_packet_submission_dispatcher.work),
         InnerPacketSubmissionWorkMain);
     logger::Log("Started shared payload and inner packet submission worker");
-#endif
-}
-
-[[maybe_unused]] void InitializeInnerPacketAuthorization() {
-#if WGNX_ENABLE_DEBUG_PROBE
-    const Result rc = pminfoInitialize();
-    g_inner_packet_authorization_ready = R_SUCCEEDED(rc);
-    logger::Log(
-        "Initialized inner packet caller authorization ready=%u allowed_program_id=0x%016llx rc=0x%08x",
-        g_inner_packet_authorization_ready ? 1U : 0U,
-        static_cast<unsigned long long>(WGNX_DEBUG_PACKET_CLIENT_PROGRAM_ID),
-        static_cast<unsigned int>(rc));
-#endif
-}
-
-[[maybe_unused]] bool IsAuthorizedInnerPacketClient(const ams::sf::ClientProcessId &client_pid) {
-#if !WGNX_ENABLE_DEBUG_PROBE
-    static_cast<void>(client_pid);
-    return false;
-#else
-    if (!g_inner_packet_authorization_ready) {
-        return false;
-    }
-
-    ams::ncm::ProgramId program_id{};
-    const ams::Result rc = ams::pm::info::GetProgramId(
-        std::addressof(program_id),
-        client_pid.GetValue());
-    if (R_FAILED(rc)) {
-        logger::Log(
-            "Failed to resolve packet API caller pid=%llu rc=0x%08x",
-            static_cast<unsigned long long>(client_pid.GetValue().value),
-            static_cast<unsigned int>(rc.GetValue()));
-        return false;
-    }
-
-    const bool allowed = program_id.value == static_cast<std::uint64_t>(WGNX_DEBUG_PACKET_CLIENT_PROGRAM_ID);
-    if (!allowed) {
-        logger::Log(
-            "Rejected packet API caller pid=%llu program_id=0x%016llx",
-            static_cast<unsigned long long>(client_pid.GetValue().value),
-            static_cast<unsigned long long>(program_id.value));
-    }
-    return allowed;
-#endif
 }
 
 void InitializeReceiveWorker() {
@@ -2033,17 +1978,13 @@ void InitializeTransportTimerExecutor() {
     wgnx::platform::INIT_WORK(std::addressof(g_retransmit_dispatcher.work), TimerActionWorkMain);
     wgnx::platform::INIT_WORK(std::addressof(g_keepalive_dispatcher.work), TimerActionWorkMain);
     wgnx::platform::INIT_WORK(std::addressof(g_rekey_dispatcher.work), TimerActionWorkMain);
-#if WGNX_ENABLE_DEBUG_PROBE
     wgnx::platform::INIT_WORK(std::addressof(g_payload_probe_timeout_dispatcher.work), TimerActionWorkMain);
-#endif
     wgnx::platform::timer_setup(std::addressof(g_retransmit_dispatcher.timer), RetransmitTimerCallback);
     wgnx::platform::timer_setup(std::addressof(g_keepalive_dispatcher.timer), KeepaliveTimerCallback);
     wgnx::platform::timer_setup(std::addressof(g_rekey_dispatcher.timer), RekeyTimerCallback);
-#if WGNX_ENABLE_DEBUG_PROBE
     wgnx::platform::timer_setup(
         std::addressof(g_payload_probe_timeout_dispatcher.timer),
         PayloadProbeTimeoutTimerCallback);
-#endif
     logger::Log("Started transport timer executor");
 }
 
@@ -2150,7 +2091,6 @@ ams::Result ControlService::SetAutoStartPeer(const wgnx::PeerSelectionRequest &r
     R_SUCCEED();
 }
 
-#if WGNX_ENABLE_DEBUG_PROBE
 ams::Result ControlService::TriggerDebugPayload(const wgnx::DebugTriggerRequest &request) {
     std::scoped_lock lock(g_state_mutex);
     InitializeState();
@@ -2179,12 +2119,6 @@ ams::Result ControlService::SubmitInnerIpv4Packet(
         .activation_generation = 0,
         .peer_index = -1,
     };
-
-    if (!IsAuthorizedInnerPacketClient(client_pid)) {
-        result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::AccessDenied);
-        out.SetValue(result);
-        R_SUCCEED();
-    }
 
     const auto packet_bytes = std::span<const std::uint8_t>(
         static_cast<const std::uint8_t *>(packet.GetPointer()),
@@ -2287,12 +2221,6 @@ ams::Result ControlService::ReceiveInnerIpv4Packet(
         .peer_index = -1,
     };
 
-    if (!IsAuthorizedInnerPacketClient(client_pid)) {
-        result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::AccessDenied);
-        out.SetValue(result);
-        R_SUCCEED();
-    }
-
     std::scoped_lock lock(g_state_mutex);
     InitializeState();
     const std::uint64_t process_id = client_pid.GetValue().value;
@@ -2345,7 +2273,6 @@ ams::Result ControlService::ReceiveInnerIpv4Packet(
     out.SetValue(result);
     R_SUCCEED();
 }
-#endif
 
 void RunIpcServer() {
     {
@@ -2353,10 +2280,7 @@ void RunIpcServer() {
         InitializeState();
     }
     InitializeResolverWorker();
-#if WGNX_ENABLE_DEBUG_PROBE
     InitializeSubmissionWorker();
-    InitializeInnerPacketAuthorization();
-#endif
     InitializeReceiveWorker();
     InitializeTransportTimerExecutor();
     logger::Log("Constructing IPC server");

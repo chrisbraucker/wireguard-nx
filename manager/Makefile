@@ -15,7 +15,6 @@ OUTDIR		:=	out
 SOURCES		:=	src
 DATA		:=	data
 INCLUDES	:=	../common/include
-WGNX_ENABLE_DEBUG_PROBE ?= 1
 
 APP_TITLE	:=	WireGuard-NX
 APP_AUTHOR	:=	chrisbraucker
@@ -35,8 +34,7 @@ DEFINES	:=	-DDISABLE_IPC \
 	-DTARGET="\"$(TARGET)\"" \
 	-DAPP_TITLE="\"$(APP_TITLE)"\" \
 	-DVERSION="\"$(APP_VERSION)\"" \
-	-DBUILD_ID="\"$(BUILD_ID)\"" \
-	-DWGNX_ENABLE_DEBUG_PROBE=$(WGNX_ENABLE_DEBUG_PROBE)
+	-DBUILD_ID="\"$(BUILD_ID)\""
 
 ARCH	:=	-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 

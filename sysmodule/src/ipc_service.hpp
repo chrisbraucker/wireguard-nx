@@ -4,14 +4,10 @@
 
 #include "wgnx/protocol.hpp"
 
-#if WGNX_ENABLE_DEBUG_PROBE
 #define WGNX_I_CONTROL_SERVICE_INTERFACE_DEBUG_INFO(C, H) \
     AMS_SF_METHOD_INFO(C, H, static_cast<u32>(wgnx::CommandId::TriggerDebugPayload),   ams::Result, TriggerDebugPayload,   (const wgnx::DebugTriggerRequest &request),                                                                                              (request),                    ams::hos::Version_Min, ams::hos::Version_Max) \
     AMS_SF_METHOD_INFO(C, H, static_cast<u32>(wgnx::CommandId::SubmitInnerIpv4Packet), ams::Result, SubmitInnerIpv4Packet, (ams::sf::Out<wgnx::PacketSubmissionResult> out, const ams::sf::InBuffer &packet, const ams::sf::ClientProcessId &client_pid), (out, packet, client_pid),    ams::hos::Version_Min, ams::hos::Version_Max) \
     AMS_SF_METHOD_INFO(C, H, static_cast<u32>(wgnx::CommandId::ReceiveInnerIpv4Packet),ams::Result, ReceiveInnerIpv4Packet,(ams::sf::Out<wgnx::PacketReceiveResult> out, const ams::sf::OutBuffer &packet, const ams::sf::ClientProcessId &client_pid),    (out, packet, client_pid),    ams::hos::Version_Min, ams::hos::Version_Max)
-#else
-#define WGNX_I_CONTROL_SERVICE_INTERFACE_DEBUG_INFO(C, H)
-#endif
 
 #define WGNX_I_CONTROL_SERVICE_INTERFACE_INFO(C, H) \
     AMS_SF_METHOD_INFO(C, H, static_cast<u32>(wgnx::CommandId::GetApiVersion),    ams::Result, GetApiVersion,    (ams::sf::Out<u32> out),                                                     (out), ams::hos::Version_Min, ams::hos::Version_Max) \
@@ -37,7 +33,6 @@ public:
     ams::Result ListPeers(ams::sf::Out<u32> out_count, const ams::sf::OutArray<wgnx::PeerInfo> &out);
     ams::Result SetActivePeer(const wgnx::PeerSelectionRequest &request);
     ams::Result SetAutoStartPeer(const wgnx::PeerSelectionRequest &request);
-#if WGNX_ENABLE_DEBUG_PROBE
     ams::Result TriggerDebugPayload(const wgnx::DebugTriggerRequest &request);
     ams::Result SubmitInnerIpv4Packet(
         ams::sf::Out<wgnx::PacketSubmissionResult> out,
@@ -47,7 +42,6 @@ public:
         ams::sf::Out<wgnx::PacketReceiveResult> out,
         const ams::sf::OutBuffer &packet,
         const ams::sf::ClientProcessId &client_pid);
-#endif
 };
 static_assert(IsIControlService<ControlService>);
 

@@ -120,7 +120,6 @@ tsl::elm::Element* GuiMain::createUI() {
             renderer->drawString("Last RX: " + moment(peer.lastRx) + ",   Last TX: " + moment(peer.lastTx), false, x + 15, y + 110, 15, tsl::infoTextColor);
             renderer->drawString("RX: " + formatBytes(peer.rxBytes) + ",   TX: " + formatBytes(peer.txBytes), false, x + 15, y + 130, 15, tsl::infoTextColor);
             renderer->drawString("Keepalive: " + (peer.persistentKeepaliveInterval > 0 ? (std::to_string(peer.persistentKeepaliveInterval) + "s") : std::string("false")), false, x + 15, y + 150, 15, tsl::infoTextColor);
-#if WGNX_ENABLE_DEBUG_PROBE
             if (peer.debugProbeStatus != static_cast<std::uint32_t>(wgnx::DebugProbeStatus::None)) {
                 renderer->drawString(
                     "Probe: " +
@@ -137,13 +136,8 @@ tsl::elm::Element* GuiMain::createUI() {
                         ? tsl::infoTextColor
                         : tsl::warningTextColor);
             }
-#endif
             if (peer.hasError) {
-#if WGNX_ENABLE_DEBUG_PROBE
                 renderer->drawString("Error: " + peerErrorStage(peer.errorStage) + " / " + peerErrorCode(peer.lastErrorCode), false, x + 15, y + (peer.debugProbeStatus != static_cast<std::uint32_t>(wgnx::DebugProbeStatus::None) ? 190 : 170), 15, tsl::warningTextColor);
-#else
-                renderer->drawString("Error: " + peerErrorStage(peer.errorStage) + " / " + peerErrorCode(peer.lastErrorCode), false, x + 15, y + 170, 15, tsl::warningTextColor);
-#endif
             }
         });
         peerList->addItem(m_peerInfoDrawer);

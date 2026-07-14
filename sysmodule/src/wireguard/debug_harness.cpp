@@ -1,9 +1,7 @@
 #include "wireguard/debug_harness.hpp"
 
 #include "wireguard/data.hpp"
-#if WGNX_ENABLE_DEBUG_PROBE
 #include "wireguard/debug_probe.hpp"
-#endif
 #include "wireguard/device.hpp"
 #include "wireguard/dispatch.hpp"
 #include "wireguard/endian.hpp"
@@ -213,7 +211,6 @@ std::uint16_t ComputeHarnessInternetChecksum(const std::uint8_t *data, std::size
     return static_cast<std::uint16_t>(~sum & 0xFFFFu);
 }
 
-#if WGNX_ENABLE_DEBUG_PROBE
 bool BuildHarnessDebugProbeReply(
     std::array<std::uint8_t, DebugProbePacketSize> *out_reply,
     wgnx::DebugTriggerAction action,
@@ -254,7 +251,6 @@ bool BuildHarnessDebugProbeReply(
         ComputeHarnessInternetChecksum(icmp, DebugProbeIcmpHeaderSize + DebugProbeIcmpPayloadSize));
     return true;
 }
-#endif
 
 void CountHandshakeInitiation(void *context, const message_handshake_initiation &) {
     static_cast<DispatchTestContext *>(context)->initiation_count++;
@@ -980,7 +976,6 @@ bool TestHandshakeResponseAndSessionDerivation() {
                NoiseMacSize) != 0;
 }
 
-#if WGNX_ENABLE_DEBUG_PROBE
 bool TestDebugProbeStatusTransitions() {
     return CanTransitionDebugProbeStatus(wgnx::DebugProbeStatus::None, wgnx::DebugProbeStatus::Queued) &&
            CanTransitionDebugProbeStatus(wgnx::DebugProbeStatus::Queued, wgnx::DebugProbeStatus::Sent) &&
@@ -1060,7 +1055,6 @@ bool TestDebugProbeIcmpRoundTrip() {
 
     return true;
 }
-#endif
 
 } // namespace
 
@@ -1103,11 +1097,9 @@ bool RunCoreSelfTest() {
         TestStaticIdentityParsing() &&
         TestHandshakeInitiationCreation() &&
         TestHandshakeResponseAndSessionDerivation()
-#if WGNX_ENABLE_DEBUG_PROBE
         &&
         TestDebugProbeStatusTransitions() &&
         TestDebugProbeIcmpRoundTrip()
-#endif
         ;
     ResetCoreSelfTestStorage();
 
