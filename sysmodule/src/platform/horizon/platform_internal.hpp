@@ -9,6 +9,7 @@
 namespace wgnx::sysmodule::platform::horizon::internal {
 
 ams::Result EnsureUdpRuntimeInitialized();
+ams::Result EnsureNifmRuntimeInitialized();
 int ToNativeAddressFamily(wgnx::platform::address_family family);
 wgnx::platform::address_family FromNativeAddressFamily(int family);
 bool EncodeEndpointFromSockaddr(wgnx::platform::endpoint *out, const sockaddr *address);

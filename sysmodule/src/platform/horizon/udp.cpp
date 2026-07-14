@@ -1,5 +1,6 @@
 #include "platform_internal.hpp"
 
+#include "development_config.hpp"
 #include "logger.hpp"
 
 #include <arpa/inet.h>
@@ -30,18 +31,23 @@ constexpr inline size_t SocketRequiredSize = ams::util::AlignUp(SocketMemoryPool
 alignas(ams::os::MemoryPageSize) constinit std::uint8_t g_socket_memory[SocketRequiredSize] = {};
 constinit bool g_socket_initialized = false;
 constinit bool g_nifm_initialized = false;
-ams::os::Mutex g_socket_mutex(false);
+ams::os::Mutex g_runtime_mutex(false);
 
 } // namespace
 
 ams::Result EnsureUdpRuntimeInitialized() {
-    std::scoped_lock lock(g_socket_mutex);
+    std::scoped_lock lock(g_runtime_mutex);
     if (!g_socket_initialized) {
         constexpr SocketConfigType SocketConfig(g_socket_memory, sizeof(g_socket_memory), SocketAllocatorSize, 2);
         R_TRY(ams::socket::Initialize(SocketConfig));
         g_socket_initialized = true;
     }
 
+    R_SUCCEED();
+}
+
+ams::Result EnsureNifmRuntimeInitialized() {
+    std::scoped_lock lock(g_runtime_mutex);
     if (!g_nifm_initialized) {
         R_TRY(static_cast<ams::Result>(nifmInitialize(NifmServiceType_System)));
         g_nifm_initialized = true;
@@ -166,6 +172,7 @@ struct NetworkPathFingerprint {
 
 constinit NetworkPathFingerprint g_last_network_path = {};
 constinit bool g_has_last_network_path = false;
+constinit std::uint64_t g_network_path_sample_sequence = 0;
 
 bool NetworkPathsEqual(const NetworkPathFingerprint &lhs, const NetworkPathFingerprint &rhs) {
     return lhs.initialization_result == rhs.initialization_result &&
@@ -290,8 +297,27 @@ void udp_close(socket_handle socket) {
         return;
     }
 
-    static_cast<void>(ams::socket::Shutdown(socket, ams::socket::ShutdownMethod::Shut_RdWr));
-    static_cast<void>(ams::socket::Close(socket));
+    wgnx::sysmodule::logger::Log("udp_close shutdown begin socket=%d", static_cast<int>(socket));
+    const s32 shutdown_result = ams::socket::Shutdown(socket, ams::socket::ShutdownMethod::Shut_RdWr);
+    const auto shutdown_errno = shutdown_result < 0
+        ? ams::socket::GetLastError()
+        : ams::socket::Errno::ESuccess;
+    wgnx::sysmodule::logger::Log(
+        "udp_close shutdown end socket=%d result=%d socket_errno=%u",
+        static_cast<int>(socket),
+        static_cast<int>(shutdown_result),
+        static_cast<unsigned int>(shutdown_errno));
+
+    wgnx::sysmodule::logger::Log("udp_close close begin socket=%d", static_cast<int>(socket));
+    const s32 close_result = ams::socket::Close(socket);
+    const auto close_errno = close_result < 0
+        ? ams::socket::GetLastError()
+        : ams::socket::Errno::ESuccess;
+    wgnx::sysmodule::logger::Log(
+        "udp_close close end socket=%d result=%d socket_errno=%u",
+        static_cast<int>(socket),
+        static_cast<int>(close_result),
+        static_cast<unsigned int>(close_errno));
 }
 
 socket_error udp_send(socket_handle socket, const endpoint &destination, std::span<const std::uint8_t> data, std::size_t *out_sent) {
@@ -333,6 +359,10 @@ socket_error udp_receive(socket_handle socket, std::span<std::uint8_t> buffer, s
 
     sockaddr_storage native_address = {};
     ams::socket::SockLenT native_length = sizeof(native_address);
+    wgnx::sysmodule::logger::Log(
+        "udp_receive RecvFrom begin socket=%d capacity=%zu",
+        static_cast<int>(socket),
+        buffer.size());
     const ssize_t rc = ams::socket::RecvFrom(
         socket,
         buffer.data(),
@@ -340,8 +370,15 @@ socket_error udp_receive(socket_handle socket, std::span<std::uint8_t> buffer, s
         ams::socket::MsgFlag::Msg_None,
         reinterpret_cast<ams::socket::SockAddr *>(std::addressof(native_address)),
         std::addressof(native_length));
+    const auto socket_errno = rc < 0
+        ? ams::socket::GetLastError()
+        : ams::socket::Errno::ESuccess;
+    wgnx::sysmodule::logger::Log(
+        "udp_receive RecvFrom end socket=%d result=%lld socket_errno=%u",
+        static_cast<int>(socket),
+        static_cast<long long>(rc),
+        static_cast<unsigned int>(socket_errno));
     if (rc < 0) {
-        const auto socket_errno = ams::socket::GetLastError();
         if (socket_errno == ams::socket::Errno::ESuccess ||
             socket_errno == ams::socket::Errno::EAgain ||
             socket_errno == ams::socket::Errno::EWouldBlock ||
@@ -381,43 +418,87 @@ socket_error udp_receive(socket_handle socket, std::span<std::uint8_t> buffer, s
 }
 
 void observe_network_path() {
+    const std::uint64_t sequence = ++g_network_path_sample_sequence;
+    wgnx::sysmodule::logger::Log(
+        "NIFM observer sample begin sequence=%llu",
+        static_cast<unsigned long long>(sequence));
+
     NetworkPathFingerprint current{};
+    wgnx::sysmodule::logger::Log(
+        "NIFM observer init begin sequence=%llu",
+        static_cast<unsigned long long>(sequence));
     const ams::Result initialization_result =
-        wgnx::sysmodule::platform::horizon::internal::EnsureUdpRuntimeInitialized();
+        wgnx::sysmodule::platform::horizon::internal::EnsureNifmRuntimeInitialized();
     current.initialization_result = static_cast<std::uint32_t>(initialization_result.GetValue());
+    wgnx::sysmodule::logger::Log(
+        "NIFM observer init end sequence=%llu rc=0x%08x",
+        static_cast<unsigned long long>(sequence),
+        current.initialization_result);
 
     if (R_SUCCEEDED(initialization_result)) {
-        NifmInternetConnectionType connection_type{};
-        NifmInternetConnectionStatus connection_status{};
-        u32 wifi_strength = 0;
-        const Result status_result = nifmGetInternetConnectionStatus(
-            std::addressof(connection_type),
-            std::addressof(wifi_strength),
-            std::addressof(connection_status));
-        current.internet_status_result = status_result;
-        if (R_SUCCEEDED(status_result)) {
-            current.connection_type = static_cast<std::uint32_t>(connection_type);
-            current.connection_status = static_cast<std::uint32_t>(connection_status);
-            current.wifi_strength = wifi_strength;
+        if constexpr (wgnx::sysmodule::development_config::QueryNifmInternetStatus) {
+            NifmInternetConnectionType connection_type{};
+            NifmInternetConnectionStatus connection_status{};
+            u32 wifi_strength = 0;
+            wgnx::sysmodule::logger::Log(
+                "NIFM observer status begin sequence=%llu",
+                static_cast<unsigned long long>(sequence));
+            const Result status_result = nifmGetInternetConnectionStatus(
+                std::addressof(connection_type),
+                std::addressof(wifi_strength),
+                std::addressof(connection_status));
+            current.internet_status_result = status_result;
+            wgnx::sysmodule::logger::Log(
+                "NIFM observer status end sequence=%llu rc=0x%08x",
+                static_cast<unsigned long long>(sequence),
+                current.internet_status_result);
+            if (R_SUCCEEDED(status_result)) {
+                current.connection_type = static_cast<std::uint32_t>(connection_type);
+                current.connection_status = static_cast<std::uint32_t>(connection_status);
+                current.wifi_strength = wifi_strength;
+            }
+        } else {
+            wgnx::sysmodule::logger::Log(
+                "NIFM observer status skipped sequence=%llu mode=%s",
+                static_cast<unsigned long long>(sequence),
+                wgnx::sysmodule::development_config::GetNifmPathObserverModeName());
         }
 
-        const Result config_result = nifmGetCurrentIpConfigInfo(
-            std::addressof(current.current_address),
-            std::addressof(current.subnet_mask),
-            std::addressof(current.gateway),
-            std::addressof(current.primary_dns),
-            std::addressof(current.secondary_dns));
-        current.ip_config_result = config_result;
-        if (R_FAILED(config_result)) {
-            current.current_address = 0;
-            current.subnet_mask = 0;
-            current.gateway = 0;
-            current.primary_dns = 0;
-            current.secondary_dns = 0;
+        if constexpr (wgnx::sysmodule::development_config::QueryNifmIpConfig) {
+            wgnx::sysmodule::logger::Log(
+                "NIFM observer config begin sequence=%llu",
+                static_cast<unsigned long long>(sequence));
+            const Result config_result = nifmGetCurrentIpConfigInfo(
+                std::addressof(current.current_address),
+                std::addressof(current.subnet_mask),
+                std::addressof(current.gateway),
+                std::addressof(current.primary_dns),
+                std::addressof(current.secondary_dns));
+            current.ip_config_result = config_result;
+            wgnx::sysmodule::logger::Log(
+                "NIFM observer config end sequence=%llu rc=0x%08x",
+                static_cast<unsigned long long>(sequence),
+                current.ip_config_result);
+            if (R_FAILED(config_result)) {
+                current.current_address = 0;
+                current.subnet_mask = 0;
+                current.gateway = 0;
+                current.primary_dns = 0;
+                current.secondary_dns = 0;
+            }
+        } else {
+            wgnx::sysmodule::logger::Log(
+                "NIFM observer config skipped sequence=%llu mode=%s",
+                static_cast<unsigned long long>(sequence),
+                wgnx::sysmodule::development_config::GetNifmPathObserverModeName());
         }
     }
 
-    if (g_has_last_network_path && NetworkPathsEqual(current, g_last_network_path)) {
+    const bool changed = !g_has_last_network_path || !NetworkPathsEqual(current, g_last_network_path);
+    if (!changed) {
+        wgnx::sysmodule::logger::Log(
+            "NIFM observer sample end sequence=%llu changed=0",
+            static_cast<unsigned long long>(sequence));
         return;
     }
 
@@ -447,6 +528,9 @@ void observe_network_path() {
         secondary_dns);
     g_last_network_path = current;
     g_has_last_network_path = true;
+    wgnx::sysmodule::logger::Log(
+        "NIFM observer sample end sequence=%llu changed=1",
+        static_cast<unsigned long long>(sequence));
 }
 
 } // namespace wgnx::platform

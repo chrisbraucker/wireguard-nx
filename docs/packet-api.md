@@ -40,7 +40,12 @@ and returns `PacketReceiveResult`. It is nonblocking: an empty queue returns
 `PacketApiStatus::QueueEmpty` immediately.
 
 Clients should use the wrappers in `common/include/wgnx/client.hpp`; both
-wrappers send the caller PID required by the service interface.
+packet commands send the caller PID required by the service interface. A client
+that submits a packet and waits for a response should open one `ScopedService`
+and pass it to `GetApiVersion`, `SubmitInnerIpv4Packet`, and every
+`ReceiveInnerIpv4Packet` call. The one-shot overloads remain suitable for
+isolated control operations, but opening a new SM/CMIF session for every
+nonblocking receive poll creates unnecessary system-session churn.
 
 The submission and receive result structures report:
 

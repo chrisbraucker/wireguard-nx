@@ -1,6 +1,7 @@
 #include "ipc_service.hpp"
 
 #include "config_loader.hpp"
+#include "development_config.hpp"
 #include "logger.hpp"
 #include "wgnx/platform/clock.hpp"
 #include "wgnx/platform/random.hpp"
@@ -62,6 +63,7 @@ struct DaemonState {
         bool has_resolved_endpoint{false};
         wgnx::platform::socket_handle socket{wgnx::platform::InvalidSocket};
         std::uint32_t socket_generation{0};
+        bool transport_suspended{false};
     };
     std::array<PeerRuntimeInfo, wgnx::MaxPeers> runtime{};
     struct PeerProtocolInfo {
@@ -295,7 +297,16 @@ void CloseRuntimeSocket(DaemonState::PeerRuntimeInfo *runtime) {
     }
 
     if (runtime->socket != wgnx::platform::InvalidSocket) {
+        logger::Log(
+            "Closing runtime UDP socket generation=%u socket=%d suspended=%u",
+            runtime->socket_generation,
+            static_cast<int>(runtime->socket),
+            runtime->transport_suspended ? 1U : 0U);
         wgnx::platform::udp_close(runtime->socket);
+        logger::Log(
+            "Closed runtime UDP socket generation=%u socket=%d",
+            runtime->socket_generation,
+            static_cast<int>(runtime->socket));
     }
     runtime->socket = wgnx::platform::InvalidSocket;
     runtime->socket_generation = 0;
@@ -351,18 +362,59 @@ bool IsRecoverableTransportIoError(wgnx::PeerErrorCode code) {
            code == wgnx::PeerErrorCode::TransportReceiveFailed;
 }
 
+void CancelAllTransportTimers();
+
+void SuspendRuntimeTransportAfterSendFailure(std::size_t peer_index, const char *operation) {
+    if constexpr (!development_config::SuspendUdpTransportOnFirstSendFailure) {
+        return;
+    }
+
+    auto &runtime = g_state.runtime[peer_index];
+    if (runtime.transport_suspended) {
+        logger::Log(
+            "UDP transport already suspended peer=%zu activation=%u operation=%s",
+            peer_index,
+            runtime.activation_generation,
+            operation != nullptr ? operation : "unspecified");
+        return;
+    }
+
+    const auto socket = runtime.socket;
+    const std::uint32_t socket_generation = runtime.socket_generation;
+    runtime.transport_suspended = true;
+    logger::Log(
+        "EXPERIMENT suspending UDP transport after send failure peer=%zu activation=%u socket_generation=%u socket=%d operation=%s; preserving peer, keys, protocol, and NIFM state",
+        peer_index,
+        runtime.activation_generation,
+        socket_generation,
+        static_cast<int>(socket),
+        operation != nullptr ? operation : "unspecified");
+    CancelAllTransportTimers();
+    CloseRuntimeSocket(std::addressof(runtime));
+    logger::Log(
+        "EXPERIMENT UDP transport suspended peer=%zu activation=%u old_socket_generation=%u old_socket=%d state=%s",
+        peer_index,
+        runtime.activation_generation,
+        socket_generation,
+        static_cast<int>(socket),
+        wgnx::GetPeerRuntimeStateName(runtime.state));
+}
+
 void LogRecoverableTransportIoError(
     std::size_t peer_index,
     wgnx::PeerErrorCode code,
     const char *operation) {
     const auto &runtime = g_state.runtime[peer_index];
     logger::Log(
-        "Nonterminal WG transport I/O failure peer=%zu activation=%u state=%s operation=%s error=%s; preserving peer, socket, keys, and timers",
+        "Nonterminal WG transport I/O failure peer=%zu activation=%u state=%s operation=%s error=%s",
         peer_index,
         runtime.activation_generation,
         wgnx::GetPeerRuntimeStateName(runtime.state),
         operation != nullptr ? operation : "unspecified",
         wgnx::GetPeerErrorCodeName(code));
+    if (code == wgnx::PeerErrorCode::TransportSendFailed) {
+        SuspendRuntimeTransportAfterSendFailure(peer_index, operation);
+    }
 }
 
 [[maybe_unused]] wgnx::PeerErrorStage GetPayloadSubmissionErrorStage(wgnx::PeerErrorCode code) {
@@ -386,8 +438,6 @@ void LogRecoverableTransportIoError(
 
     return wgnx::PeerErrorStage::Internal;
 }
-
-void CancelAllTransportTimers();
 
 void ResetProtocolPeer(std::size_t peer_index) {
     auto &protocol = g_state.protocol[peer_index];
@@ -485,6 +535,7 @@ wgnx::PeerErrorCode OpenRuntimeSocket(std::size_t peer_index) {
     }
 
     runtime.socket_generation = AllocateSocketGeneration();
+    runtime.transport_suspended = false;
 
     logger::Log(
         "Opened UDP socket for peer %zu generation=%u socket=%d family=%s endpoint=%s",
@@ -499,6 +550,9 @@ wgnx::PeerErrorCode OpenRuntimeSocket(std::size_t peer_index) {
 
 wgnx::PeerErrorCode SendProtocolPeerInitiation(std::size_t peer_index) {
     auto &runtime = g_state.runtime[peer_index];
+    if (runtime.transport_suspended) {
+        return wgnx::PeerErrorCode::TransportSendFailed;
+    }
     wgnx::wireguard::wg_peer *peer = GetProtocolPeer(peer_index);
     if (peer == nullptr || !peer->has_last_initiation || !runtime.has_resolved_endpoint ||
         runtime.socket == wgnx::platform::InvalidSocket) {
@@ -543,6 +597,9 @@ wgnx::PeerErrorCode SendProtocolPeerPayload(
     std::size_t payload_size,
     const char *reason) {
     auto &runtime = g_state.runtime[peer_index];
+    if (runtime.transport_suspended) {
+        return wgnx::PeerErrorCode::TransportSendFailed;
+    }
     wgnx::wireguard::wg_peer *peer = GetProtocolPeer(peer_index);
     if (peer == nullptr || !peer->current_keypair.valid || !runtime.has_resolved_endpoint ||
         runtime.socket == wgnx::platform::InvalidSocket) {
@@ -1778,11 +1835,25 @@ void ReceiveWorkMain(wgnx::platform::work_struct *) {
 
         wgnx::platform::endpoint source{};
         std::size_t received = 0;
+        logger::Log(
+            "WG receive iteration begin peer=%zu activation=%u socket_generation=%u socket=%d",
+            peer_index,
+            activation_generation,
+            socket_generation,
+            static_cast<int>(socket));
         const auto receive_error = wgnx::platform::udp_receive(
             socket,
             packet.storage,
             std::addressof(received),
             std::addressof(source));
+        logger::Log(
+            "WG receive iteration end peer=%zu activation=%u socket_generation=%u socket=%d error=%u bytes=%zu",
+            peer_index,
+            activation_generation,
+            socket_generation,
+            static_cast<int>(socket),
+            static_cast<unsigned int>(receive_error),
+            received);
         if (receive_error != wgnx::platform::socket_error::none) {
             CommitReceiveFailure(peer_index, activation_generation, socket_generation, socket, receive_error);
             return;
@@ -1921,6 +1992,15 @@ void RunTimerAction(wgnx::wireguard::TimerHook hook) {
     auto &runtime = g_state.runtime[peer_index];
     wgnx::wireguard::wg_peer *peer = GetProtocolPeer(peer_index);
     if (peer == nullptr) {
+        return;
+    }
+
+    if (runtime.transport_suspended) {
+        logger::Log(
+            "WG timer ignored for suspended UDP transport peer=%zu activation=%u hook=%s",
+            peer_index,
+            runtime.activation_generation,
+            wgnx::wireguard::GetTimerHookName(hook));
         return;
     }
 
@@ -2136,19 +2216,29 @@ void InitializeTransportTimerExecutor() {
     wgnx::platform::INIT_WORK(std::addressof(g_keepalive_dispatcher.work), TimerActionWorkMain);
     wgnx::platform::INIT_WORK(std::addressof(g_rekey_dispatcher.work), TimerActionWorkMain);
     wgnx::platform::INIT_WORK(std::addressof(g_payload_probe_timeout_dispatcher.work), TimerActionWorkMain);
-    wgnx::platform::INIT_WORK(std::addressof(g_network_path_observer_dispatcher.work), TimerActionWorkMain);
     wgnx::platform::timer_setup(std::addressof(g_retransmit_dispatcher.timer), RetransmitTimerCallback);
     wgnx::platform::timer_setup(std::addressof(g_keepalive_dispatcher.timer), KeepaliveTimerCallback);
     wgnx::platform::timer_setup(std::addressof(g_rekey_dispatcher.timer), RekeyTimerCallback);
     wgnx::platform::timer_setup(
         std::addressof(g_payload_probe_timeout_dispatcher.timer),
         PayloadProbeTimeoutTimerCallback);
-    wgnx::platform::timer_setup(
-        std::addressof(g_network_path_observer_dispatcher.timer),
-        NetworkPathObserverTimerCallback);
-    static_cast<void>(wgnx::platform::mod_timer(
-        std::addressof(g_network_path_observer_dispatcher.timer),
-        wgnx::platform::get_jiffies_64() + NetworkPathObservationJiffies));
+    if constexpr (development_config::NifmPathObserverEnabled) {
+        wgnx::platform::INIT_WORK(
+            std::addressof(g_network_path_observer_dispatcher.work),
+            TimerActionWorkMain);
+        wgnx::platform::timer_setup(
+            std::addressof(g_network_path_observer_dispatcher.timer),
+            NetworkPathObserverTimerCallback);
+        static_cast<void>(wgnx::platform::mod_timer(
+            std::addressof(g_network_path_observer_dispatcher.timer),
+            wgnx::platform::get_jiffies_64() + NetworkPathObservationJiffies));
+        logger::Log("NIFM network-path observer enabled mode=%s interval_jiffies=%llu",
+            development_config::GetNifmPathObserverModeName(),
+            static_cast<unsigned long long>(NetworkPathObservationJiffies));
+    } else {
+        logger::Log("NIFM network-path observer disabled mode=%s",
+            development_config::GetNifmPathObserverModeName());
+    }
     logger::Log("Started transport timer executor");
 }
 

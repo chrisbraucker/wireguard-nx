@@ -10,18 +10,34 @@ class ScopedService {
 public:
     ScopedService() = default;
     ~ScopedService() {
-        if (m_active) {
-            serviceClose(&m_service);
-        }
+        close();
     }
 
     ScopedService(const ScopedService&) = delete;
     ScopedService& operator=(const ScopedService&) = delete;
 
     Result open() {
+        if (m_active) {
+            return 0;
+        }
+
         const Result rc = smGetService(&m_service, ServiceName);
         m_active = R_SUCCEEDED(rc);
         return rc;
+    }
+
+    void close() {
+        if (!m_active) {
+            return;
+        }
+
+        serviceClose(&m_service);
+        m_service = {};
+        m_active = false;
+    }
+
+    bool isOpen() const {
+        return m_active;
     }
 
     Service* get() {
@@ -49,6 +65,14 @@ inline bool IsServiceRunning() {
     return false;
 }
 
+inline Result GetApiVersion(ScopedService& service, std::uint32_t* out_version) {
+    if (!service.isOpen()) {
+        return MAKERESULT(Module_Libnx, LibnxError_NotInitialized);
+    }
+
+    return serviceDispatchOut(service.get(), static_cast<std::uint32_t>(CommandId::GetApiVersion), *out_version);
+}
+
 inline Result GetApiVersion(std::uint32_t* out_version) {
     ScopedService service;
     Result rc = service.open();
@@ -56,7 +80,7 @@ inline Result GetApiVersion(std::uint32_t* out_version) {
         return rc;
     }
 
-    return serviceDispatchOut(service.get(), static_cast<std::uint32_t>(CommandId::GetApiVersion), *out_version);
+    return GetApiVersion(service, out_version);
 }
 
 inline Result GetDaemonStatus(DaemonStatus* out_status) {
@@ -148,13 +172,12 @@ inline Result BumpUdpBinding() {
 }
 
 inline Result SubmitInnerIpv4Packet(
+    ScopedService& service,
     const void *packet,
     std::size_t packet_size,
     PacketSubmissionResult *out_result) {
-    ScopedService service;
-    Result rc = service.open();
-    if (R_FAILED(rc)) {
-        return rc;
+    if (!service.isOpen()) {
+        return MAKERESULT(Module_Libnx, LibnxError_NotInitialized);
     }
 
     const std::uint64_t pid_placeholder = 0;
@@ -170,13 +193,12 @@ inline Result SubmitInnerIpv4Packet(
 }
 
 inline Result ReceiveInnerIpv4Packet(
+    ScopedService& service,
     void *packet,
     std::size_t packet_capacity,
     PacketReceiveResult *out_result) {
-    ScopedService service;
-    Result rc = service.open();
-    if (R_FAILED(rc)) {
-        return rc;
+    if (!service.isOpen()) {
+        return MAKERESULT(Module_Libnx, LibnxError_NotInitialized);
     }
 
     const std::uint64_t pid_placeholder = 0;
@@ -189,6 +211,32 @@ inline Result ReceiveInnerIpv4Packet(
         .buffer_attrs = { SfBufferAttr_HipcMapAlias | SfBufferAttr_Out },
         .buffers = { { packet, packet_capacity } },
         .in_send_pid = true);
+}
+
+inline Result SubmitInnerIpv4Packet(
+    const void *packet,
+    std::size_t packet_size,
+    PacketSubmissionResult *out_result) {
+    ScopedService service;
+    Result rc = service.open();
+    if (R_FAILED(rc)) {
+        return rc;
+    }
+
+    return SubmitInnerIpv4Packet(service, packet, packet_size, out_result);
+}
+
+inline Result ReceiveInnerIpv4Packet(
+    void *packet,
+    std::size_t packet_capacity,
+    PacketReceiveResult *out_result) {
+    ScopedService service;
+    Result rc = service.open();
+    if (R_FAILED(rc)) {
+        return rc;
+    }
+
+    return ReceiveInnerIpv4Packet(service, packet, packet_capacity, out_result);
 }
 
 } // namespace wgnx::client
