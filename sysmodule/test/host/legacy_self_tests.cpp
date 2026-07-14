@@ -1,4 +1,4 @@
-#include "wireguard/debug_harness.hpp"
+#include "legacy_self_tests.hpp"
 
 #include "wireguard/data.hpp"
 #include "wireguard/debug_probe.hpp"

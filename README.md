@@ -31,6 +31,15 @@ Make sure that the submodule is initialized.
 git submodule update --init --recursive
 ```
 
+Run the deterministic protocol suite on the development host with:
+
+```bash
+make -C sysmodule test
+```
+
+See [Protocol Testing](docs/protocol-testing.md) for the deterministic boundary,
+covered state transitions, and the final on-device interoperability gate.
+
 
 ### Devcontainers
 

@@ -94,6 +94,8 @@ support predictably.
 
 ## Milestone 1: Deterministic Protocol Test Foundation
 
+**Status:** Host foundation implemented; real-peer on-device regression confirmed.
+
 ### Goal
 
 Make protocol-core behavior testable without requiring an on-device run for

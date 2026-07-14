@@ -35,6 +35,8 @@ LIBNAMES	:= Atmosphere-libs/libstratosphere
 
 HOST_CXX	?= g++
 HOST_CC		?= cc
+HOST_TEST_CXXFLAGS := -std=c++23 -Wall -Wextra -Wpedantic -Werror
+HOST_TEST_CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -Werror
 HOST_TEST_DIR	:= $(OUTDIR)/host-test
 HOST_TEST_TARGET := $(HOST_TEST_DIR)/wireguard-host-test
 HOST_TEST_CPP_SOURCES := \
@@ -48,13 +50,16 @@ HOST_TEST_CPP_SOURCES := \
 	src/wireguard/timers.cpp \
 	src/wireguard/peer.cpp \
 	src/wireguard/device.cpp \
-	src/wireguard/debug_harness.cpp \
 	src/wireguard/debug_probe.cpp \
 	src/wireguard/crypto/primitives.cpp \
 	test/host/host_stubs.cpp \
+	test/host/legacy_self_tests.cpp \
+	test/host/protocol_tests.cpp \
 	test/host/main.cpp
 HOST_TEST_C_SOURCES := src/wireguard/crypto/monocypher.c
+HOST_TEST_HEADERS := $(shell find $(TOPDIR)/test/host $(TOPDIR)/src/wireguard $(TOPDIR)/../common/include -type f -name '*.hpp')
 HOST_TEST_INCLUDES := \
+	-I$(CURDIR)/test/host \
 	-I$(CURDIR)/test/host/include \
 	-I$(CURDIR)/../common/include \
 	-I$(CURDIR)/src
@@ -148,10 +153,10 @@ dist	: $(BUILD)
 test: $(HOST_TEST_TARGET)
 	@$(HOST_TEST_TARGET)
 
-$(HOST_TEST_TARGET): $(HOST_TEST_CPP_SOURCES) $(HOST_TEST_C_SOURCES)
+$(HOST_TEST_TARGET): Makefile $(HOST_TEST_CPP_SOURCES) $(HOST_TEST_C_SOURCES) $(HOST_TEST_HEADERS)
 	@[ -d $(HOST_TEST_DIR) ] || mkdir -p $(HOST_TEST_DIR)
-	@$(HOST_CC) -std=c11 -I$(CURDIR)/src/wireguard/crypto -c $(CURDIR)/src/wireguard/crypto/monocypher.c -o $(HOST_TEST_DIR)/monocypher.o
-	@$(HOST_CXX) -std=c++23 $(HOST_TEST_INCLUDES) $(addprefix $(CURDIR)/,$(HOST_TEST_CPP_SOURCES)) $(HOST_TEST_DIR)/monocypher.o -o $(HOST_TEST_TARGET)
+	@$(HOST_CC) $(HOST_TEST_CFLAGS) -I$(CURDIR)/src/wireguard/crypto -c $(CURDIR)/src/wireguard/crypto/monocypher.c -o $(HOST_TEST_DIR)/monocypher.o
+	@$(HOST_CXX) $(HOST_TEST_CXXFLAGS) $(HOST_TEST_INCLUDES) $(addprefix $(CURDIR)/,$(HOST_TEST_CPP_SOURCES)) $(HOST_TEST_DIR)/monocypher.o -o $(HOST_TEST_TARGET)
 
 libs	:
 	@$(foreach lib,$(LIBNAMES),$(MAKE) --no-print-directory -C $(TOPDIR)/lib/$(lib) && ) true

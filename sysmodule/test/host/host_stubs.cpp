@@ -3,15 +3,26 @@
 #include "wgnx/platform/clock.hpp"
 #include "wgnx/platform/random.hpp"
 
+#include "test_runtime.hpp"
+
 #include <atomic>
-#include <cstdarg>
-#include <cstdio>
 #include <cstring>
-#include <random>
 
 namespace {
 
-std::atomic<wgnx::platform::ktime_t> g_fake_time_ns{1};
+std::atomic<wgnx::platform::ktime_t> g_monotonic_time_ns{1};
+std::atomic<std::int64_t> g_realtime_seconds{0};
+std::atomic<std::int64_t> g_realtime_nanoseconds{0};
+std::atomic<std::uint64_t> g_random_state{0};
+std::atomic<std::uint64_t> g_random_bytes_generated{0};
+
+std::uint64_t NextRandom() {
+    std::uint64_t value = g_random_state.fetch_add(0x9E3779B97F4A7C15ULL) +
+                          0x9E3779B97F4A7C15ULL;
+    value = (value ^ (value >> 30U)) * 0xBF58476D1CE4E5B9ULL;
+    value = (value ^ (value >> 27U)) * 0x94D049BB133111EBULL;
+    return value ^ (value >> 31U);
+}
 
 } // namespace
 
@@ -39,7 +50,7 @@ bool IsSameBytes(const void *lhs, const void *rhs, std::size_t size) {
 namespace wgnx::platform {
 
 ktime_t ktime_get_coarse_boottime_ns() {
-    return g_fake_time_ns.fetch_add(1'000'000, std::memory_order_relaxed);
+    return g_monotonic_time_ns.load(std::memory_order_relaxed);
 }
 
 void ktime_get_real_ts64(timespec64 *ts) {
@@ -47,17 +58,21 @@ void ktime_get_real_ts64(timespec64 *ts) {
         return;
     }
 
-    const ktime_t now = ktime_get_coarse_boottime_ns();
-    ts->tv_sec = now / NSEC_PER_SEC;
-    ts->tv_nsec = now % NSEC_PER_SEC;
+    ts->tv_sec = g_realtime_seconds.load(std::memory_order_relaxed);
+    ts->tv_nsec = g_realtime_nanoseconds.load(std::memory_order_relaxed);
 }
 
 void get_random_bytes(void *dst, std::size_t size) {
-    static std::mt19937_64 rng{0x57474E5854455354ULL};
     auto *bytes = static_cast<unsigned char *>(dst);
-    for (std::size_t i = 0; i < size; ++i) {
-        bytes[i] = static_cast<unsigned char>(rng() & 0xffU);
+    std::size_t offset = 0;
+    while (offset < size) {
+        std::uint64_t value = NextRandom();
+        for (std::size_t i = 0; i < sizeof(value) && offset < size; ++i, ++offset) {
+            bytes[offset] = static_cast<unsigned char>(value & 0xffU);
+            value >>= 8U;
+        }
     }
+    g_random_bytes_generated.fetch_add(size, std::memory_order_relaxed);
 }
 
 std::uint32_t get_random_u32() {
@@ -76,17 +91,46 @@ std::uint32_t get_random_u32_below(std::uint32_t ceil) {
 
 } // namespace wgnx::platform
 
+namespace wgnx::test::runtime {
+
+void Reset(const State &state) {
+    g_monotonic_time_ns.store(state.monotonic_time_ns, std::memory_order_relaxed);
+    g_realtime_seconds.store(state.realtime.tv_sec, std::memory_order_relaxed);
+    g_realtime_nanoseconds.store(state.realtime.tv_nsec, std::memory_order_relaxed);
+    g_random_state.store(state.random_state, std::memory_order_relaxed);
+    g_random_bytes_generated.store(state.random_bytes_generated, std::memory_order_relaxed);
+}
+
+void SetMonotonicTime(wgnx::platform::ktime_t time_ns) {
+    g_monotonic_time_ns.store(time_ns, std::memory_order_relaxed);
+}
+
+void SetRealtime(const wgnx::platform::timespec64 &time) {
+    g_realtime_seconds.store(time.tv_sec, std::memory_order_relaxed);
+    g_realtime_nanoseconds.store(time.tv_nsec, std::memory_order_relaxed);
+}
+
+State GetState() {
+    return {
+        .monotonic_time_ns = g_monotonic_time_ns.load(std::memory_order_relaxed),
+        .realtime = {
+            .tv_sec = g_realtime_seconds.load(std::memory_order_relaxed),
+            .tv_nsec = g_realtime_nanoseconds.load(std::memory_order_relaxed),
+        },
+        .random_state = g_random_state.load(std::memory_order_relaxed),
+        .random_bytes_generated = g_random_bytes_generated.load(std::memory_order_relaxed),
+    };
+}
+
+} // namespace wgnx::test::runtime
+
 namespace wgnx::sysmodule::logger {
 
 void Initialize() {
 }
 
 void Log(const char *fmt, ...) {
-    std::va_list args;
-    va_start(args, fmt);
-    std::vfprintf(stderr, fmt, args);
-    std::fputc('\n', stderr);
-    va_end(args);
+    static_cast<void>(fmt);
 }
 
 } // namespace wgnx::sysmodule::logger
