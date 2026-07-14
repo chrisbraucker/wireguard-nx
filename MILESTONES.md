@@ -1,397 +1,339 @@
-# WireGuard-NX Milestones
+# WireGuard-NX Implementation Roadmap
 
-This document defines the recommended order of progress for bringing up
-WireGuard functionality on Nintendo Switch homebrew. The goal is to create
-useful intermediate checkpoints instead of waiting for full system-wide VPN
-integration before validating anything.
+This document guides the next development phase: bring the userspace
+WireGuard implementation to protocol and peer-lifecycle parity with upstream
+before expanding transparent Horizon integration.
 
-## Principles
+The completed proof-of-concept roadmap is retained in
+[POC_MILESTONES.md](POC_MILESTONES.md). It records how the project reached its
+current state and is not the implementation plan for this phase.
 
-- Keep the control plane stable while the data plane evolves.
-- Prove protocol correctness before solving full Horizon integration.
-- Prefer vertical slices with observable outcomes over large speculative ports.
-- Keep platform-specific code behind small adaptation boundaries.
-- Treat the manager as diagnostics-first for now.
-- Treat the overlay and sysmodule as the primary interactive path.
+## Current Baseline
 
-## Module Roles
+The sysmodule can establish a tunnel with a real WireGuard peer and exchange
+synthetic inner IPv4 packets through its development IPC API. Confirmed traffic
+includes ICMP, HTTP, and UDP request/response flows.
 
-### common
+The remaining protocol gap is primarily long-lived peer behavior rather than
+basic cryptography or transport encryption. In particular, peer recovery after
+a prolonged uplink outage does not yet follow upstream keypair, packet-staging,
+handshake-retry, and timer semantics.
 
-Shared definitions that are safe for libnx and Stratosphere consumers:
+Transparent routing of ordinary Horizon application traffic remains the
+product goal. Deeper system integration is deferred until the userspace tunnel
+can recover reliably without peer reactivation.
 
-- config path constants
-- config schema structs and parsing helpers
-- IPC protocol structs and command IDs
-- status/result enums
-- platform-neutral WireGuard engine interfaces
+## Target Architecture
 
-### sysmodule
+Keep these responsibilities distinct as the implementation evolves:
 
-Primary implementation target:
+- **Protocol core:** peers, handshakes, keypairs, replay protection, packet
+  staging, and protocol timers.
+- **Transport:** UDP binding lifetime, endpoint selection, send/receive,
+  rebinding, and endpoint roaming.
+- **Runtime:** clocks, randomness, work queues, synchronization, logging, and
+  bounded memory resources.
+- **Horizon integration:** NIFM observation, IPC services, and the eventual
+  system-owned packet path.
+- **Development packet API:** controlled inner-packet submission and reception
+  used for protocol validation.
 
-- config loading and persistence
-- peer/device runtime state
-- WireGuard protocol engine
-- UDP transport
-- timers and work scheduling
-- IPC control and status service
-- logging and diagnostics
+`wireguard-go` is the primary behavioral reference because its userspace state
+machine maps cleanly to this project. BoringTun is a useful independent
+userspace reference. Platform-specific device plumbing from either project is
+not part of the parity target.
 
-### overlay
+## Implementation Guidelines
 
-Primary user interaction surface:
+### Preserve Working Vertical Slices
 
-- peer selection
-- start/stop toggle
-- auto-start toggle
-- connection state display
-- handshake/tx/rx/status display
+- Refactor incrementally instead of replacing the engine in one operation.
+- Keep handshake and packet round trips working at each milestone.
+- Separate behavioral changes from broad mechanical cleanup where practical.
+- Add or improve tests before changing state transitions that are already
+  known to work on-device.
 
-### manager
+### Modernize Ownership Boundaries
 
-Read-only diagnostics and inspection tool for now:
+- Use `std::span` for borrowed packet, key, and serialization buffers.
+- Use `std::array` for fixed-size protocol and cryptographic material.
+- Use owning containers only where ownership is explicit; use `std::vector`
+  for genuinely variable storage outside allocation-sensitive hot paths.
+- Make packet queues bounded and define their overflow policy explicitly.
+- Prefer RAII for sockets, sessions, locks, timers, and sensitive-memory
+  cleanup.
+- Prefer scoped enums, typed state structures, `std::chrono` durations, and
+  explicit result types over integer states, sentinel values, and mixed time
+  units.
+- Replace unchecked pointer arithmetic with checked parsing and serialization
+  helpers.
+- Make ownership-bearing protocol objects move-only where copying would be
+  ambiguous or unsafe.
 
-- sysmodule presence
-- peer list
-- daemon status
-- counters and error reporting
+Modernization should follow the ownership boundary being changed. Untouched
+code does not need to be converted merely to make a milestone look complete.
 
-Later this can become a richer config editor, but it is not the current priority.
+### Respect The Target Runtime
 
-## Milestone 0: Control Plane Bring-Up
+C++23 availability does not remove Horizon's memory and runtime constraints.
+New code must remain compatible with the project's devkitA64, libnx, and
+Atmosphere toolchain configuration. Do not require exceptions, RTTI, unbounded
+allocation, or standard-library facilities that the target runtime cannot
+support predictably.
 
-### Goal
+### Treat Upstream Behavior As The Specification
 
-Establish a stable sysmodule, IPC service, logger, and UI clients.
+- Match WireGuard protocol constants and timer relationships unless a Horizon
+  constraint requires a documented deviation.
+- Drive timers from authenticated send/receive and handshake events as
+  upstream does, not from a synthetic connected flag.
+- Keep peer configuration, UDP binding state, handshake state, and keypair
+  state as separate lifecycles.
+- Document intentional deviations next to the affected behavior and in the
+  relevant design note.
 
-### Scope
-
-- sysmodule boots reliably
-- logging to SD works
-- IPC service registers and serves requests
-- manager can query daemon status and peers
-- overlay can display peers and toggle dummy active/auto-start state
-
-### Success Criteria
-
-- [x] sysmodule starts from Atmosphere consistently
-- [x] `/wgnx/wgnx-sysmodule.log` is written
-- [x] manager reports sysmodule status and peer list
-- [x] overlay shows peers and updates state live
-
-### Status
-
-This milestone is effectively complete.
-
-## Milestone 1: Shared Config Model
-
-### Goal
-
-Replace hardcoded peer state with a shared config-backed source of truth.
-
-### Scope
-
-- define config schema in `common`
-- define on-disk config location under `wgnx::ConfigPath`
-- implement sysmodule config load at startup
-- expose loaded peers through existing IPC API
-- keep manager read-only
-- keep overlay as the main mutating surface for active/autostart runtime state
-
-### Recommended Deliverables
-
-- `common/include/wgnx/config.hpp`
-- config file format decision
-- sysmodule config loader
-- validation/error reporting for malformed configs
-
-### Success Criteria
-
-- [x] replacing a config file on SD changes the peer list after restart
-- [x] manager and overlay reflect configured peers instead of dummy peers
-- [x] invalid config is reported in logs and does not crash the sysmodule
-
-## Milestone 2: Runtime State Separation
+## Milestone 1: Deterministic Protocol Test Foundation
 
 ### Goal
 
-Separate static peer configuration from live connection state.
-
-See [docs/runtime-state.md](docs/runtime-state.md) for the intended semantics of
-`active`, `inactive`, derived `established`, and local `error` conditions.
+Make protocol-core behavior testable without requiring an on-device run for
+every state-machine change.
 
 ### Scope
 
-- distinguish configured peer data from runtime counters
-- define daemon states such as stopped, resolving, handshaking, established, error
-- keep active/autostart selection separate from transport status
+- isolate deterministic clock, randomness, transport, and work scheduling
+  inputs needed by the protocol core
+- cover the currently working handshake and transport-data path
+- add state-transition tests for key creation, packet counters, and basic timer
+  scheduling
+- retain on-device interoperability tests as the final validation layer
 
-### Recommended Deliverables
+### Definition Of Done
 
-- internal runtime state model in sysmodule
-- additional status enums/fields in shared IPC structs
-- overlay display for connection state and last error
+- protocol tests run on the development host with deterministic inputs
+- successful handshake and bidirectional transport-data behavior are covered
+- failures identify the peer state or transition that diverged
+- the existing real-peer on-device round trip still succeeds
 
-### Success Criteria
-
-- overlay can show "configured but stopped" vs "active" vs "error"
-- runtime counters are reset after control operations (start, stop) correctly without corrupting config state
-
-## Milestone 3: Platform Abstraction Layer
+## Milestone 2: Typed Protocol And Ownership Model
 
 ### Goal
 
-Define the boundary that future WireGuard engine code will use on Horizon.
+Establish maintainable C++ boundaries for packets, keypairs, peer state, and
+timers before adding more lifecycle complexity.
 
 ### Scope
 
-- clock/time abstraction
-- random bytes abstraction
-- work/timer abstraction
-- lock/mutex abstraction
-- UDP transport abstraction
-- packet buffer abstraction
+- introduce typed, checked packet parsing and serialization boundaries
+- make packet and key-material ownership explicit
+- represent keypair birth time, validity, counters, and replay state directly
+- replace mixed timer units and loosely coupled state fields in touched paths
+- keep queues bounded and observable
 
-### Rationale
+### Definition Of Done
 
-Do this before porting meaningful WireGuard logic so Linux/BSD assumptions do not leak everywhere.
+- protocol code no longer relies on ambiguous raw-buffer ownership in the
+  handshake and transport-data paths
+- malformed or undersized messages fail before field access
+- keypair age and validity can be evaluated without consulting UI/runtime state
+- all Milestone 1 tests and the on-device round trip remain passing
 
-### Success Criteria
-
-- the sysmodule contains a small, explicit platform interface for engine-facing code
-- no direct libnx/Stratosphere networking calls are embedded inside future protocol logic
-
-## Milestone 4: Protocol Core Skeleton
+## Milestone 3: Key Validity And Outbound Packet Staging
 
 ### Goal
 
-Introduce a WireGuard engine shell without full cryptographic completion yet.
+Stop using expired keypairs and preserve outbound work while a usable session
+is being established.
 
 ### Scope
 
-- peer/device/session structures
-- handshake state machine scaffolding
-- packet type parsing and serialization
-- timer hooks
-- state transition logging
+- enforce upstream send-counter and `RejectAfterTime` limits
+- stage outbound packets when no usable current keypair exists
+- initiate a fresh handshake when staged traffic requires a session
+- release staged packets after successful key derivation
+- define bounded-queue overflow and peer-deactivation behavior
 
-### Recommended Source Strategy
+### Definition Of Done
 
-- use `wireguard-linux` as the primary protocol reference
-- use `wireguard-freebsd` as the adaptation reference for BSD-like kernel/network behavior
-- port selected logic, do not vendor the full kernel modules as dependencies
+- no transport packet is emitted with an expired or exhausted keypair
+- outbound traffic without a usable keypair causes a handshake initiation
+- staged traffic is sent after the handshake succeeds
+- queue overflow and peer shutdown cannot leak memory or retain stale traffic
+- a test covers outbound submission after the previous keypair has expired
 
-### Success Criteria
-
-- sysmodule can build with protocol state objects and packet encoding helpers
-- unit-style in-process tests or debug harness can parse and serialize WireGuard message types
-
-## Milestone 5: Cryptographic Handshake
+## Milestone 4: Handshake Retry And Recovery Lifecycle
 
 ### Goal
 
-Complete the WireGuard handshake flow for one peer.
+Recover from a silent path outage without restarting the peer.
 
 ### Scope
 
-- static key handling
-- ephemeral key generation
-- handshake initiation
-- handshake response processing
-- session key derivation
-- cookie/replay primitives as needed
+- align retransmission timing and retry duration with upstream behavior
+- distinguish one retry sequence from a later, newly triggered handshake
+- permit later outbound traffic to restart handshaking after an exhausted
+  attempt window
+- schedule stale ephemeral/key-material cleanup as upstream requires
+- keep UDP binding replacement independent from cryptographic recovery
 
-### Success Criteria
+### Definition Of Done
 
-- sysmodule can generate a valid handshake initiation
-- sysmodule can complete a handshake with a known-good WireGuard peer/server
-- success/failure is visible through logs and IPC state
+- an unanswered handshake stops retrying according to the configured upstream
+  limits without leaving an impossible peer state
+- later outbound traffic can begin a new handshake attempt
+- the uplink-loss test exceeding `RejectAfterTime` recovers after connectivity
+  returns without peer deactivation/reactivation
+- manual binding replacement is not required when the existing socket remains
+  usable
 
-## Milestone 6: UDP Transport
+## Milestone 5: Authenticated-Activity Timers
 
 ### Goal
 
-Send and receive real WireGuard packets over the network without full tunnel integration.
+Bring rekey, keepalive, liveness, and cleanup scheduling in line with upstream
+WireGuard event semantics.
 
 ### Scope
 
-- initialize network services in sysmodule
-- resolve endpoint and open UDP transport
-- send handshake packets
-- process cookie replies and retransmit handshake packets with cookie state
-- receive handshake/session packets
-- maintain keepalive/retry/rekey timers
-- tighten the current receive loop bring-up compromises:
-  - replace best-effort source decoding with explicit source-endpoint handling once live receive behavior is stable
-  - verify whether timeout-driven receive wakeups and `socket_errno == 0` are proper Horizon socket semantics or only an implementation workaround
-  - keep `Shutdown+Close` teardown semantics unless a cleaner Atmosphere-native cancellation model supersedes them
+- implement timer hooks for authenticated packet sent and received events
+- implement handshake completion and session-derived timer transitions
+- align rekey-after-time, rekey-after-messages, keepalive, and persistent
+  keepalive behavior
+- cancel and reschedule timers coherently across peer and keypair transitions
 
-### Success Criteria
+### Definition Of Done
 
-- sysmodule exchanges real WireGuard UDP packets with a remote peer
-- overlay shows handshaking and established state
-- rx/tx counters update over IPC
+- timer behavior is driven by protocol events rather than polling or a broad
+  active-state check
+- rekey occurs by both age and message-count thresholds
+- keepalive behavior does not create duplicate or runaway timer work
+- deterministic tests cover cancellation, rescheduling, and stale callbacks
 
-## Milestone 7: App-Owned Payload Transport
+## Milestone 6: Endpoint And Transport Recovery
 
 ### Goal
 
-Prove the engine works by sending encrypted application-owned data over the established session.
+Make peer protocol state survive ordinary UDP path and endpoint changes.
 
 ### Scope
 
-- inject test payloads from within the sysmodule or a controlled test client
-- encrypt and send through the WireGuard session
-- receive and decrypt replies
-- expose counters and last activity through IPC
-- extend receive-side validation beyond the current handshake-only path so source-address interpretation and session packet handling are no longer best-effort
+- learn endpoint changes only from authenticated peer traffic
+- preserve protocol state across generation-safe UDP rebinding
+- recover from surfaced BSD send/receive failures without making them terminal
+- validate Wi-Fi loss, uplink-only loss, and Wi-Fi/Ethernet transitions
+- retain NIFM as path information, not as proof of peer reachability
 
-### Rationale
+### Definition Of Done
 
-This is the first milestone that proves practical WireGuard functionality without solving system-wide packet interception yet.
+- authenticated roaming updates the endpoint and subsequent sends use it
+- stale socket-generation results cannot mutate current transport state
+- temporary transport failure does not discard peer configuration or valid
+  protocol state
+- the transition test matrix recovers without OS stalls or peer restart
 
-### Success Criteria
-
-- given one configured peer, the sysmodule can:
-  - complete a handshake
-  - send encrypted test payload bytes
-  - receive and decrypt response bytes
-  - report success via IPC and logs
-
-## Milestone 8: Horizon Integration Feasibility
+## Milestone 7: Interoperability And Lifecycle Hardening
 
 ### Goal
 
-Determine whether the project can realistically achieve OS-level or
-system-owned WireGuard traffic on Horizon before committing to a fallback
-cross-homebrew packet API.
+Establish a defensible userspace WireGuard conformance floor before system
+integration increases concurrency and traffic volume.
 
 ### Scope
 
-- identify the realistic packet ownership and interception points available on
-  Horizon
-- evaluate whether a system-owned packet path can be built without each app
-  implementing a custom WireGuard-aware IPC contract
-- document the technical constraints around routing, DNS, socket ownership,
-  coexistence with normal networking, and lifecycle behavior
-- decide what the first system-owned traffic class could be if the mainline
-  path is feasible
-- define the fallback conditions under which a cross-homebrew IPC packet API
-  becomes the practical backup plan
-- preserve the current validated debug and probe path as a development tool,
-  not as the default product architecture
+- compare observable behavior against `wireguard-go` and BoringTun peers
+- exercise packet loss, delayed responses, duplicate packets, replay attempts,
+  malformed messages, key rotation, and prolonged silence
+- validate bounded memory use and teardown under repeated peer lifecycles
+- remove temporary diagnostics or workarounds that alter protocol behavior
 
-### Success Criteria
+### Definition Of Done
 
-- the repo has a documented decision on whether OS-level or system-owned
-  traffic integration is feasible enough to pursue next
-- the first concrete mainline integration target is identified, or the repo
-  explicitly records why the fallback IPC path should be used instead
-- the technical risks and open constraints are clear enough to guide the next
-  implementation milestone
+- repeated long-running tests do not require peer or sysmodule restart
+- malformed and replayed traffic is rejected without corrupting peer state
+- packet queues, keypairs, and timers remain bounded across repeated outages
+- documented behavior matches upstream or records a justified Horizon-specific
+  deviation
+- the on-device outage and network-transition matrix passes consistently
 
-## Milestone 9: First System-Owned Traffic Path
+## Milestone 8: Cryptographic And Parsing Hardening
 
 ### Goal
 
-Implement the first narrow class of Horizon traffic that uses the tunnel
-without requiring the originating app to speak a project-specific WireGuard
-IPC contract.
+Modernize and audit the remaining legacy cryptographic, packet-parsing,
+serialization, and sensitive-memory code after lifecycle behavior has a stable
+test baseline.
 
 ### Scope
 
-- build the first feasible packet ingress/egress path identified by Milestone 8
-- connect decrypted and encrypted packet handling to that system-owned path
-- keep the scope intentionally narrow to one well-defined traffic class
-- document limitations, ownership boundaries, and assumptions explicitly
-- avoid prematurely freezing a public cross-homebrew packet ABI unless the
-  fallback path is activated
+- replace remaining ambiguous raw buffers and C-style ownership
+- use fixed-size types and `std::span` consistently at cryptographic and packet
+  boundaries
+- centralize checked message parsing and serialization
+- review secret zeroization, copying, comparison, and lifetime
+- remove obsolete compatibility code and duplicated helpers
+- validate behavior against protocol test vectors and interoperability tests
+- prefer typed wrappers around proven cryptographic primitives rather than
+  rewriting the primitives themselves
+- audit the entirety of `sysmodule/src/wireguard/crypto/primitives.cpp`, not
+  only the routines changed by the lifecycle refactor, including primitive
+  implementations, state transitions, parameter validation, return-value
+  handling, and sensitive-memory behavior
+- establish and document the provenance, version, license compatibility, and
+  expected algorithm variant for every primitive implementation; in
+  particular, reconcile the local BLAKE2s implementation with a traceable,
+  established upstream implementation rather than treating project-local code
+  as implicitly trusted
+- independently verify primitive behavior with authoritative vectors and
+  differential tests covering keyed and unkeyed operation, supported digest
+  sizes, incremental updates, block boundaries, malformed parameters, and
+  WireGuard-specific hash, MAC, and KDF constructions
 
-### Success Criteria
+### Definition Of Done
 
-- a clearly defined class of non-test Switch traffic can traverse the tunnel
-  end-to-end
-- the path works without the originating app implementing a custom packet IPC
-- limitations are clearly documented and tied to the chosen integration method
+- all externally supplied packets are validated before field access
+- cryptographic material has explicit ownership and cleanup semantics
+- every implementation in `wireguard/crypto/primitives.cpp` has recorded
+  provenance or an explicit justification for retention, and the complete file
+  has been reviewed against its public API and all production call sites
+- the primitive test suite covers normal operation, boundary conditions, and
+  rejected API misuse using results independent of the implementation under
+  test
+- the established protocol lifecycle suite detects no behavioral regressions
+- handshake and transport outputs still match known vectors and interoperate
+  with upstream peers
+- remaining low-level C-style code is removed or documented as intentional
 
-## Milestone 10: Runtime Hardening And Broader Integration
+## Milestone 9: Resume Horizon Integration
 
 ### Goal
 
-Make the chosen integration path robust enough for repeated use and expand it
-toward broader console usefulness.
+Use the stabilized tunnel as the data plane for transparent system traffic.
 
 ### Scope
 
-- explicit connect/disconnect actions
-- endpoint retry policy
-- backoff, rekey, and error recovery after network loss
-- autostart behavior on sysmodule boot
-- routing and DNS behavior for the chosen integration model
-- coexistence with normal networking
-- handling suspend/resume and network state changes
-- review and remove temporary bring-up workarounds that are no longer
-  justified once the chosen traffic path is stable
+- return to the system-owned packet ingress/egress research in
+  `nx-reversing.git`
+- select the narrowest viable transparent traffic class
+- keep the development packet API as a diagnostic boundary
+- distinguish integration failures from protocol and transport failures using
+  the tests and state visibility established above
 
-### Success Criteria
+### Definition Of Done
 
-- a clearly defined class of Switch traffic can use the tunnel end-to-end
-- behavior is stable enough for real-world testing
+- a defined class of ordinary application traffic traverses the tunnel without
+  app-specific WireGuard IPC calls
+- protocol lifecycle tests remain passing under the additional traffic and IPC
+  load
+- integration limitations and the next expansion target are documented
 
-## Contingency Track: Cross-Homebrew Packet IPC
+## Immediate Order
 
-If Milestone 8 concludes that a practical OS-level or system-owned integration
-path is blocked or would create disproportionate friction, the fallback plan is
-to expose a narrow packet-oriented IPC contract for cooperating homebrew.
+Proceed through the milestones consecutively. Milestones 1 and 2 establish the
+refactoring foundation; Milestones 3 through 6 deliver the missing upstream
+peer lifecycle; Milestone 7 establishes the conformance baseline; and
+Milestone 8 hardens the remaining cryptographic and parsing code before
+transparent Horizon integration resumes in Milestone 9.
 
-This is explicitly a contingency architecture, not the preferred mainline.
-
-Its value would be:
-
-- apps can delegate WireGuard transport to the sysmodule instead of embedding
-  the protocol stack themselves
-- the project still produces something useful even if deeper Horizon
-  integration proves infeasible
-- the repo can preserve the existing debug and probe work as the foundation for
-  a more formal app-facing seam if needed
-
-But it should only be prioritized if the mainline Horizon integration path does
-not survive the Milestone 8 feasibility work.
-
-## Recommended Immediate Order
-
-1. Milestone 1: Shared Config Model
-2. Milestone 2: Runtime State Separation
-3. Milestone 3: Platform Abstraction Layer
-4. Milestone 4: Protocol Core Skeleton
-5. Milestone 5: Cryptographic Handshake
-6. Milestone 6: UDP Transport
-7. Milestone 7: App-Owned Payload Transport
-8. Milestone 8: Horizon Integration Feasibility
-9. Milestone 9: First System-Owned Traffic Path
-10. Milestone 10: Runtime Hardening And Broader Integration
-
-This preserves momentum and gets you to a meaningful "WireGuard works on
-Switch for app-owned traffic" checkpoint before committing to the much harder
-question of how Switch software should actually use the tunnel.
-
-After Milestone 7, the recommended next step is now a feasibility milestone
-rather than a packet-API milestone. The rationale is that the repo should
-first determine whether a system-owned Horizon integration path is practical.
-Only if that path proves unworkable or too costly should the project detour
-into a cross-homebrew packet IPC fallback.
-
-## Non-Goals For The Near Term
-
-- manager-based full config editor
-- system-wide VPN semantics from day one
-- direct reuse of Linux/BSD kernel source as a compiled dependency
-- premature deep Horizon routing assumptions before protocol validation
-
-## References To Use During Implementation
-
-- `wireguard-linux` for protocol/reference truth
-- `wireguard-freebsd` for BSD-like kernel/network adaptation ideas
-- Atmosphere/libstratosphere for sysmodule/runtime/service patterns
-- libnx and Switchbrew docs for Horizon networking and services
+The first concrete recovery slice is Milestone 3: record keypair age, reject
+outbound use past `RejectAfterTime`, stage the packet, initiate a fresh
+handshake, and release the packet after the new session is established.
