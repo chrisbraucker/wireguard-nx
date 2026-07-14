@@ -11,9 +11,8 @@ namespace wgnx::sysmodule::logger {
 namespace {
 
 constexpr const char *SdMountName = "sdmc";
-constexpr const char *RootLogDirectory = "sdmc:/atmosphere";
-constexpr const char *LogDirectory = "sdmc:/atmosphere/logs";
-constexpr const char *LogFilePath = "sdmc:/atmosphere/logs/wgnx-sysmodule.log";
+constexpr const char *LogDirectory = "sdmc:/wgnx";
+constexpr const char *LogFilePath = "sdmc:/wgnx/wgnx-sysmodule.log";
 
 enum class FileBackendState : std::uint8_t {
     Uninitialized,
@@ -54,7 +53,7 @@ void EnsureFileBackendInitialized() {
         return;
     }
 
-    if (!EnsureDirectoryExists(RootLogDirectory) || !EnsureDirectoryExists(LogDirectory)) {
+    if (!EnsureDirectoryExists(LogDirectory)) {
         g_file_backend_state = FileBackendState::Disabled;
         return;
     }

@@ -76,7 +76,7 @@ Establish a stable sysmodule, IPC service, logger, and UI clients.
 ### Success Criteria
 
 - [x] sysmodule starts from Atmosphere consistently
-- [x] `/atmosphere/logs/wgnx-sysmodule.log` is written
+- [x] `/wgnx/wgnx-sysmodule.log` is written
 - [x] manager reports sysmodule status and peer list
 - [x] overlay shows peers and updates state live
 
