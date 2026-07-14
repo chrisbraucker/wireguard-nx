@@ -76,4 +76,8 @@ socket_error udp_receive(
     std::size_t *out_received,
     endpoint *out_source);
 
+// Samples and logs Horizon's current network-path fingerprint when it changes.
+// This is observational only; callers remain responsible for recovery policy.
+void observe_network_path();
+
 } // namespace wgnx::platform

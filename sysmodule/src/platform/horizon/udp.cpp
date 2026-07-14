@@ -150,6 +150,48 @@ namespace wgnx::platform {
 
 namespace {
 
+struct NetworkPathFingerprint {
+    std::uint32_t initialization_result{0};
+    std::uint32_t internet_status_result{0};
+    std::uint32_t ip_config_result{0};
+    std::uint32_t connection_type{0};
+    std::uint32_t connection_status{0};
+    std::uint32_t wifi_strength{0};
+    std::uint32_t current_address{0};
+    std::uint32_t subnet_mask{0};
+    std::uint32_t gateway{0};
+    std::uint32_t primary_dns{0};
+    std::uint32_t secondary_dns{0};
+};
+
+constinit NetworkPathFingerprint g_last_network_path = {};
+constinit bool g_has_last_network_path = false;
+
+bool NetworkPathsEqual(const NetworkPathFingerprint &lhs, const NetworkPathFingerprint &rhs) {
+    return lhs.initialization_result == rhs.initialization_result &&
+           lhs.internet_status_result == rhs.internet_status_result &&
+           lhs.ip_config_result == rhs.ip_config_result &&
+           lhs.connection_type == rhs.connection_type &&
+           lhs.connection_status == rhs.connection_status &&
+           lhs.wifi_strength == rhs.wifi_strength &&
+           lhs.current_address == rhs.current_address &&
+           lhs.subnet_mask == rhs.subnet_mask &&
+           lhs.gateway == rhs.gateway &&
+           lhs.primary_dns == rhs.primary_dns &&
+           lhs.secondary_dns == rhs.secondary_dns;
+}
+
+void FormatIpv4(std::uint32_t address, char *out, std::size_t out_size) {
+    std::snprintf(
+        out,
+        out_size,
+        "%u.%u.%u.%u",
+        address & 0xffU,
+        (address >> 8U) & 0xffU,
+        (address >> 16U) & 0xffU,
+        (address >> 24U) & 0xffU);
+}
+
 bool SetReceiveTimeout(socket_handle socket) {
     const ams::socket::TimeVal timeout = {
         .tv_sec = wgnx::sysmodule::platform::horizon::internal::ReceiveTimeoutSeconds,
@@ -336,6 +378,75 @@ socket_error udp_receive(socket_handle socket, std::span<std::uint8_t> buffer, s
     }
 
     return socket_error::none;
+}
+
+void observe_network_path() {
+    NetworkPathFingerprint current{};
+    const ams::Result initialization_result =
+        wgnx::sysmodule::platform::horizon::internal::EnsureUdpRuntimeInitialized();
+    current.initialization_result = static_cast<std::uint32_t>(initialization_result.GetValue());
+
+    if (R_SUCCEEDED(initialization_result)) {
+        NifmInternetConnectionType connection_type{};
+        NifmInternetConnectionStatus connection_status{};
+        u32 wifi_strength = 0;
+        const Result status_result = nifmGetInternetConnectionStatus(
+            std::addressof(connection_type),
+            std::addressof(wifi_strength),
+            std::addressof(connection_status));
+        current.internet_status_result = status_result;
+        if (R_SUCCEEDED(status_result)) {
+            current.connection_type = static_cast<std::uint32_t>(connection_type);
+            current.connection_status = static_cast<std::uint32_t>(connection_status);
+            current.wifi_strength = wifi_strength;
+        }
+
+        const Result config_result = nifmGetCurrentIpConfigInfo(
+            std::addressof(current.current_address),
+            std::addressof(current.subnet_mask),
+            std::addressof(current.gateway),
+            std::addressof(current.primary_dns),
+            std::addressof(current.secondary_dns));
+        current.ip_config_result = config_result;
+        if (R_FAILED(config_result)) {
+            current.current_address = 0;
+            current.subnet_mask = 0;
+            current.gateway = 0;
+            current.primary_dns = 0;
+            current.secondary_dns = 0;
+        }
+    }
+
+    if (g_has_last_network_path && NetworkPathsEqual(current, g_last_network_path)) {
+        return;
+    }
+
+    char address[16]{};
+    char subnet[16]{};
+    char gateway[16]{};
+    char primary_dns[16]{};
+    char secondary_dns[16]{};
+    FormatIpv4(current.current_address, address, sizeof(address));
+    FormatIpv4(current.subnet_mask, subnet, sizeof(subnet));
+    FormatIpv4(current.gateway, gateway, sizeof(gateway));
+    FormatIpv4(current.primary_dns, primary_dns, sizeof(primary_dns));
+    FormatIpv4(current.secondary_dns, secondary_dns, sizeof(secondary_dns));
+    wgnx::sysmodule::logger::Log(
+        "NIFM path changed init_rc=0x%08x status_rc=0x%08x type=%u status=%u strength=%u "
+        "config_rc=0x%08x address=%s subnet=%s gateway=%s dns=%s,%s",
+        current.initialization_result,
+        current.internet_status_result,
+        current.connection_type,
+        current.connection_status,
+        current.wifi_strength,
+        current.ip_config_result,
+        address,
+        subnet,
+        gateway,
+        primary_dns,
+        secondary_dns);
+    g_last_network_path = current;
+    g_has_last_network_path = true;
 }
 
 } // namespace wgnx::platform

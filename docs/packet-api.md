@@ -6,8 +6,9 @@ inner IPv4 packets and poll decrypted IPv4 packets without using BSD sockets or
 the network MITM.
 
 This API is experimental and is compiled into every development build.
-`IpcApiVersion` 3 removes the fixed Program ID authorization used by version 2
-while retaining PID-based stream ownership.
+`IpcApiVersion` 4 adds the manual UDP bind-bump command used by transport
+recovery testing. Version 3 removed the fixed Program ID authorization used by
+version 2 while retaining PID-based stream ownership.
 The API version must be incremented whenever the public command set, command
 semantics, or request/response wire layout changes so clients can reject
 incompatible sysmodule binaries.

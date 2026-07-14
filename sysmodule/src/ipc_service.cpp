@@ -61,6 +61,7 @@ struct DaemonState {
         bool established{false};
         bool has_resolved_endpoint{false};
         wgnx::platform::socket_handle socket{wgnx::platform::InvalidSocket};
+        std::uint32_t socket_generation{0};
     };
     std::array<PeerRuntimeInfo, wgnx::MaxPeers> runtime{};
     struct PeerProtocolInfo {
@@ -70,6 +71,7 @@ struct DaemonState {
     std::array<PeerProtocolInfo, wgnx::MaxPeers> protocol{};
     std::uint32_t peer_count{0};
     std::uint32_t next_activation_generation{1};
+    std::uint32_t next_socket_generation{1};
     std::int32_t active_peer_index{-1};
     std::int32_t auto_start_peer_index{-1};
     bool initialized{false};
@@ -89,10 +91,17 @@ struct PayloadSubmissionRequest {
     wgnx::DebugTriggerAction action{wgnx::DebugTriggerAction::None};
 };
 
+struct BindBumpRequest {
+    bool pending{false};
+    std::size_t peer_index{0};
+    std::uint32_t activation_generation{0};
+};
+
 constinit DaemonState g_state = {};
 ams::os::Mutex g_state_mutex(false);
 ResolveRequest g_resolve_request = {};
 PayloadSubmissionRequest g_payload_submission_request = {};
+BindBumpRequest g_bind_bump_request = {};
 struct ResolveDispatcher {
     wgnx::platform::work_struct work{};
 };
@@ -128,6 +137,11 @@ struct PayloadProbeTimeoutDispatcher {
     wgnx::platform::timer_list timer{};
 };
 constinit PayloadProbeTimeoutDispatcher g_payload_probe_timeout_dispatcher = {};
+struct NetworkPathObserverDispatcher {
+    wgnx::platform::work_struct work{};
+    wgnx::platform::timer_list timer{};
+};
+constinit NetworkPathObserverDispatcher g_network_path_observer_dispatcher = {};
 constexpr inline std::size_t InnerPacketQueueCapacity = 8;
 wgnx::wireguard::InnerPacketQueue<InnerPacketQueueCapacity> g_inner_packet_tx_queue{};
 wgnx::wireguard::InnerPacketQueue<InnerPacketQueueCapacity> g_inner_packet_rx_queue{};
@@ -141,6 +155,7 @@ constinit InnerPacketSubmissionDispatcher g_inner_packet_submission_dispatcher =
 constexpr inline wgnx::platform::jiffies_t SimulatedHandshakeRetransmitJiffies = 5U * wgnx::platform::HZ;
 constexpr inline wgnx::platform::jiffies_t SimulatedRekeyJiffies = 120U * wgnx::platform::HZ;
 constexpr inline wgnx::platform::jiffies_t DebugProbeTimeoutJiffies = 5U * wgnx::platform::HZ;
+constexpr inline wgnx::platform::jiffies_t NetworkPathObservationJiffies = 2U * wgnx::platform::HZ;
 constexpr inline std::uint32_t MaxHandshakeSendAttempts = 5;
 constexpr inline std::size_t ReceivePacketCapacity = 4096;
 constexpr inline std::size_t MaxTransportPayloadSize = 1500;
@@ -275,12 +290,23 @@ void ClearDebugProbeState(DaemonState::PeerRuntimeInfo *runtime) {
 }
 
 void CloseRuntimeSocket(DaemonState::PeerRuntimeInfo *runtime) {
-    if (runtime == nullptr || runtime->socket == wgnx::platform::InvalidSocket) {
+    if (runtime == nullptr) {
         return;
     }
 
-    wgnx::platform::udp_close(runtime->socket);
+    if (runtime->socket != wgnx::platform::InvalidSocket) {
+        wgnx::platform::udp_close(runtime->socket);
+    }
     runtime->socket = wgnx::platform::InvalidSocket;
+    runtime->socket_generation = 0;
+}
+
+std::uint32_t AllocateSocketGeneration() {
+    const std::uint32_t generation = g_state.next_socket_generation++;
+    if (g_state.next_socket_generation == 0) {
+        g_state.next_socket_generation = 1;
+    }
+    return generation;
 }
 
 wgnx::PeerErrorCode MapSocketErrorToPeerErrorCode(wgnx::platform::socket_error error) {
@@ -449,6 +475,7 @@ wgnx::PeerErrorCode OpenRuntimeSocket(std::size_t peer_index) {
         runtime.resolved_endpoint.family);
     if (open_error != wgnx::platform::socket_error::none) {
         runtime.socket = wgnx::platform::InvalidSocket;
+        runtime.socket_generation = 0;
         logger::Log(
             "Failed to open UDP socket for peer %zu endpoint=%s err=%u",
             peer_index,
@@ -457,9 +484,13 @@ wgnx::PeerErrorCode OpenRuntimeSocket(std::size_t peer_index) {
         return MapSocketErrorToPeerErrorCode(open_error);
     }
 
+    runtime.socket_generation = AllocateSocketGeneration();
+
     logger::Log(
-        "Opened UDP socket for peer %zu family=%s endpoint=%s",
+        "Opened UDP socket for peer %zu generation=%u socket=%d family=%s endpoint=%s",
         peer_index,
+        runtime.socket_generation,
+        static_cast<int>(runtime.socket),
         wgnx::GetPeerResolvedFamilyName(
             static_cast<wgnx::PeerResolvedFamily>(runtime.resolved_endpoint.family)),
         runtime.resolved_endpoint_text);
@@ -1166,8 +1197,10 @@ bool DequeueResolveRequest(ResolveRequest *out_request) {
 bool SnapshotReceiveRuntime(
     std::size_t *out_peer_index,
     std::uint32_t *out_activation_generation,
+    std::uint32_t *out_socket_generation,
     wgnx::platform::socket_handle *out_socket) {
-    if (out_peer_index == nullptr || out_activation_generation == nullptr || out_socket == nullptr) {
+    if (out_peer_index == nullptr || out_activation_generation == nullptr ||
+        out_socket_generation == nullptr || out_socket == nullptr) {
         return false;
     }
 
@@ -1186,6 +1219,7 @@ bool SnapshotReceiveRuntime(
 
     *out_peer_index = peer_index;
     *out_activation_generation = runtime.activation_generation;
+    *out_socket_generation = runtime.socket_generation;
     *out_socket = runtime.socket;
     return true;
 }
@@ -1306,6 +1340,7 @@ void EnqueueReceivedInnerIpv4PacketLocked(
 void CommitReceivedPacket(
     std::size_t peer_index,
     std::uint32_t activation_generation,
+    std::uint32_t socket_generation,
     wgnx::platform::socket_handle socket,
     const wgnx::platform::packet_buffer *packet,
     const wgnx::platform::endpoint &source) {
@@ -1316,6 +1351,7 @@ void CommitReceivedPacket(
 
     auto &runtime = g_state.runtime[peer_index];
     if (runtime.activation_generation != activation_generation ||
+        runtime.socket_generation != socket_generation ||
         runtime.socket != socket ||
         (runtime.state != wgnx::PeerRuntimeState::Handshaking &&
          runtime.state != wgnx::PeerRuntimeState::Active)) {
@@ -1518,6 +1554,7 @@ void CommitReceivedPacket(
 void CommitReceiveFailure(
     std::size_t peer_index,
     std::uint32_t activation_generation,
+    std::uint32_t socket_generation,
     wgnx::platform::socket_handle socket,
     wgnx::platform::socket_error error) {
     std::scoped_lock lock(g_state_mutex);
@@ -1527,6 +1564,7 @@ void CommitReceiveFailure(
 
     auto &runtime = g_state.runtime[peer_index];
     if (runtime.activation_generation != activation_generation ||
+        runtime.socket_generation != socket_generation ||
         runtime.socket != socket ||
         (runtime.state != wgnx::PeerRuntimeState::Handshaking &&
          runtime.state != wgnx::PeerRuntimeState::Active)) {
@@ -1542,9 +1580,10 @@ void CommitReceiveFailure(
     if (IsRecoverableTransportIoError(receive_error)) {
         LogRecoverableTransportIoError(peer_index, receive_error, "receive worker");
         logger::Log(
-            "WG receive worker stopped after nonterminal transport failure peer=%zu activation=%u socket=%d",
+            "WG receive worker stopped after nonterminal transport failure peer=%zu activation=%u socket_generation=%u socket=%d",
             peer_index,
             activation_generation,
+            socket_generation,
             static_cast<int>(socket));
         return;
     }
@@ -1640,15 +1679,99 @@ void ResolverWorkMain(wgnx::platform::work_struct *) {
     }
 }
 
+void ProcessPendingBindBump() {
+    std::scoped_lock lock(g_state_mutex);
+    if (!g_bind_bump_request.pending) {
+        return;
+    }
+
+    const BindBumpRequest request = g_bind_bump_request;
+    g_bind_bump_request = {};
+    if (request.peer_index >= g_state.peer_count ||
+        g_state.active_peer_index != static_cast<std::int32_t>(request.peer_index)) {
+        logger::Log(
+            "Discarded UDP bind bump peer=%zu activation=%u reason=inactive_peer",
+            request.peer_index,
+            request.activation_generation);
+        return;
+    }
+
+    auto &runtime = g_state.runtime[request.peer_index];
+    if (runtime.activation_generation != request.activation_generation ||
+        (runtime.state != wgnx::PeerRuntimeState::Handshaking &&
+         runtime.state != wgnx::PeerRuntimeState::Active) ||
+        !runtime.has_resolved_endpoint) {
+        logger::Log(
+            "Discarded UDP bind bump peer=%zu activation=%u reason=stale_runtime state=%s current_activation=%u",
+            request.peer_index,
+            request.activation_generation,
+            wgnx::GetPeerRuntimeStateName(runtime.state),
+            runtime.activation_generation);
+        return;
+    }
+
+    const std::uint32_t old_socket_generation = runtime.socket_generation;
+    const auto old_socket = runtime.socket;
+    logger::Log(
+        "Starting UDP bind bump peer=%zu activation=%u old_socket_generation=%u old_socket=%d state=%s",
+        request.peer_index,
+        request.activation_generation,
+        old_socket_generation,
+        static_cast<int>(old_socket),
+        wgnx::GetPeerRuntimeStateName(runtime.state));
+
+    const wgnx::PeerErrorCode open_error = OpenRuntimeSocket(request.peer_index);
+    if (open_error != wgnx::PeerErrorCode::None) {
+        logger::Log(
+            "UDP bind bump open failed peer=%zu activation=%u code=%s; peer state preserved",
+            request.peer_index,
+            request.activation_generation,
+            wgnx::GetPeerErrorCodeName(open_error));
+        return;
+    }
+
+    const char *resume_action = nullptr;
+    wgnx::PeerErrorCode send_error = wgnx::PeerErrorCode::None;
+    if (runtime.state == wgnx::PeerRuntimeState::Active) {
+        resume_action = "keepalive";
+        send_error = SendProtocolPeerKeepalive(request.peer_index);
+    } else {
+        resume_action = "handshake_initiation";
+        send_error = SendProtocolPeerInitiation(request.peer_index);
+    }
+
+    if (send_error != wgnx::PeerErrorCode::None) {
+        logger::Log(
+            "UDP bind bump resume send failed peer=%zu activation=%u socket_generation=%u action=%s code=%s; peer state preserved",
+            request.peer_index,
+            request.activation_generation,
+            runtime.socket_generation,
+            resume_action,
+            wgnx::GetPeerErrorCodeName(send_error));
+    } else {
+        logger::Log(
+            "Completed UDP bind bump peer=%zu activation=%u socket_generation=%u socket=%d action=%s",
+            request.peer_index,
+            request.activation_generation,
+            runtime.socket_generation,
+            static_cast<int>(runtime.socket),
+            resume_action);
+    }
+}
+
 void ReceiveWorkMain(wgnx::platform::work_struct *) {
     wgnx::platform::static_packet_buffer<ReceivePacketCapacity> packet;
     while (true) {
+        ProcessPendingBindBump();
+
         std::size_t peer_index = 0;
         std::uint32_t activation_generation = 0;
+        std::uint32_t socket_generation = 0;
         wgnx::platform::socket_handle socket = wgnx::platform::InvalidSocket;
         if (!SnapshotReceiveRuntime(
                 std::addressof(peer_index),
                 std::addressof(activation_generation),
+                std::addressof(socket_generation),
                 std::addressof(socket))) {
             return;
         }
@@ -1661,7 +1784,7 @@ void ReceiveWorkMain(wgnx::platform::work_struct *) {
             std::addressof(received),
             std::addressof(source));
         if (receive_error != wgnx::platform::socket_error::none) {
-            CommitReceiveFailure(peer_index, activation_generation, socket, receive_error);
+            CommitReceiveFailure(peer_index, activation_generation, socket_generation, socket, receive_error);
             return;
         }
         if (received == 0) {
@@ -1669,7 +1792,13 @@ void ReceiveWorkMain(wgnx::platform::work_struct *) {
         }
 
         static_cast<void>(wgnx::platform::packet_set_len(std::addressof(packet.packet), received));
-        CommitReceivedPacket(peer_index, activation_generation, socket, std::addressof(packet.packet), source);
+        CommitReceivedPacket(
+            peer_index,
+            activation_generation,
+            socket_generation,
+            socket,
+            std::addressof(packet.packet),
+            source);
         wgnx::platform::packet_clear(std::addressof(packet.packet));
     }
 }
@@ -1913,6 +2042,30 @@ void RekeyTimerCallback(wgnx::platform::timer_list *) {
     }
 }
 
+void NetworkPathObserverTimerCallback(wgnx::platform::timer_list *) {
+    if (g_timer_action_workqueue != nullptr) {
+        static_cast<void>(wgnx::platform::queue_work(
+            g_timer_action_workqueue,
+            std::addressof(g_network_path_observer_dispatcher.work)));
+    }
+}
+
+void NetworkPathObserverWorkMain(wgnx::platform::work_struct *) {
+    bool has_active_transport = false;
+    {
+        std::scoped_lock lock(g_state_mutex);
+        has_active_transport = g_state.active_peer_index >= 0;
+    }
+
+    if (has_active_transport) {
+        wgnx::platform::observe_network_path();
+    }
+
+    static_cast<void>(wgnx::platform::mod_timer(
+        std::addressof(g_network_path_observer_dispatcher.timer),
+        wgnx::platform::get_jiffies_64() + NetworkPathObservationJiffies));
+}
+
 void TimerActionWorkMain(wgnx::platform::work_struct *work) {
     if (work == std::addressof(g_retransmit_dispatcher.work)) {
         RunTimerAction(wgnx::wireguard::TimerHook::RetransmitHandshake);
@@ -1929,6 +2082,10 @@ void TimerActionWorkMain(wgnx::platform::work_struct *work) {
 
     if (work == std::addressof(g_payload_probe_timeout_dispatcher.work)) {
         PayloadProbeTimeoutWorkMain(work);
+        return;
+    }
+    if (work == std::addressof(g_network_path_observer_dispatcher.work)) {
+        NetworkPathObserverWorkMain(work);
     }
 }
 
@@ -1979,12 +2136,19 @@ void InitializeTransportTimerExecutor() {
     wgnx::platform::INIT_WORK(std::addressof(g_keepalive_dispatcher.work), TimerActionWorkMain);
     wgnx::platform::INIT_WORK(std::addressof(g_rekey_dispatcher.work), TimerActionWorkMain);
     wgnx::platform::INIT_WORK(std::addressof(g_payload_probe_timeout_dispatcher.work), TimerActionWorkMain);
+    wgnx::platform::INIT_WORK(std::addressof(g_network_path_observer_dispatcher.work), TimerActionWorkMain);
     wgnx::platform::timer_setup(std::addressof(g_retransmit_dispatcher.timer), RetransmitTimerCallback);
     wgnx::platform::timer_setup(std::addressof(g_keepalive_dispatcher.timer), KeepaliveTimerCallback);
     wgnx::platform::timer_setup(std::addressof(g_rekey_dispatcher.timer), RekeyTimerCallback);
     wgnx::platform::timer_setup(
         std::addressof(g_payload_probe_timeout_dispatcher.timer),
         PayloadProbeTimeoutTimerCallback);
+    wgnx::platform::timer_setup(
+        std::addressof(g_network_path_observer_dispatcher.timer),
+        NetworkPathObserverTimerCallback);
+    static_cast<void>(wgnx::platform::mod_timer(
+        std::addressof(g_network_path_observer_dispatcher.timer),
+        wgnx::platform::get_jiffies_64() + NetworkPathObservationJiffies));
     logger::Log("Started transport timer executor");
 }
 
@@ -2105,6 +2269,54 @@ ams::Result ControlService::TriggerDebugPayload(const wgnx::DebugTriggerRequest 
 
     QueuePayloadSubmissionWork();
     logger::Log("Queued debug payload trigger action=%s", wgnx::GetDebugTriggerActionName(action));
+    R_SUCCEED();
+}
+
+ams::Result ControlService::BumpUdpBinding() {
+    {
+        std::scoped_lock lock(g_state_mutex);
+        InitializeState();
+        if (g_state.active_peer_index < 0) {
+            logger::Log("Rejected BumpUdpBinding: no active peer");
+            R_THROW(ams::fs::ResultInvalidArgument());
+        }
+
+        const std::size_t peer_index = static_cast<std::size_t>(g_state.active_peer_index);
+        const auto &runtime = g_state.runtime[peer_index];
+        if ((runtime.state != wgnx::PeerRuntimeState::Handshaking &&
+             runtime.state != wgnx::PeerRuntimeState::Active) ||
+            !runtime.has_resolved_endpoint) {
+            logger::Log(
+                "Rejected BumpUdpBinding: peer=%zu state=%s resolved=%u",
+                peer_index,
+                wgnx::GetPeerRuntimeStateName(runtime.state),
+                runtime.has_resolved_endpoint ? 1U : 0U);
+            R_THROW(ams::fs::ResultInvalidArgument());
+        }
+
+        if (g_bind_bump_request.pending &&
+            g_bind_bump_request.peer_index == peer_index &&
+            g_bind_bump_request.activation_generation == runtime.activation_generation) {
+            logger::Log(
+                "Coalesced UDP bind bump peer=%zu activation=%u",
+                peer_index,
+                runtime.activation_generation);
+        } else {
+            g_bind_bump_request = {
+                .pending = true,
+                .peer_index = peer_index,
+                .activation_generation = runtime.activation_generation,
+            };
+            logger::Log(
+                "Queued UDP bind bump peer=%zu activation=%u socket_generation=%u socket=%d",
+                peer_index,
+                runtime.activation_generation,
+                runtime.socket_generation,
+                static_cast<int>(runtime.socket));
+        }
+    }
+
+    QueueReceiveWork();
     R_SUCCEED();
 }
 

@@ -45,6 +45,7 @@ int main(int argc, char **argv)
     printf("Exit by pressing + or -\n");
     printf("Press ZL to send a debug ping to 10.13.13.1 through the tunnel\n");
     printf("Press ZR to send a debug ping to 1.1.1.1 through the tunnel\n");
+    printf("Press X to recreate the active tunnel's UDP binding\n");
 
     // Display arguments sent from nxlink
     printf("%d arguments\n", argc);
@@ -154,6 +155,18 @@ int main(int argc, char **argv)
                     wgnx::GetDebugTriggerActionName(action),
                     R_SUCCEEDED(trigger_rc) ? "queued" : "failed",
                     trigger_rc);
+            }
+        }
+
+        if (kDown & HidNpadButton_X) {
+            if (!wgnx::client::IsServiceRunning()) {
+                printf("BumpUdpBinding: IPC service is not running.\n");
+            } else {
+                const Result bump_rc = wgnx::client::BumpUdpBinding();
+                printf(
+                    "BumpUdpBinding: %s (0x%08X)\n",
+                    R_SUCCEEDED(bump_rc) ? "queued" : "failed",
+                    bump_rc);
             }
         }
 

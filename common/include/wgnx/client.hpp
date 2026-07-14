@@ -137,6 +137,16 @@ inline Result TriggerDebugPayload(DebugTriggerAction action) {
     return serviceDispatchIn(service.get(), static_cast<std::uint32_t>(CommandId::TriggerDebugPayload), request);
 }
 
+inline Result BumpUdpBinding() {
+    ScopedService service;
+    Result rc = service.open();
+    if (R_FAILED(rc)) {
+        return rc;
+    }
+
+    return serviceDispatch(service.get(), static_cast<std::uint32_t>(CommandId::BumpUdpBinding));
+}
+
 inline Result SubmitInnerIpv4Packet(
     const void *packet,
     std::size_t packet_size,
