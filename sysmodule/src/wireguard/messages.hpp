@@ -60,10 +60,16 @@ struct ParseResult {
     MessageType type{MessageType::Invalid};
 };
 
-constexpr inline std::size_t HandshakeInitiationSize = sizeof(message_handshake_initiation);
-constexpr inline std::size_t HandshakeResponseSize = sizeof(message_handshake_response);
-constexpr inline std::size_t HandshakeCookieSize = sizeof(message_handshake_cookie);
-constexpr inline std::size_t TransportDataHeaderSize = sizeof(message_transport_data);
+constexpr inline std::size_t HandshakeInitiationSize =
+    MessageTypeSize + MessageSenderIndexSize + NoisePublicKeySize +
+    EncryptedStaticSize + EncryptedTimestampSize + (2 * NoiseMacSize);
+constexpr inline std::size_t HandshakeResponseSize =
+    MessageTypeSize + MessageSenderIndexSize + MessageReceiverIndexSize +
+    NoisePublicKeySize + EncryptedNothingSize + (2 * NoiseMacSize);
+constexpr inline std::size_t HandshakeCookieSize =
+    MessageTypeSize + MessageReceiverIndexSize + CookieNonceSize + EncryptedCookieSize;
+constexpr inline std::size_t TransportDataHeaderSize =
+    MessageTypeSize + MessageReceiverIndexSize + MessageCounterSize;
 
 const char *GetMessageTypeName(MessageType type);
 const char *GetParseErrorName(ParseError error);

@@ -7,19 +7,15 @@
 
 namespace wgnx::wireguard {
 
-void wg_peer_init_from_config(wg_peer *peer, const wgnx::PeerConfigEntry &config) {
+bool wg_peer_initialize(wg_peer *peer, const PeerInitializationView &config) {
     if (peer == nullptr) {
-        return;
+        return false;
     }
 
     *peer = {};
-    std::snprintf(peer->name, sizeof(peer->name), "%s", config.name.data());
-    std::snprintf(peer->allowed_ips, sizeof(peer->allowed_ips), "%s", config.allowed_ips.data());
-    std::snprintf(peer->endpoint_text, sizeof(peer->endpoint_text), "%s", config.endpoint.data());
-    std::snprintf(peer->public_key, sizeof(peer->public_key), "%s", config.public_key.data());
-    std::snprintf(peer->preshared_key, sizeof(peer->preshared_key), "%s", config.preshared_key.data());
-    peer->persistent_keepalive_interval = config.persistent_keepalive;
-    peer->has_preshared_key = config.preshared_key[0] != '\0';
+    std::snprintf(peer->name, sizeof(peer->name), "%s", config.name != nullptr ? config.name : "");
+    peer->persistent_keepalive_interval = config.persistent_keepalive_interval;
+    peer->has_preshared_key = config.preshared_key != nullptr && config.preshared_key->valid;
     noise_static_identity_reset(&peer->static_identity);
     noise_handshake_material_reset(&peer->handshake_material);
     noise_cookie_reset(&peer->cookie);
@@ -28,20 +24,11 @@ void wg_peer_init_from_config(wg_peer *peer, const wgnx::PeerConfigEntry &config
     wg_peer_reset_keypairs(peer);
     wg_peer_clear_last_initiation(peer);
     peer->handshake_retry = {};
-}
-
-bool wg_peer_prepare_static_identity(wg_peer *peer, const char *local_private_key_text) {
-    if (peer == nullptr || local_private_key_text == nullptr) {
-        return false;
-    }
-
-    noise_static_identity_reset(&peer->static_identity);
-    noise_handshake_material_reset(&peer->handshake_material);
-    if (!noise_static_identity_init(
+    if (!noise_static_identity_init_from_keys(
             &peer->static_identity,
-            local_private_key_text,
-            peer->public_key,
-            peer->preshared_key)) {
+            config.local_private_key,
+            config.remote_public_key != nullptr ? config.remote_public_key : "",
+            config.preshared_key)) {
         wgnx::sysmodule::logger::Log("WG peer '%s': invalid static identity or peer keys", peer->name);
         return false;
     }
@@ -53,33 +40,6 @@ bool wg_peer_prepare_static_identity(wg_peer *peer, const char *local_private_ke
     }
 
     return true;
-}
-
-void wg_peer_set_resolved_endpoint(
-    wg_peer *peer,
-    const wgnx::platform::endpoint &endpoint,
-    const char *endpoint_text) {
-    if (peer == nullptr) {
-        return;
-    }
-
-    peer->resolved_endpoint = endpoint;
-    peer->has_resolved_endpoint = true;
-    std::snprintf(
-        peer->resolved_endpoint_text,
-        sizeof(peer->resolved_endpoint_text),
-        "%s",
-        endpoint_text != nullptr ? endpoint_text : "");
-}
-
-void wg_peer_clear_resolved_endpoint(wg_peer *peer) {
-    if (peer == nullptr) {
-        return;
-    }
-
-    peer->resolved_endpoint = {};
-    peer->resolved_endpoint_text[0] = '\0';
-    peer->has_resolved_endpoint = false;
 }
 
 void wg_peer_reset_keypairs(wg_peer *peer) {
@@ -94,7 +54,7 @@ void wg_peer_reset_keypairs(wg_peer *peer) {
 
 OutboundStagingAction wg_peer_get_outbound_staging_action(
     const wg_peer &peer,
-    MonotonicTime now) {
+    MonotonicTimePoint now) {
     if (peer.staged_outbound_packets.Size() == 0) {
         return OutboundStagingAction::Idle;
     }
@@ -103,13 +63,31 @@ OutboundStagingAction wg_peer_get_outbound_staging_action(
         : OutboundStagingAction::InitiateHandshake;
 }
 
-std::size_t wg_peer_clear_staged_outbound_packets(wg_peer *peer) {
+std::size_t wg_peer_clear_staged_outbound_packets(
+    wg_peer *peer,
+    QueueDisposition disposition) {
     if (peer == nullptr) {
         return 0;
     }
 
-    const std::size_t count = peer->staged_outbound_packets.Size();
-    peer->staged_outbound_packets.Clear();
+    const std::size_t count = peer->staged_outbound_packets.Clear(disposition);
+    if (count != 0) {
+        const QueueStatistics &statistics = peer->staged_outbound_packets.Statistics();
+        wgnx::sysmodule::logger::Log(
+            "WG staging peer='%s' removed=%zu disposition=%s pushed=%llu popped=%llu sent=%llu send_failed=%llu retry_exhausted=%llu stale=%llu unavailable=%llu cleared=%llu high_watermark=%zu",
+            peer->name,
+            count,
+            GetQueueDispositionName(disposition),
+            static_cast<unsigned long long>(statistics.pushed),
+            static_cast<unsigned long long>(statistics.popped),
+            static_cast<unsigned long long>(statistics.sent),
+            static_cast<unsigned long long>(statistics.send_failed),
+            static_cast<unsigned long long>(statistics.retry_exhausted),
+            static_cast<unsigned long long>(statistics.stale),
+            static_cast<unsigned long long>(statistics.unavailable),
+            static_cast<unsigned long long>(statistics.cleared),
+            statistics.high_watermark);
+    }
     return count;
 }
 
@@ -149,7 +127,9 @@ HandshakeRetryTimeoutResult wg_peer_handle_handshake_retry_timeout(wg_peer *peer
 
     peer->handshake_retry.active = false;
     ++peer->handshake_retry.exhausted_sequence_count;
-    const std::size_t dropped = wg_peer_clear_staged_outbound_packets(peer);
+    const std::size_t dropped = wg_peer_clear_staged_outbound_packets(
+        peer,
+        QueueDisposition::RetryExhausted);
     wg_peer_clear_last_initiation(peer);
     return {
         .action = HandshakeRetryTimeoutAction::Exhausted,

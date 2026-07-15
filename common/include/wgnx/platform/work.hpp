@@ -48,5 +48,6 @@ void timer_setup(timer_list *timer, timer_func_t func);
 bool mod_timer(timer_list *timer, jiffies_t expires);
 bool timer_pending(const timer_list *timer);
 void timer_delete(timer_list *timer);
+void timer_delete_sync(timer_list *timer);
 
 } // namespace wgnx::platform

@@ -2,6 +2,19 @@
 
 namespace wgnx::wireguard {
 
+const char *GetQueueDispositionName(QueueDisposition disposition) {
+    switch (disposition) {
+        case QueueDisposition::Delivered: return "delivered";
+        case QueueDisposition::Sent: return "sent";
+        case QueueDisposition::Stale: return "stale";
+        case QueueDisposition::Unavailable: return "unavailable";
+        case QueueDisposition::SendFailed: return "send_failed";
+        case QueueDisposition::RetryExhausted: return "retry_exhausted";
+        case QueueDisposition::Cleared: return "cleared";
+    }
+    return "unknown";
+}
+
 namespace {
 
 std::uint16_t LoadBigEndian16(const std::uint8_t *value) {

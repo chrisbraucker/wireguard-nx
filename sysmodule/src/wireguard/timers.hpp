@@ -1,7 +1,5 @@
 #pragma once
 
-#include "wgnx/platform/work.hpp"
-
 #include "wireguard/constants.hpp"
 
 #include <chrono>
@@ -16,14 +14,23 @@ enum class TimerHook : std::uint8_t {
     Rekey = 3,
 };
 
-using TimerDeadline = std::chrono::milliseconds;
+struct TimerClock {
+    using rep = std::chrono::milliseconds::rep;
+    using period = std::chrono::milliseconds::period;
+    using duration = std::chrono::milliseconds;
+    using time_point = std::chrono::time_point<TimerClock, duration>;
+    static constexpr bool is_steady = true;
+};
 
-constexpr TimerDeadline TimerDeadlineFromJiffies(wgnx::platform::jiffies_t value) {
-    return TimerDeadline{value};
+using TimerDeadline = TimerClock::time_point;
+using TimerDelay = TimerClock::duration;
+
+constexpr TimerDeadline TimerDeadlineFromJiffies(std::uint64_t value) {
+    return TimerDeadline{TimerDelay{static_cast<TimerDelay::rep>(value)}};
 }
 
-constexpr wgnx::platform::jiffies_t TimerDeadlineToJiffies(TimerDeadline value) {
-    return static_cast<wgnx::platform::jiffies_t>(value.count());
+constexpr std::uint64_t TimerDeadlineToJiffies(TimerDeadline value) {
+    return static_cast<std::uint64_t>(value.time_since_epoch().count());
 }
 
 struct wg_timer_hook_state {
@@ -31,13 +38,8 @@ struct wg_timer_hook_state {
     TimerDeadline deadline{};
 };
 
-/*
- * Deviation from Linux:
- * This milestone tracks protocol timer intent and scheduling requests without
- * yet executing real callback behavior. The implication is that later
- * milestones can wire real timer actions onto these hooks without changing the
- * owning object model, but timer expiry itself is not protocol-real yet.
- */
+// Protocol timer intent is platform-independent; Horizon execution is adapted
+// through generation-checked TimerToken values in the runtime coordinator.
 struct wg_timers {
     wg_timer_hook_state retransmit_handshake{};
     wg_timer_hook_state send_keepalive{};
@@ -56,8 +58,8 @@ void wg_timers_schedule(
 void wg_timers_cancel(wg_timers *timers, TimerHook hook, const char *peer_name);
 void wg_timers_cancel_all(wg_timers *timers, const char *peer_name);
 bool wg_timers_any_pending(const wg_timers &timers);
-constexpr TimerDeadline GetHandshakeRetryDelay(std::uint32_t jitter_ms) {
-    return std::chrono::duration_cast<TimerDeadline>(RekeyTimeout) +
+constexpr TimerDelay GetHandshakeRetryDelay(std::uint32_t jitter_ms) {
+    return std::chrono::duration_cast<TimerDelay>(RekeyTimeout) +
            std::chrono::milliseconds{jitter_ms % RekeyTimeoutJitterMaxMs};
 }
 

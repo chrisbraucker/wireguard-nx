@@ -423,4 +423,22 @@ void timer_delete(timer_list *timer) {
     g_timer_manager.mutex.unlock();
 }
 
+void timer_delete_sync(timer_list *timer) {
+    if (timer == nullptr) {
+        return;
+    }
+
+    auto *impl = GetImpl<TimerInternal>(timer);
+    g_timer_manager.mutex.lock();
+    if (impl->armed) {
+        RemoveTimerLocked(impl);
+        impl->armed = false;
+    }
+    while (impl->running) {
+        g_timer_manager.cv.Wait(*g_timer_manager.mutex.GetBase());
+    }
+    g_timer_manager.cv.Broadcast();
+    g_timer_manager.mutex.unlock();
+}
+
 } // namespace wgnx::platform

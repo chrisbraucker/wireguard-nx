@@ -62,6 +62,19 @@ cancels retransmit, keepalive, and rekey activity. Full authenticated-activity
 timer semantics, including new-handshake and persistent-keepalive interactions,
 remain Milestone 5 work.
 
+## Stale Timer Rejection
+
+Each armed protocol timer carries its hook, peer index, activation generation,
+handshake sequence where applicable, and a monotonically changing arm
+generation. Horizon cancellation waits for an in-flight timer callback to
+finish capturing its token. Queued work validates that exact token through the
+platform-independent `PeerController` before touching current peer state.
+
+Rearming, cancellation, peer replacement, and a later handshake sequence all
+invalidate previously queued work. In particular, an expired zero-key callback
+from an old activation cannot erase a newly established session or a different
+active peer.
+
 ## On-Device Validation
 
 The milestone's real-peer gate is:

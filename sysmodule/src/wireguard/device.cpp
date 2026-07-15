@@ -1,6 +1,8 @@
 #include "wireguard/device.hpp"
 
 #include <cstdio>
+#include <memory>
+#include <utility>
 
 namespace wgnx::wireguard {
 
@@ -49,24 +51,54 @@ void SetRegistryEntry(wg_device *device, wg_index_slot slot, std::uint32_t index
 } // namespace
 
 bool wg_device_init_from_config_entry(wg_device *device, const wgnx::PeerConfigEntry &config) {
-    if (device == nullptr) {
+    noise_private_key private_key{};
+    noise_symmetric_key preshared_key{};
+    if (!noise_parse_private_key(&private_key, config.private_key.data())) {
+        return false;
+    }
+    const noise_symmetric_key *preshared_key_ptr = nullptr;
+    if (config.preshared_key[0] != '\0') {
+        if (!noise_parse_preshared_key(&preshared_key, config.preshared_key.data())) {
+            return false;
+        }
+        preshared_key_ptr = std::addressof(preshared_key);
+    }
+    return wg_device_init_from_parsed_config(
+        device,
+        config,
+        private_key,
+        preshared_key_ptr);
+}
+
+bool wg_device_init_from_parsed_config(
+    wg_device *device,
+    const wgnx::PeerConfigEntry &config,
+    const noise_private_key &local_private_key,
+    const noise_symmetric_key *preshared_key) {
+    if (device == nullptr || !local_private_key.valid) {
         return false;
     }
 
     wg_device_reset(device);
     std::snprintf(device->name, sizeof(device->name), "%s", config.name.data());
     std::snprintf(device->interface_address, sizeof(device->interface_address), "%s", config.address.data());
-    std::snprintf(device->private_key, sizeof(device->private_key), "%s", config.private_key.data());
     std::snprintf(device->dns, sizeof(device->dns), "%s", config.dns.data());
     device->listen_port = config.listen_port;
     device->mtu = config.mtu;
-    device->has_private_key = config.private_key[0] != '\0';
+    device->has_private_key = true;
     device->has_dns = config.dns[0] != '\0';
     wg_index_allocator_init(&device->index_allocator);
     wg_device_clear_index_registry(device);
 
-    wg_peer_init_from_config(&device->peer, config);
-    if (!wg_peer_prepare_static_identity(&device->peer, config.private_key.data())) {
+    if (!wg_peer_initialize(
+            &device->peer,
+            {
+                .name = config.name.data(),
+                .local_private_key = std::addressof(local_private_key),
+                .remote_public_key = config.public_key.data(),
+                .preshared_key = preshared_key,
+                .persistent_keepalive_interval = config.persistent_keepalive,
+            })) {
         wg_device_reset(device);
         return false;
     }
@@ -134,9 +166,9 @@ bool wg_device_promote_next_keypair(wg_device *device, wg_peer *peer) {
     }
 
     peer->previous_keypair.Reset();
-    peer->previous_keypair = peer->current_keypair;
+    peer->previous_keypair = std::move(peer->current_keypair);
     peer->current_keypair.Reset();
-    peer->current_keypair = peer->next_keypair;
+    peer->current_keypair = std::move(peer->next_keypair);
     peer->next_keypair.Reset();
     wg_device_refresh_keypair_indices(device, peer);
     return true;

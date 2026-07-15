@@ -12,6 +12,14 @@ From the repository root:
 make -C sysmodule test
 ```
 
+This host-only goal does not require `DEVKITPRO`, devkitA64, libnx, or the
+Atmosphere submodule. Run the same sources with AddressSanitizer and
+UndefinedBehaviorSanitizer using:
+
+```sh
+make -C sysmodule test-sanitize
+```
+
 The runner reports every case by name and emits the failed expression, source
 location, and protocol-state detail where available. A nonzero exit status
 means at least one case failed.
@@ -25,8 +33,10 @@ adapters:
 - wall-clock time is controlled independently for TAI64N timestamps
 - random bytes come from a resettable, project-defined deterministic stream
 - serialized datagrams cross an in-memory bounded link instead of UDP
-- timer tests inspect scheduling intent and absolute deadlines without an
-  asynchronous worker thread
+- timer tests inspect typed absolute deadlines and generation-safe ownership
+  without an asynchronous worker thread
+- peer-controller tests inject construction and transport outcomes to verify
+  the exact retain, send, drop, and terminal queue decisions
 
 The deterministic runtime records random-byte consumption so a change in the
 handshake's external inputs is observable even when the resulting packet still
@@ -53,12 +63,14 @@ platform UDP descriptor through handshake and transport code:
   I/O, preventing nonce reuse when the later UDP send fails
 - keypair send and receive capability is evaluated against the upstream
   `RejectAfterTime` and `RejectAfterMessages` hard limits
+- replay state uses wireguard-go's 128-block, 8,128-packet backtrack window
 - outbound inner packets are staged in a bounded peer-owned queue while no
   send-capable keypair exists; session derivation makes that queue sendable
-- protocol timer intent stores `std::chrono` deadlines; conversion to Horizon
-  jiffies remains at the platform scheduling boundary
+- protocol monotonic time points, elapsed durations, and timer deadlines are
+  distinct types; conversion to Horizon jiffies remains at the platform edge
 - inner-packet queues have compile-time capacity, reject-new overflow behavior,
-  and counters for pushes, pops, full-queue rejections, and high-watermark
+  and disposition counters whose totals preserve depth accounting
+- sensitive protocol owners are move-only and clear themselves on destruction
 
 The legacy self-tests use adapters local to the host test translation unit.
 Production protocol headers do not retain overloads for the removed nullable
@@ -85,6 +97,13 @@ The protocol suite currently verifies:
 - keypair establishment, age evaluation, reset, and secret clearing are
   observable without UI or runtime state
 - bounded queue overflow policy and statistics are deterministic
+- clear and removal dispositions preserve `pushed - popped == depth`
+- the upstream replay-window boundary accepts 8,128 counters of reordering and
+  rejects the next older counter
+- timer rearming, cancellation, activation replacement, and retry-sequence
+  replacement invalidate stale action tokens
+- fake construction and UDP outcomes exercise production queue-retirement
+  policy through the platform-independent peer controller
 - the exact hard time and counter rejection boundaries prevent transport
   serialization without consuming or reusing a nonce
 - traffic submitted without a keypair remains staged across a deterministic
@@ -106,11 +125,11 @@ longer linked into or executed by the production sysmodule.
 ## What Host Tests Do Not Prove
 
 The protocol suite does not emulate Horizon service behavior, BSD socket
-lifetime, NIFM, Atmosphere work queues, or real timer-thread ordering. Those
-belong to platform-adapter and on-device integration tests. The protocol core
-currently records timer intent while `ipc_service.cpp` owns the Horizon timer
-and work dispatchers; later lifecycle milestones should move behavior across
-that boundary only with corresponding deterministic tests.
+lifetime, NIFM, Atmosphere work queues, or real timer-thread scheduling. Those
+belong to platform-adapter and on-device integration tests. The host-tested
+controller defines timer identity and queue policy; the Horizon adapter still
+needs on-device validation that its synchronous cancellation and token capture
+behave correctly under real thread scheduling.
 
 ## On-Device Gate
 

@@ -4,6 +4,7 @@
 #include "wireguard/device.hpp"
 #include "wireguard/endian.hpp"
 #include "wireguard/peer.hpp"
+#include "wgnx/platform/clock.hpp"
 #include "wgnx/platform/random.hpp"
 
 #include "logger.hpp"
@@ -386,16 +387,21 @@ void ComputeMac1(message_handshake_initiation *message, const noise_public_key &
     crypto::blake2s_update(&state, remote_static.bytes.data(), remote_static.bytes.size());
     static_cast<void>(crypto::blake2s_final(&state, mac1_key, sizeof(mac1_key)));
 
-    const std::size_t mac1_input_size =
-        sizeof(*message) - sizeof(message->macs) + offsetof(message_macs, mac1);
+    std::array<std::uint8_t, HandshakeInitiationSize> serialized{};
+    if (SerializeHandshakeInitiation(serialized, *message) != ParseError::None) {
+        crypto::secure_clear(mac1_key, sizeof(mac1_key));
+        return;
+    }
+    constexpr std::size_t mac1_input_size = HandshakeInitiationSize - (2 * NoiseMacSize);
     static_cast<void>(crypto::blake2s(
         message->macs.mac1.data(),
         message->macs.mac1.size(),
-        message,
+        serialized.data(),
         mac1_input_size,
         mac1_key,
         sizeof(mac1_key)));
     crypto::secure_clear(mac1_key, sizeof(mac1_key));
+    crypto::secure_clear(serialized.data(), serialized.size());
 }
 
 void ComputeMac1(message_handshake_response *message, const noise_public_key &remote_static) {
@@ -410,16 +416,21 @@ void ComputeMac1(message_handshake_response *message, const noise_public_key &re
     crypto::blake2s_update(&state, remote_static.bytes.data(), remote_static.bytes.size());
     static_cast<void>(crypto::blake2s_final(&state, mac1_key, sizeof(mac1_key)));
 
-    const std::size_t mac1_input_size =
-        sizeof(*message) - sizeof(message->macs) + offsetof(message_macs, mac1);
+    std::array<std::uint8_t, HandshakeResponseSize> serialized{};
+    if (SerializeHandshakeResponse(serialized, *message) != ParseError::None) {
+        crypto::secure_clear(mac1_key, sizeof(mac1_key));
+        return;
+    }
+    constexpr std::size_t mac1_input_size = HandshakeResponseSize - (2 * NoiseMacSize);
     static_cast<void>(crypto::blake2s(
         message->macs.mac1.data(),
         message->macs.mac1.size(),
-        message,
+        serialized.data(),
         mac1_input_size,
         mac1_key,
         sizeof(mac1_key)));
     crypto::secure_clear(mac1_key, sizeof(mac1_key));
+    crypto::secure_clear(serialized.data(), serialized.size());
 }
 
 bool ComputeCookieKey(
@@ -438,23 +449,47 @@ bool ComputeCookieKey(
     return crypto::blake2s_final(&state, key, NoiseSymmetricKeySize);
 }
 
-template <typename T>
-std::size_t GetMac2InputSize(const T &message) {
-    return sizeof(message) - sizeof(message.macs) + offsetof(message_macs, mac2);
-}
-
-template <typename T>
+template <typename T, std::size_t Size>
 void ComputeMac2(
     const T &message,
     const noise_cookie &cookie,
-    std::array<std::uint8_t, NoiseMacSize> &out_mac2) {
+    std::array<std::uint8_t, NoiseMacSize> &out_mac2,
+    ParseError (*serialize)(std::span<std::uint8_t>, const T &)) {
+    std::array<std::uint8_t, Size> serialized{};
+    if (serialize(serialized, message) != ParseError::None) {
+        return;
+    }
+    constexpr std::size_t mac2_input_size = Size - NoiseMacSize;
     static_cast<void>(crypto::blake2s(
         out_mac2.data(),
         NoiseMacSize,
-        &message,
-        GetMac2InputSize(message),
+        serialized.data(),
+        mac2_input_size,
         cookie.value.data(),
         CookieValueSize));
+    crypto::secure_clear(serialized.data(), serialized.size());
+}
+
+void ComputeMac2(
+    const message_handshake_initiation &message,
+    const noise_cookie &cookie,
+    std::array<std::uint8_t, NoiseMacSize> &out_mac2) {
+    ComputeMac2<message_handshake_initiation, HandshakeInitiationSize>(
+        message,
+        cookie,
+        out_mac2,
+        SerializeHandshakeInitiation);
+}
+
+void ComputeMac2(
+    const message_handshake_response &message,
+    const noise_cookie &cookie,
+    std::array<std::uint8_t, NoiseMacSize> &out_mac2) {
+    ComputeMac2<message_handshake_response, HandshakeResponseSize>(
+        message,
+        cookie,
+        out_mac2,
+        SerializeHandshakeResponse);
 }
 
 bool MatchesCookieReceiverIndex(const wg_device *device, std::uint32_t receiver_index) {
@@ -491,10 +526,7 @@ void ClearHandshakeTranscript(wg_peer *peer) {
         return;
     }
 
-    crypto::secure_clear(
-        peer->handshake_material.ephemeral_private.bytes.data(),
-        peer->handshake_material.ephemeral_private.bytes.size());
-    peer->handshake_material.ephemeral_private.valid = false;
+    peer->handshake_material.ephemeral_private.Clear();
     crypto::secure_clear(
         peer->handshake_material.ephemeral_public.bytes.data(),
         peer->handshake_material.ephemeral_public.bytes.size());
@@ -503,10 +535,8 @@ void ClearHandshakeTranscript(wg_peer *peer) {
         peer->handshake_material.remote_ephemeral.bytes.data(),
         peer->handshake_material.remote_ephemeral.bytes.size());
     peer->handshake_material.remote_ephemeral.valid = false;
-    crypto::secure_clear(peer->handshake_material.chaining_key.bytes.data(), peer->handshake_material.chaining_key.bytes.size());
-    peer->handshake_material.chaining_key.valid = false;
-    crypto::secure_clear(peer->handshake_material.hash.bytes.data(), peer->handshake_material.hash.bytes.size());
-    peer->handshake_material.hash.valid = false;
+    peer->handshake_material.chaining_key.Clear();
+    peer->handshake_material.hash.Clear();
     peer->handshake.local_index = 0;
     peer->handshake.remote_index = 0;
 }
@@ -580,7 +610,7 @@ void noise_handshake_init(noise_handshake *handshake) {
 
     *handshake = {};
     handshake->state = HandshakeState::Zeroed;
-    handshake->last_transition_ns = wgnx::platform::ktime_get_coarse_boottime_ns();
+    handshake->last_transition = GetMonotonicTime();
 }
 
 bool noise_handshake_transition(
@@ -594,7 +624,7 @@ bool noise_handshake_transition(
 
     const HandshakeState old_state = handshake->state;
     handshake->state = new_state;
-    handshake->last_transition_ns = wgnx::platform::ktime_get_coarse_boottime_ns();
+    handshake->last_transition = GetMonotonicTime();
     ++handshake->transition_count;
 
     wgnx::sysmodule::logger::Log(
@@ -1074,8 +1104,6 @@ bool noise_handshake_begin_session(wg_device *device, wg_peer *peer) {
         GetMonotonicTime(),
         sending_key,
         receiving_key);
-    crypto::secure_clear(&sending_key, sizeof(sending_key));
-    crypto::secure_clear(&receiving_key, sizeof(receiving_key));
     if (!new_keypair.IsValid()) {
         return false;
     }
@@ -1083,17 +1111,17 @@ bool noise_handshake_begin_session(wg_device *device, wg_peer *peer) {
     if (state == HandshakeState::ResponseReceived) {
         peer->previous_keypair.Reset();
         if (peer->next_keypair.IsValid()) {
-            peer->previous_keypair = peer->next_keypair;
+            peer->previous_keypair = std::move(peer->next_keypair);
             peer->next_keypair.Reset();
             peer->current_keypair.Reset();
         } else {
-            peer->previous_keypair = peer->current_keypair;
+            peer->previous_keypair = std::move(peer->current_keypair);
             peer->current_keypair.Reset();
         }
-        peer->current_keypair = new_keypair;
+        peer->current_keypair = std::move(new_keypair);
     } else {
         peer->next_keypair.Reset();
-        peer->next_keypair = new_keypair;
+        peer->next_keypair = std::move(new_keypair);
         peer->previous_keypair.Reset();
     }
     new_keypair.Reset();

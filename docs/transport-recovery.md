@@ -5,6 +5,11 @@ temporary uplink failure must not discard peer configuration, keypairs,
 handshake state, timers, or queued inner packets merely because the current BSD
 socket can no longer send or receive.
 
+The protocol peer no longer stores a resolved Horizon endpoint or includes the
+platform UDP abstraction. Resolved address text, socket handles, and socket
+generations are owned only by the runtime transport state. Protocol timer and
+staged-send decisions are handled by a platform-independent peer controller.
+
 ## Manual UDP Bind Bump
 
 IPC API version 4 adds `BumpUdpBinding` as command 23. The command records a

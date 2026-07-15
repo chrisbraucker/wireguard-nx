@@ -41,10 +41,29 @@ enum class QueuePushResult : std::uint8_t {
     Full,
 };
 
+enum class QueueDisposition : std::uint8_t {
+    Delivered = 0,
+    Sent,
+    Stale,
+    Unavailable,
+    SendFailed,
+    RetryExhausted,
+    Cleared,
+};
+
+const char *GetQueueDispositionName(QueueDisposition disposition);
+
 struct QueueStatistics {
     std::uint64_t pushed{0};
     std::uint64_t popped{0};
     std::uint64_t rejected_full{0};
+    std::uint64_t delivered{0};
+    std::uint64_t sent{0};
+    std::uint64_t stale{0};
+    std::uint64_t unavailable{0};
+    std::uint64_t send_failed{0};
+    std::uint64_t retry_exhausted{0};
+    std::uint64_t cleared{0};
     std::size_t high_watermark{0};
 };
 
@@ -72,7 +91,7 @@ public:
         return m_count == 0 ? nullptr : std::addressof(m_records[m_head]);
     }
 
-    bool Pop(InnerPacketRecord *out) {
+    bool Pop(InnerPacketRecord *out, QueueDisposition disposition) {
         if (m_count == 0) {
             return false;
         }
@@ -84,15 +103,20 @@ public:
         m_head = (m_head + 1) % Capacity;
         --m_count;
         ++m_statistics.popped;
+        RecordDisposition(disposition, 1);
         return true;
     }
 
-    void Clear() {
+    std::size_t Clear(QueueDisposition disposition) {
+        const std::size_t cleared = m_count;
         for (std::size_t i = 0; i < m_count; ++i) {
             m_records[(m_head + i) % Capacity] = {};
         }
         m_head = 0;
         m_count = 0;
+        m_statistics.popped += cleared;
+        RecordDisposition(disposition, cleared);
+        return cleared;
     }
 
     std::size_t Size() const {
@@ -108,6 +132,19 @@ public:
     }
 
 private:
+    void RecordDisposition(QueueDisposition disposition, std::size_t count) {
+        const auto value = static_cast<std::uint64_t>(count);
+        switch (disposition) {
+            case QueueDisposition::Delivered: m_statistics.delivered += value; break;
+            case QueueDisposition::Sent: m_statistics.sent += value; break;
+            case QueueDisposition::Stale: m_statistics.stale += value; break;
+            case QueueDisposition::Unavailable: m_statistics.unavailable += value; break;
+            case QueueDisposition::SendFailed: m_statistics.send_failed += value; break;
+            case QueueDisposition::RetryExhausted: m_statistics.retry_exhausted += value; break;
+            case QueueDisposition::Cleared: m_statistics.cleared += value; break;
+        }
+    }
+
     std::array<InnerPacketRecord, Capacity> m_records{};
     std::size_t m_head{0};
     std::size_t m_count{0};

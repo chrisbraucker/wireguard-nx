@@ -8,6 +8,8 @@
 #include "wireguard/handshake.hpp"
 #include "wireguard/inner_packet.hpp"
 #include "wireguard/messages.hpp"
+#include "wireguard/peer_controller.hpp"
+#include "wireguard/timer_coordinator.hpp"
 #include "wireguard/timers.hpp"
 
 #include <algorithm>
@@ -271,8 +273,10 @@ bool CheckSessionKeys(TestContext &context, const ProtocolPair &pair) {
         context.Fail("responder_keypair.valid", __FILE__, __LINE__, "responder current keypair is invalid");
         return false;
     }
-    if (initiator_keypair.BirthTime() != wgnx::wireguard::MonotonicTime{SessionBirthTime} ||
-        responder_keypair.BirthTime() != wgnx::wireguard::MonotonicTime{SessionBirthTime}) {
+    const wgnx::wireguard::MonotonicTimePoint expected_birth{
+        wgnx::wireguard::MonotonicDuration{SessionBirthTime}};
+    if (initiator_keypair.BirthTime() != expected_birth ||
+        responder_keypair.BirthTime() != expected_birth) {
         context.Fail("keypair birth time", __FILE__, __LINE__, "controlled monotonic time was not used");
         return false;
     }
@@ -346,7 +350,7 @@ bool BuildDeterministicInitiation(
     std::array<std::uint8_t, wgnx::wireguard::HandshakeInitiationSize> *out,
     wgnx::wireguard::HandshakeState *out_state,
     std::uint32_t *out_transition_count,
-    wgnx::platform::ktime_t *out_transition_time) {
+    wgnx::wireguard::MonotonicTimePoint *out_transition_time) {
     runtime::Reset(InitialRuntimeState);
     ProtocolPair pair{};
     if (!pair.Initialize() || !pair.CreateAndSendInitiation(out)) {
@@ -355,7 +359,7 @@ bool BuildDeterministicInitiation(
 
     *out_state = pair.initiator->handshake.state;
     *out_transition_count = pair.initiator->handshake.transition_count;
-    *out_transition_time = pair.initiator->handshake.last_transition_ns;
+    *out_transition_time = pair.initiator->handshake.last_transition;
     return true;
 }
 
@@ -368,8 +372,8 @@ void TestDeterministicHandshake(TestContext &context) {
     wgnx::wireguard::HandshakeState second_state{};
     std::uint32_t first_transitions = 0;
     std::uint32_t second_transitions = 0;
-    wgnx::platform::ktime_t first_transition_time = 0;
-    wgnx::platform::ktime_t second_transition_time = 0;
+    wgnx::wireguard::MonotonicTimePoint first_transition_time{};
+    wgnx::wireguard::MonotonicTimePoint second_transition_time{};
 
     WGNX_TEST_CHECK(
         context,
@@ -401,7 +405,8 @@ void TestDeterministicHandshake(TestContext &context) {
         "initiation state transition was not deterministic");
     WGNX_TEST_REQUIRE(
         context,
-        first_transition_time == InitialMonotonicTime &&
+        first_transition_time == wgnx::wireguard::MonotonicTimePoint{
+                                     wgnx::wireguard::MonotonicDuration{InitialMonotonicTime}} &&
             second_transition_time == first_transition_time,
         "handshake transition did not use the controlled monotonic clock");
     WGNX_TEST_REQUIRE(
@@ -553,30 +558,32 @@ void TestTimerIntent(TestContext &context) {
     wgnx::wireguard::wg_timers_schedule(
         &timers,
         wgnx::wireguard::TimerHook::RetransmitHandshake,
-        std::chrono::milliseconds{5'000},
+        wgnx::wireguard::TimerDeadlineFromJiffies(5'000),
         pair.initiator->name);
     wgnx::wireguard::wg_timers_schedule(
         &timers,
         wgnx::wireguard::TimerHook::Rekey,
-        std::chrono::milliseconds{120'000},
+        wgnx::wireguard::TimerDeadlineFromJiffies(120'000),
         pair.initiator->name);
     WGNX_TEST_REQUIRE(
         context,
         timers.retransmit_handshake.pending &&
-            timers.retransmit_handshake.deadline == std::chrono::milliseconds{5'000} &&
+            timers.retransmit_handshake.deadline ==
+                wgnx::wireguard::TimerDeadlineFromJiffies(5'000) &&
             timers.rekey.pending &&
-            timers.rekey.deadline == std::chrono::milliseconds{120'000},
+            timers.rekey.deadline == wgnx::wireguard::TimerDeadlineFromJiffies(120'000),
         "timer schedule state or deadline diverged");
 
     wgnx::wireguard::wg_timers_schedule(
         &timers,
         wgnx::wireguard::TimerHook::RetransmitHandshake,
-        std::chrono::milliseconds{7'500},
+        wgnx::wireguard::TimerDeadlineFromJiffies(7'500),
         pair.initiator->name);
     WGNX_TEST_REQUIRE(
         context,
         timers.retransmit_handshake.pending &&
-            timers.retransmit_handshake.deadline == std::chrono::milliseconds{7'500},
+            timers.retransmit_handshake.deadline ==
+                wgnx::wireguard::TimerDeadlineFromJiffies(7'500),
         "rescheduling did not replace the timer deadline");
 
     wgnx::wireguard::wg_timers_cancel(
@@ -586,7 +593,7 @@ void TestTimerIntent(TestContext &context) {
     WGNX_TEST_REQUIRE(
         context,
         !timers.retransmit_handshake.pending &&
-            timers.retransmit_handshake.deadline == wgnx::wireguard::TimerDeadline::zero() &&
+            timers.retransmit_handshake.deadline == wgnx::wireguard::TimerDeadline{} &&
             timers.rekey.pending,
         "single timer cancellation changed the wrong timer state");
     wgnx::wireguard::wg_timers_cancel_all(&timers, pair.initiator->name);
@@ -700,7 +707,7 @@ void TestKeypairLifetime(TestContext &context) {
     std::ranges::fill(receiving_key.bytes, 0x22);
 
     noise_keypair keypair{};
-    const MonotonicTime birth_time = std::chrono::seconds{9};
+    const MonotonicTimePoint birth_time{std::chrono::seconds{9}};
     keypair.Establish(InitiatorIndex, ResponderIndex, birth_time, sending_key, receiving_key);
     WGNX_TEST_REQUIRE(
         context,
@@ -714,7 +721,7 @@ void TestKeypairLifetime(TestContext &context) {
     WGNX_TEST_REQUIRE(
         context,
         !before_birth.valid &&
-            at_birth.valid && at_birth.age == MonotonicTime::zero() &&
+            at_birth.valid && at_birth.age == MonotonicDuration::zero() &&
             after_birth.valid && after_birth.age == std::chrono::seconds{3},
         "keypair age evaluation depends on invalid or implicit clock state");
 
@@ -757,9 +764,128 @@ void TestBoundedQueueObservability(TestContext &context) {
     InnerPacketRecord popped{};
     WGNX_TEST_REQUIRE(
         context,
-        queue.Pop(&popped) && popped.packet_id == first.packet_id &&
-            queue.Statistics().popped == 1,
+        queue.Pop(&popped, QueueDisposition::Delivered) && popped.packet_id == first.packet_id &&
+            queue.Statistics().popped == 1 &&
+            queue.Statistics().delivered == 1,
         "bounded queue pop statistics diverged");
+
+    WGNX_TEST_REQUIRE(
+        context,
+        queue.Clear(QueueDisposition::Cleared) == 1 &&
+            queue.Size() == 0 &&
+            queue.Statistics().pushed == queue.Statistics().popped &&
+            queue.Statistics().cleared == 1,
+        "queue clearing did not preserve depth or disposition accounting");
+}
+
+void TestReplayWindowParity(TestContext &context) {
+    using namespace wgnx::wireguard;
+
+    ReplayWindow replay{};
+    WGNX_TEST_REQUIRE(
+        context,
+        replay.TryAdvance(0) && !replay.TryAdvance(0),
+        "replay filter did not reject a duplicate initial counter");
+
+    constexpr std::uint64_t Highest = 10'000;
+    constexpr std::uint64_t OldestAccepted = Highest - ReplayWindow::WindowSize;
+    WGNX_TEST_REQUIRE(
+        context,
+        replay.TryAdvance(Highest) &&
+            replay.TryAdvance(OldestAccepted) &&
+            !replay.TryAdvance(OldestAccepted) &&
+            !replay.TryAdvance(OldestAccepted - 1),
+        "replay filter diverged at the upstream 8,128-packet window boundary");
+
+    replay.Reset();
+    WGNX_TEST_REQUIRE(
+        context,
+        replay.TryAdvance(64) && replay.TryAdvance(0) && !replay.TryAdvance(64),
+        "replay filter did not preserve independent ring blocks after reset");
+}
+
+void TestTimerCoordinator(TestContext &context) {
+    using namespace wgnx::wireguard;
+
+    TimerCoordinator coordinator{};
+    const TimerOwner first_owner{
+        .peer_index = 1,
+        .activation_generation = 7,
+        .protocol_sequence = 3,
+    };
+    const TimerToken first = coordinator.Arm(TimerHook::ZeroKeyMaterial, first_owner);
+    WGNX_TEST_REQUIRE(
+        context,
+        first.IsValid() && coordinator.IsCurrent(first, first_owner),
+        "new timer token was not current for its owner");
+
+    const TimerToken replacement = coordinator.Arm(TimerHook::ZeroKeyMaterial, first_owner);
+    WGNX_TEST_REQUIRE(
+        context,
+        replacement.generation != first.generation &&
+            !coordinator.IsCurrent(first, first_owner) &&
+            coordinator.IsCurrent(replacement, first_owner),
+        "rearming did not invalidate queued work from the previous timer");
+
+    const TimerOwner next_activation{
+        .peer_index = first_owner.peer_index,
+        .activation_generation = first_owner.activation_generation + 1,
+        .protocol_sequence = first_owner.protocol_sequence,
+    };
+    WGNX_TEST_REQUIRE(
+        context,
+        !coordinator.IsCurrent(replacement, next_activation),
+        "timer token crossed an activation boundary");
+
+    coordinator.Cancel(TimerHook::ZeroKeyMaterial);
+    WGNX_TEST_REQUIRE(
+        context,
+        !coordinator.IsCurrent(replacement, first_owner) &&
+            !coordinator.IsArmed(TimerHook::ZeroKeyMaterial),
+        "timer cancellation left queued work actionable");
+
+    const TimerToken retry = coordinator.Arm(
+        TimerHook::RetransmitHandshake,
+        first_owner);
+    const TimerOwner next_sequence{
+        .peer_index = first_owner.peer_index,
+        .activation_generation = first_owner.activation_generation,
+        .protocol_sequence = first_owner.protocol_sequence + 1,
+    };
+    WGNX_TEST_REQUIRE(
+        context,
+        !coordinator.IsCurrent(retry, next_sequence),
+        "retry timer token crossed a handshake-sequence boundary");
+}
+
+void TestPeerControllerSendPolicy(TestContext &context) {
+    using namespace wgnx::wireguard;
+
+    WGNX_TEST_REQUIRE(
+        context,
+        PeerController::ClassifyStagedSend({.success = true}) ==
+                StagedPacketDecision::RetireSent &&
+            PeerController::ClassifyStagedSend({
+                .stage = OutboundSendStage::Build,
+                .build_error = TransportDataError::KeyExpired,
+            }) == StagedPacketDecision::RetainForHandshake &&
+            PeerController::ClassifyStagedSend({
+                .stage = OutboundSendStage::Build,
+                .build_error = TransportDataError::CounterExhausted,
+            }) == StagedPacketDecision::RetainForHandshake,
+        "peer controller did not retain plaintext for a replacement handshake");
+
+    WGNX_TEST_REQUIRE(
+        context,
+        PeerController::ClassifyStagedSend({
+            .stage = OutboundSendStage::Transport,
+            .recoverable_transport_error = true,
+        }) == StagedPacketDecision::RetireTransportFailure &&
+            PeerController::ClassifyStagedSend({
+                .stage = OutboundSendStage::Build,
+                .build_error = TransportDataError::AuthenticationFailed,
+            }) == StagedPacketDecision::StopOnTerminalFailure,
+        "peer controller conflated transport loss with terminal construction failure");
 }
 
 void TestKeypairProtocolLimits(TestContext &context) {
@@ -772,7 +898,7 @@ void TestKeypairProtocolLimits(TestContext &context) {
     std::ranges::fill(sending_key.bytes, 0x31);
     std::ranges::fill(receiving_key.bytes, 0x42);
 
-    const MonotonicTime birth_time = std::chrono::seconds{30};
+    const MonotonicTimePoint birth_time{std::chrono::seconds{30}};
     noise_keypair keypair{};
     keypair.Establish(InitiatorIndex, ResponderIndex, birth_time, sending_key, receiving_key);
     WGNX_TEST_REQUIRE(
@@ -804,7 +930,8 @@ void TestKeypairProtocolLimits(TestContext &context) {
         "RejectAfterMessages boundary allowed an exhausted nonce");
 
     runtime::SetMonotonicTime(
-        static_cast<wgnx::platform::ktime_t>((birth_time + RejectAfterTime).count()));
+        static_cast<wgnx::platform::ktime_t>(
+            (birth_time + RejectAfterTime).time_since_epoch().count()));
     std::array<std::uint8_t, 64> output{};
     std::ranges::fill(output, 0xA5);
     const auto expired_result = noise_create_transport_data_packet(
@@ -818,7 +945,8 @@ void TestKeypairProtocolLimits(TestContext &context) {
             std::ranges::all_of(output, [](std::uint8_t byte) { return byte == 0xA5; }),
         "expired keypair emitted bytes or consumed a nonce");
 
-    runtime::SetMonotonicTime(static_cast<wgnx::platform::ktime_t>(birth_time.count()));
+    runtime::SetMonotonicTime(static_cast<wgnx::platform::ktime_t>(
+        birth_time.time_since_epoch().count()));
     noise_keypair exhausted_keypair{};
     exhausted_keypair.Establish(
         InitiatorIndex,
@@ -894,13 +1022,16 @@ void TestOutboundStagingLifecycle(TestContext &context) {
     InnerPacketRecord sent_record{};
     WGNX_TEST_REQUIRE(
         context,
-        pair.initiator->staged_outbound_packets.Pop(&sent_record) &&
+        pair.initiator->staged_outbound_packets.Pop(
+            &sent_record,
+            QueueDisposition::Sent) &&
             sent_record.packet_id == first_record.packet_id,
         "transmitted staged packet was not retired exactly once");
 
-    const MonotonicTime expired_time =
+    const MonotonicTimePoint expired_time =
         pair.initiator->current_keypair.BirthTime() + RejectAfterTime;
-    runtime::SetMonotonicTime(static_cast<wgnx::platform::ktime_t>(expired_time.count()));
+    runtime::SetMonotonicTime(static_cast<wgnx::platform::ktime_t>(
+        expired_time.time_since_epoch().count()));
     InnerPacketRecord expired_record{
         .packet_id = 42,
         .size = static_cast<std::uint16_t>(FirstPayload.size()),
@@ -916,9 +1047,10 @@ void TestOutboundStagingLifecycle(TestContext &context) {
 
     const std::uint32_t old_initiator_index = pair.initiator->current_keypair.LocalIndex();
     const std::uint32_t old_responder_index = pair.responder->current_keypair.LocalIndex();
-    const noise_symmetric_key old_initiator_sending = pair.initiator->current_keypair.SendingKey();
-    const MonotonicTime replacement_birth = expired_time + std::chrono::seconds{1};
-    runtime::SetMonotonicTime(static_cast<wgnx::platform::ktime_t>(replacement_birth.count()));
+    const auto old_initiator_sending = pair.initiator->current_keypair.SendingKey().bytes;
+    const MonotonicTimePoint replacement_birth = expired_time + std::chrono::seconds{1};
+    runtime::SetMonotonicTime(static_cast<wgnx::platform::ktime_t>(
+        replacement_birth.time_since_epoch().count()));
     WGNX_TEST_REQUIRE(
         context,
         pair.CreateAndSendInitiation() &&
@@ -932,7 +1064,7 @@ void TestOutboundStagingLifecycle(TestContext &context) {
             pair.initiator->staged_outbound_packets.Size() == 1 &&
             pair.initiator->current_keypair.LocalIndex() != old_initiator_index &&
             pair.initiator->previous_keypair.LocalIndex() == old_initiator_index &&
-            pair.initiator->current_keypair.SendingKey().bytes != old_initiator_sending.bytes &&
+            pair.initiator->current_keypair.SendingKey().bytes != old_initiator_sending &&
             pair.responder->current_keypair.LocalIndex() == old_responder_index &&
             pair.responder->next_keypair.IsValid(),
         "replacement key derivation did not release the expired-key submission");
@@ -955,7 +1087,9 @@ void TestOutboundStagingLifecycle(TestContext &context) {
         "expired-key submission was not transmitted with the replacement keypair");
     WGNX_TEST_REQUIRE(
         context,
-        pair.initiator->staged_outbound_packets.Pop(&sent_record) &&
+        pair.initiator->staged_outbound_packets.Pop(
+            &sent_record,
+            QueueDisposition::Sent) &&
             sent_record.packet_id == expired_record.packet_id,
         "replacement-key transmission did not retire its staged packet");
 
@@ -1090,8 +1224,8 @@ void TestHandshakeRetryLifecycle(TestContext &context) {
             pair.ReceiveInitiationAndSendResponse() &&
             pair.ReceiveResponseAndDeriveSession(),
         "failed to derive key material for zeroing test");
-    const noise_secret32 precomputed = pair.initiator->handshake_material.precomputed_static_static;
-    const noise_private_key static_private = pair.initiator->static_identity.static_private;
+    const auto precomputed = pair.initiator->handshake_material.precomputed_static_static.bytes;
+    const auto static_private = pair.initiator->static_identity.static_private.bytes;
     pair.initiator->cookie.valid = true;
     pair.initiator->cookie.value.fill(0x6A);
     pair.initiator->handshake_material.ephemeral_private.valid = true;
@@ -1119,9 +1253,9 @@ void TestHandshakeRetryLifecycle(TestContext &context) {
     WGNX_TEST_REQUIRE(
         context,
         pair.initiator->handshake_material.precomputed_static_static.valid &&
-            pair.initiator->handshake_material.precomputed_static_static.bytes == precomputed.bytes &&
+            pair.initiator->handshake_material.precomputed_static_static.bytes == precomputed &&
             pair.initiator->static_identity.static_private.valid &&
-            pair.initiator->static_identity.static_private.bytes == static_private.bytes &&
+            pair.initiator->static_identity.static_private.bytes == static_private &&
             pair.initiator->cookie.valid &&
             std::ranges::all_of(
                 pair.initiator->cookie.value,

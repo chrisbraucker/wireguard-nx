@@ -41,7 +41,6 @@ struct wg_index_registry {
 struct wg_device {
     char name[sizeof(wgnx::PeerInfo::name)]{};
     char interface_address[sizeof(wgnx::PeerInfo::address)]{};
-    char private_key[sizeof(wgnx::PeerConfigEntry::private_key)]{};
     char dns[sizeof(wgnx::PeerConfigEntry::dns)]{};
     std::uint16_t listen_port{0};
     std::uint16_t mtu{0};
@@ -54,6 +53,11 @@ struct wg_device {
 };
 
 bool wg_device_init_from_config_entry(wg_device *device, const wgnx::PeerConfigEntry &config);
+bool wg_device_init_from_parsed_config(
+    wg_device *device,
+    const wgnx::PeerConfigEntry &config,
+    const noise_private_key &local_private_key,
+    const noise_symmetric_key *preshared_key);
 void wg_device_reset(wg_device *device);
 std::uint32_t wg_device_allocate_index(wg_device *device);
 void wg_device_clear_index_registry(wg_device *device);

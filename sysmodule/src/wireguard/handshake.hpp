@@ -1,7 +1,7 @@
 #pragma once
 
-#include "wgnx/platform/clock.hpp"
 #include "wireguard/messages.hpp"
+#include "wireguard/session.hpp"
 
 #include <cstdint>
 #include <span>
@@ -27,7 +27,7 @@ struct noise_handshake {
     std::uint32_t local_index{0};
     std::uint32_t remote_index{0};
     std::uint32_t transition_count{0};
-    wgnx::platform::ktime_t last_transition_ns{0};
+    MonotonicTimePoint last_transition{};
 };
 
 enum class HandshakePacketOutcome : std::uint8_t {

@@ -71,7 +71,6 @@ struct CoreSelfTestStorage {
     wg_device device{};
     wgnx::PeerConfigEntry secondary_config{};
     wg_device secondary_device{};
-    wg_peer peer_copy{};
     wg_peer responder_copy{};
     message_handshake_response response{};
     message_handshake_response tampered_response{};
@@ -671,13 +670,13 @@ bool TestInnerIpv4PacketBoundary() {
         return false;
     }
     InnerPacketRecord popped{};
-    if (!queue.Pop(std::addressof(popped)) || popped.packet_id != 1 ||
-        !queue.Pop(std::addressof(popped)) || popped.packet_id != 2 ||
-        queue.Pop(std::addressof(popped))) {
+    if (!queue.Pop(std::addressof(popped), QueueDisposition::Delivered) || popped.packet_id != 1 ||
+        !queue.Pop(std::addressof(popped), QueueDisposition::Delivered) || popped.packet_id != 2 ||
+        queue.Pop(std::addressof(popped), QueueDisposition::Delivered)) {
         return false;
     }
     static_cast<void>(queue.Push(first));
-    queue.Clear();
+    queue.Clear(QueueDisposition::Cleared);
     return queue.Size() == 0 && queue.Front() == nullptr;
 }
 
@@ -778,15 +777,6 @@ bool TestDeviceAndPeerSkeleton() {
         return false;
     }
 
-    const wgnx::platform::endpoint endpoint = {
-        .family = wgnx::platform::address_family::inet,
-        .port = 51820,
-        .address = {203, 0, 113, 4},
-    };
-    wg_peer_set_resolved_endpoint(peer, endpoint, "203.0.113.4:51820");
-    if (!peer->has_resolved_endpoint) {
-        return false;
-    }
     noise_static_identity_reset(&peer->static_identity);
     noise_handshake_material_reset(&peer->handshake_material);
     if (peer->static_identity.static_private.valid ||
@@ -812,8 +802,16 @@ bool TestDeviceAndPeerSkeleton() {
         peer->name,
         "self-test derive session"));
 
-    wg_timers_schedule(&peer->timers, TimerHook::RetransmitHandshake, TimerDeadline{2000}, peer->name);
-    wg_timers_schedule(&peer->timers, TimerHook::Rekey, TimerDeadline{4000}, peer->name);
+    wg_timers_schedule(
+        &peer->timers,
+        TimerHook::RetransmitHandshake,
+        TimerDeadlineFromJiffies(2000),
+        peer->name);
+    wg_timers_schedule(
+        &peer->timers,
+        TimerHook::Rekey,
+        TimerDeadlineFromJiffies(4000),
+        peer->name);
     if (!wg_timers_any_pending(peer->timers)) {
         return false;
     }
@@ -961,8 +959,6 @@ bool TestHandshakeResponseAndSessionDerivation() {
         return false;
     }
 
-    wg_peer &initiator_copy = g_core_self_test_storage.peer_copy;
-    initiator_copy = *initiator;
     message_handshake_response &tampered_response = g_core_self_test_storage.tampered_response;
     tampered_response = response;
     tampered_response.encrypted_nothing[0] ^= 0x80U;
@@ -970,7 +966,10 @@ bool TestHandshakeResponseAndSessionDerivation() {
     if (SerializeHandshakeResponse(&tampered_buffer.packet, tampered_response) != ParseError::None) {
         return false;
     }
-    if (noise_handshake_consume_incoming_packet(&tampered_buffer.packet, &initiator_device, &initiator_copy) != HandshakePacketOutcome::Invalid) {
+    if (noise_handshake_consume_incoming_packet(
+            &tampered_buffer.packet,
+            &initiator_device,
+            initiator) != HandshakePacketOutcome::Invalid) {
         return false;
     }
 
@@ -1039,7 +1038,14 @@ bool TestHandshakeResponseAndSessionDerivation() {
         return false;
     }
 
-    g_core_self_test_storage.responder_copy = *responder;
+    wg_peer &responder_copy = g_core_self_test_storage.responder_copy;
+    responder_copy.current_keypair.Establish(
+        responder->current_keypair.LocalIndex(),
+        responder->current_keypair.RemoteIndex(),
+        responder->current_keypair.BirthTime(),
+        responder->current_keypair.SendingKey(),
+        responder->current_keypair.ReceivingKey(),
+        responder->current_keypair.SendCounter());
 
     TransportDataDecryptResult payload_result{};
     const TransportDataError payload_error = noise_consume_transport_data_packet(
@@ -1077,10 +1083,10 @@ bool TestHandshakeResponseAndSessionDerivation() {
     mismatch_buffer.packet.len = payload_buffer.packet.len;
     StoreLe32(
         mismatch_buffer.packet.data + sizeof(std::uint32_t),
-        g_core_self_test_storage.responder_copy.current_keypair.LocalIndex() ^ 0x00FF00FFU);
+        responder_copy.current_keypair.LocalIndex() ^ 0x00FF00FFU);
     const TransportDataError mismatch_error = noise_consume_transport_data_packet(
         &mismatch_buffer.packet,
-        &g_core_self_test_storage.responder_copy.current_keypair,
+        &responder_copy.current_keypair,
         g_core_self_test_storage.decrypted_payload,
         nullptr);
     if (mismatch_error != TransportDataError::ReceiverIndexMismatch) {
@@ -1096,7 +1102,7 @@ bool TestHandshakeResponseAndSessionDerivation() {
     tampered_payload_buffer.packet.data[tampered_payload_buffer.packet.len - 1] ^= 0x80U;
     const TransportDataError tampered_payload_error = noise_consume_transport_data_packet(
         &tampered_payload_buffer.packet,
-        &g_core_self_test_storage.responder_copy.current_keypair,
+        &responder_copy.current_keypair,
         g_core_self_test_storage.decrypted_payload,
         nullptr);
     if (tampered_payload_error != TransportDataError::AuthenticationFailed) {
@@ -1114,7 +1120,7 @@ bool TestHandshakeResponseAndSessionDerivation() {
     const TransportDataError incoming_error = noise_consume_incoming_transport_data_packet(
         &payload_buffer.packet,
         &responder_device,
-        &g_core_self_test_storage.responder_copy,
+        &responder_copy,
         g_core_self_test_storage.decrypted_payload,
         &incoming_result);
     if (incoming_error != TransportDataError::None) {
