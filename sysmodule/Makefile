@@ -30,7 +30,7 @@ TITLE_ID	:=	010000000000EAD0
 DISTDIR		:=	$(OUTDIR)/atmosphere/contents/$(TITLE_ID)
 DATA		:=	data
 RESOURCES	:=	res
-SOURCES		+=	src src/platform/horizon src/wireguard src/wireguard/crypto
+SOURCES		+=	src src/runtime src/platform/horizon src/wireguard src/wireguard/crypto
 INCLUDES	+=	../common/include \
 			src \
 			src/platform/horizon \
@@ -66,7 +66,7 @@ HOST_TEST_CPP_SOURCES := \
 	test/host/protocol_tests.cpp \
 	test/host/main.cpp
 HOST_TEST_C_SOURCES := src/wireguard/crypto/monocypher.c
-HOST_TEST_HEADERS := $(shell find $(TOPDIR)/test/host $(TOPDIR)/src/wireguard $(TOPDIR)/../common/include -type f -name '*.hpp')
+HOST_TEST_HEADERS := $(shell find $(TOPDIR)/test/host $(TOPDIR)/src/runtime $(TOPDIR)/src/wireguard $(TOPDIR)/../common/include -type f -name '*.hpp')
 HOST_TEST_INCLUDES := \
 	-I$(CURDIR)/test/host \
 	-I$(CURDIR)/test/host/include \

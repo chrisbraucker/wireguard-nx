@@ -203,7 +203,8 @@ is being established.
 
 ## Milestone 4: Handshake Retry And Recovery Lifecycle
 
-**Status:** Implementation complete; outage-recovery on-device validation pending.
+**Status:** Implementation and production-controller host coverage complete;
+outage-recovery on-device validation pending.
 
 ### Goal
 
@@ -217,6 +218,9 @@ Recover from a silent path outage without restarting the peer.
   attempt window
 - schedule stale ephemeral/key-material cleanup as upstream requires
 - keep UDP binding replacement independent from cryptographic recovery
+- keep CMIF adaptation, daemon state, Horizon dispatch, UDP binding ownership,
+  packet-channel ownership, and protocol lifecycle policy at explicit
+  operation-level boundaries
 
 ### Definition Of Done
 
@@ -227,6 +231,9 @@ Recover from a silent path outage without restarting the peer.
   returns without peer deactivation/reactivation
 - manual binding replacement is not required when the existing socket remains
   usable
+- deterministic coverage drives the production controller through retry
+  exhaustion and later session recovery rather than reproducing its policy in
+  a test-only model
 
 ## Milestone 5: Authenticated-Activity Timers
 

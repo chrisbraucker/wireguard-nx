@@ -763,10 +763,10 @@ bool noise_handshake_consume_initiation(const message_handshake_initiation *src,
     }
 
     /*
-     * Deliberate Milestone 5 scope note:
+     * Deliberate protocol-hardening scope note:
      * This responder-side path exists primarily to let the deterministic
      * harness create a valid response packet for initiator-side verification.
-     * Replay and flood checks are deferred to Increment 4.
+     * Replay and flood checks are deferred to Milestone 7.
      */
     std::uint8_t key[NoiseSymmetricKeySize]{};
     std::uint8_t chaining_key[NoiseHashSize]{};

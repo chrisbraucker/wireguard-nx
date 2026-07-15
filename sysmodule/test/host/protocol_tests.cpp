@@ -3,6 +3,7 @@
 #include "test_framework.hpp"
 #include "test_runtime.hpp"
 
+#include "runtime/packet_channel.hpp"
 #include "wireguard/data.hpp"
 #include "wireguard/device.hpp"
 #include "wireguard/handshake.hpp"
@@ -778,6 +779,35 @@ void TestBoundedQueueObservability(TestContext &context) {
         "queue clearing did not preserve depth or disposition accounting");
 }
 
+void TestPacketChannelOwnership(TestContext &context) {
+    using namespace wgnx::sysmodule::runtime;
+    using namespace wgnx::wireguard;
+
+    PacketChannel channel{};
+    WGNX_TEST_REQUIRE(
+        context,
+        channel.Claim(100) == 0 && channel.IsOwnedBy(100) &&
+            channel.AllocatePacketId() == 1 && channel.AllocatePacketId() == 2,
+        "packet channel did not establish ownership or monotonic packet IDs");
+
+    InnerPacketRecord received{.packet_id = 3, .owner_process_id = 100};
+    WGNX_TEST_REQUIRE(
+        context,
+        channel.PushReceived(received) == QueuePushResult::Pushed &&
+            channel.ReceivedSize() == 1,
+        "packet channel did not retain a received packet");
+    WGNX_TEST_REQUIRE(
+        context,
+        channel.Claim(200) == 1 && channel.IsOwnedBy(200) &&
+            !channel.IsOwnedBy(100) && channel.ReceivedSize() == 0 &&
+            channel.Statistics().cleared == 1,
+        "packet channel ownership transfer retained the previous consumer's packets");
+    WGNX_TEST_REQUIRE(
+        context,
+        channel.Release() == 0 && channel.OwnerProcessId() == 0,
+        "packet channel release retained its consumer identity");
+}
+
 void TestReplayWindowParity(TestContext &context) {
     using namespace wgnx::wireguard;
 
@@ -861,31 +891,198 @@ void TestTimerCoordinator(TestContext &context) {
 void TestPeerControllerSendPolicy(TestContext &context) {
     using namespace wgnx::wireguard;
 
+    PeerController controller{};
+    wg_peer peer{};
+    InnerPacketRecord record{.packet_id = 1};
     WGNX_TEST_REQUIRE(
         context,
-        PeerController::ClassifyStagedSend({.success = true}) ==
-                StagedPacketDecision::RetireSent &&
-            PeerController::ClassifyStagedSend({
-                .stage = OutboundSendStage::Build,
-                .build_error = TransportDataError::KeyExpired,
-            }) == StagedPacketDecision::RetainForHandshake &&
-            PeerController::ClassifyStagedSend({
-                .stage = OutboundSendStage::Build,
-                .build_error = TransportDataError::CounterExhausted,
-            }) == StagedPacketDecision::RetainForHandshake,
+        peer.staged_outbound_packets.Push(record) == QueuePushResult::Pushed,
+        "failed to stage send-policy test packet");
+    const auto sent = controller.ApplyStagedSendOutcome(
+        peer,
+        OutboundSendOutcome::Sent());
+    WGNX_TEST_REQUIRE(
+        context,
+        sent.retired && sent.disposition == QueueDisposition::Sent &&
+            sent.action == StagedPacketAction::Continue &&
+            peer.staged_outbound_packets.Size() == 0,
+        "peer controller did not retire a successfully sent packet");
+
+    record.packet_id = 2;
+    static_cast<void>(peer.staged_outbound_packets.Push(record));
+    const auto expired = controller.ApplyStagedSendOutcome(
+        peer,
+        OutboundSendOutcome::BuildFailed(TransportDataError::KeyExpired));
+    WGNX_TEST_REQUIRE(
+        context,
+        !expired.retired && expired.action == StagedPacketAction::InitiateHandshake &&
+            peer.staged_outbound_packets.Size() == 1,
         "peer controller did not retain plaintext for a replacement handshake");
 
+    const auto dropped = controller.ApplyStagedSendOutcome(
+        peer,
+        OutboundSendOutcome::TransportDropped());
     WGNX_TEST_REQUIRE(
         context,
-        PeerController::ClassifyStagedSend({
-            .stage = OutboundSendStage::Transport,
-            .recoverable_transport_error = true,
-        }) == StagedPacketDecision::RetireTransportFailure &&
-            PeerController::ClassifyStagedSend({
-                .stage = OutboundSendStage::Build,
-                .build_error = TransportDataError::AuthenticationFailed,
-            }) == StagedPacketDecision::StopOnTerminalFailure,
-        "peer controller conflated transport loss with terminal construction failure");
+        dropped.retired && dropped.disposition == QueueDisposition::SendFailed &&
+            dropped.action == StagedPacketAction::Continue &&
+            peer.staged_outbound_packets.Size() == 0,
+        "peer controller did not retire a packet lost by the UDP transport");
+
+    record.packet_id = 3;
+    static_cast<void>(peer.staged_outbound_packets.Push(record));
+    const auto fatal = controller.ApplyStagedSendOutcome(
+        peer,
+        OutboundSendOutcome::BuildFailed(TransportDataError::AuthenticationFailed));
+    WGNX_TEST_REQUIRE(
+        context,
+        !fatal.retired && fatal.action == StagedPacketAction::StopOnTerminalFailure &&
+            peer.staged_outbound_packets.Size() == 1,
+        "peer controller conflated terminal construction failure with packet loss");
+}
+
+void TestPeerControllerRecoveryWorkflow(TestContext &context) {
+    using namespace wgnx::wireguard;
+
+    runtime::Reset(InitialRuntimeState);
+    ProtocolPair pair{};
+    WGNX_TEST_REQUIRE(context, pair.Initialize(), "protocol pair initialization failed");
+
+    PeerController controller{};
+    InnerPacketRecord first{.packet_id = 61};
+    WGNX_TEST_REQUIRE(
+        context,
+        pair.initiator->staged_outbound_packets.Push(first) == QueuePushResult::Pushed &&
+            wg_peer_get_outbound_staging_action(*pair.initiator, GetMonotonicTime()) ==
+                OutboundStagingAction::InitiateHandshake,
+        "initial packet was not staged for the production controller");
+
+    auto transition = controller.StartHandshake(pair.initiator_device, *pair.initiator);
+    WGNX_TEST_REQUIRE(
+        context,
+        transition.action == HandshakeTransitionAction::SendInitiation &&
+            pair.initiator->handshake_retry.send_attempts == 1,
+        "controller did not begin the initial retry sequence");
+
+    std::uint32_t previous_index = 0;
+    std::array<std::uint8_t, NoisePublicKeySize> previous_ephemeral{};
+    std::size_t simulated_sends = 0;
+    const auto observe_fresh_send = [&]() {
+        const auto &initiation = pair.initiator->last_initiation;
+        const bool fresh = simulated_sends == 0 ||
+                           (initiation.sender_index != previous_index &&
+                            initiation.unencrypted_ephemeral != previous_ephemeral);
+        previous_index = initiation.sender_index;
+        previous_ephemeral = initiation.unencrypted_ephemeral;
+        ++simulated_sends;
+        return fresh;
+    };
+    WGNX_TEST_REQUIRE(context, observe_fresh_send(), "initial controller initiation was not fresh");
+
+    constexpr std::uint32_t MaxSendAttempts = MaxTimerHandshakes + 2;
+    for (std::uint32_t expected_attempt = 2; expected_attempt <= MaxSendAttempts;
+         ++expected_attempt) {
+        const TimerOwner owner{
+            .peer_index = 0,
+            .activation_generation = 1,
+            .protocol_sequence = pair.initiator->handshake_retry.sequence_count,
+        };
+        const TimerToken token = controller.Timers().Arm(
+            TimerHook::RetransmitHandshake,
+            owner);
+        WGNX_TEST_REQUIRE(
+            context,
+            controller.Timers().IsCurrent(token, owner),
+            "controller retry timer was stale before delivery");
+        controller.Timers().Cancel(TimerHook::RetransmitHandshake);
+
+        transition = controller.HandleHandshakeRetryTimer(
+            pair.initiator_device,
+            *pair.initiator);
+        WGNX_TEST_REQUIRE(
+            context,
+            transition.action == HandshakeTransitionAction::SendInitiation &&
+                pair.initiator->handshake_retry.send_attempts == expected_attempt &&
+                observe_fresh_send(),
+            "controller retry did not construct and emit fresh initiation state");
+    }
+
+    transition = controller.HandleHandshakeRetryTimer(
+        pair.initiator_device,
+        *pair.initiator);
+    WGNX_TEST_REQUIRE(
+        context,
+        transition.action == HandshakeTransitionAction::Exhausted &&
+            transition.dropped_staged_packets == 1 &&
+            simulated_sends == MaxSendAttempts &&
+            pair.initiator->staged_outbound_packets.Size() == 0 &&
+            pair.initiator->staged_outbound_packets.Statistics().retry_exhausted == 1,
+        "controller did not exhaust and account for the unanswered sequence");
+
+    InnerPacketRecord later{.packet_id = 62};
+    later.size = 20;
+    later.bytes[0] = 0x45;
+    later.bytes[2] = 0x00;
+    later.bytes[3] = 0x14;
+    WGNX_TEST_REQUIRE(
+        context,
+        pair.initiator->staged_outbound_packets.Push(later) == QueuePushResult::Pushed,
+        "failed to stage later traffic after exhaustion");
+    transition = controller.StartHandshake(pair.initiator_device, *pair.initiator);
+    WGNX_TEST_REQUIRE(
+        context,
+        transition.action == HandshakeTransitionAction::SendInitiation &&
+            pair.initiator->handshake_retry.sequence_count == 2 &&
+            pair.initiator->handshake_retry.send_attempts == 1 &&
+            observe_fresh_send(),
+        "later traffic did not start a fresh controller sequence");
+
+    std::array<std::uint8_t, HandshakeInitiationSize> initiation_packet{};
+    WGNX_TEST_REQUIRE(
+        context,
+        SerializeHandshakeInitiation(initiation_packet, pair.initiator->last_initiation) ==
+                ParseError::None &&
+            pair.initiator_to_responder.Send(initiation_packet) &&
+            pair.ReceiveInitiationAndSendResponse(),
+        "controller initiation did not reach the in-memory responder");
+
+    std::span<const std::uint8_t> response_packet{};
+    WGNX_TEST_REQUIRE(
+        context,
+        pair.responder_to_initiator.Receive(response_packet) &&
+            noise_handshake_consume_incoming_packet(
+                response_packet,
+                &pair.initiator_device,
+                pair.initiator) == HandshakePacketOutcome::ResponseConsumed,
+        "controller recovery response was not authenticated");
+    runtime::SetMonotonicTime(SessionBirthTime);
+    WGNX_TEST_REQUIRE(
+        context,
+        controller.CompleteSession(pair.initiator_device, *pair.initiator) &&
+            noise_handshake_begin_session(&pair.responder_device, pair.responder) &&
+            !pair.initiator->handshake_retry.active &&
+            wg_peer_get_outbound_staging_action(*pair.initiator, GetMonotonicTime()) ==
+                OutboundStagingAction::Send,
+        "controller did not derive the recovered session or release staged traffic");
+
+    const auto *front = pair.initiator->staged_outbound_packets.Front();
+    WGNX_TEST_REQUIRE(context, front != nullptr, "recovered packet disappeared before send");
+    const TransportResult send = SendTransport(
+        &pair.initiator->current_keypair,
+        &pair.responder_device,
+        pair.responder,
+        std::span<const std::uint8_t>(front->bytes.data(), front->size),
+        &pair.initiator_to_responder);
+    const auto sent = controller.ApplyStagedSendOutcome(
+        *pair.initiator,
+        send.error == TransportDataError::None
+            ? OutboundSendOutcome::Sent()
+            : OutboundSendOutcome::BuildFailed(send.error));
+    WGNX_TEST_REQUIRE(
+        context,
+        send.error == TransportDataError::None && sent.retired && sent.remaining == 0 &&
+            pair.initiator->staged_outbound_packets.Statistics().sent == 1,
+        "recovered staged packet did not pass through the production controller send path");
 }
 
 void TestKeypairProtocolLimits(TestContext &context) {

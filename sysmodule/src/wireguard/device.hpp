@@ -39,13 +39,6 @@ struct wg_index_registry {
  * different config and routing model rather than an unused nested peer array.
  */
 struct wg_device {
-    char name[sizeof(wgnx::PeerInfo::name)]{};
-    char interface_address[sizeof(wgnx::PeerInfo::address)]{};
-    char dns[sizeof(wgnx::PeerConfigEntry::dns)]{};
-    std::uint16_t listen_port{0};
-    std::uint16_t mtu{0};
-    bool has_private_key{false};
-    bool has_dns{false};
     wg_index_allocator index_allocator{};
     wg_index_registry index_registry{};
     wg_peer peer{};

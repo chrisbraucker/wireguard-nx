@@ -80,13 +80,6 @@ bool wg_device_init_from_parsed_config(
     }
 
     wg_device_reset(device);
-    std::snprintf(device->name, sizeof(device->name), "%s", config.name.data());
-    std::snprintf(device->interface_address, sizeof(device->interface_address), "%s", config.address.data());
-    std::snprintf(device->dns, sizeof(device->dns), "%s", config.dns.data());
-    device->listen_port = config.listen_port;
-    device->mtu = config.mtu;
-    device->has_private_key = true;
-    device->has_dns = config.dns[0] != '\0';
     wg_index_allocator_init(&device->index_allocator);
     wg_device_clear_index_registry(device);
 

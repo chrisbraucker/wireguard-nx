@@ -763,7 +763,7 @@ bool TestDeviceAndPeerSkeleton() {
     if (!wg_device_init_from_config_entry(&device, config)) {
         return false;
     }
-    if (!device.has_peer || !device.has_private_key || !device.has_dns) {
+    if (!device.has_peer) {
         return false;
     }
     const std::uint32_t first_index = wg_device_allocate_index(&device);

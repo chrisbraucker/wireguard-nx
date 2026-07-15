@@ -6,9 +6,11 @@ handshake state, timers, or queued inner packets merely because the current BSD
 socket can no longer send or receive.
 
 The protocol peer no longer stores a resolved Horizon endpoint or includes the
-platform UDP abstraction. Resolved address text, socket handles, and socket
-generations are owned only by the runtime transport state. Protocol timer and
-staged-send decisions are handled by a platform-independent peer controller.
+platform UDP abstraction. A move-only runtime `UdpBinding` owns resolved
+address text, socket lifetime, socket generation, and transport suspension.
+Protocol timer and staged-send transitions are handled by the
+platform-independent production `PeerController`; concrete Horizon timers and
+work queues are owned by `HorizonDispatcher`.
 
 ## Manual UDP Bind Bump
 

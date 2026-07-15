@@ -35,8 +35,11 @@ adapters:
 - serialized datagrams cross an in-memory bounded link instead of UDP
 - timer tests inspect typed absolute deadlines and generation-safe ownership
   without an asynchronous worker thread
-- peer-controller tests inject construction and transport outcomes to verify
-  the exact retain, send, drop, and terminal queue decisions
+- peer-controller tests apply closed construction and transport outcomes to
+  the production queue mutations and drive the complete retry-exhaustion and
+  later-recovery workflow
+- packet-channel tests cover PID ownership transfer, receive-queue clearing,
+  and monotonic packet IDs
 
 The deterministic runtime records random-byte consumption so a change in the
 handshake's external inputs is observable even when the resulting packet still
@@ -127,9 +130,10 @@ longer linked into or executed by the production sysmodule.
 The protocol suite does not emulate Horizon service behavior, BSD socket
 lifetime, NIFM, Atmosphere work queues, or real timer-thread scheduling. Those
 belong to platform-adapter and on-device integration tests. The host-tested
-controller defines timer identity and queue policy; the Horizon adapter still
-needs on-device validation that its synchronous cancellation and token capture
-behave correctly under real thread scheduling.
+production controller defines retry transitions, timer identity, and queue
+mutation; the Horizon dispatcher still needs on-device validation that its
+synchronous cancellation and token capture behave correctly under real thread
+scheduling.
 
 ## On-Device Gate
 
