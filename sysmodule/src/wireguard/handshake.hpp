@@ -40,6 +40,7 @@ const char *GetHandshakeStateName(HandshakeState state);
 const char *GetHandshakePacketOutcomeName(HandshakePacketOutcome outcome);
 
 void noise_handshake_init(noise_handshake *handshake);
+void noise_handshake_clear_transcript(wg_peer *peer);
 bool noise_handshake_transition(
     noise_handshake *handshake,
     HandshakeState new_state,

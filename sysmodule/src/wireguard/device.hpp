@@ -58,6 +58,10 @@ void wg_device_reset(wg_device *device);
 std::uint32_t wg_device_allocate_index(wg_device *device);
 void wg_device_clear_index_registry(wg_device *device);
 void wg_device_register_handshake_index(wg_device *device, std::uint32_t index);
+bool wg_device_create_handshake_initiation(
+    wg_device *device,
+    message_handshake_initiation *out_message);
+bool wg_device_promote_next_keypair(wg_device *device, wg_peer *peer);
 void wg_device_refresh_keypair_indices(wg_device *device, const wg_peer *peer);
 wg_index_slot wg_device_lookup_index_slot(const wg_device *device, std::uint32_t index);
 bool wg_device_index_matches_slot(const wg_device *device, wg_index_slot slot, std::uint32_t index);

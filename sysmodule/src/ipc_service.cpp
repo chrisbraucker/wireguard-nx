@@ -49,7 +49,6 @@ struct DaemonState {
         std::uint16_t persistent_keepalive_interval{0};
         std::uint32_t state_ticks{0};
         std::uint32_t activation_generation{0};
-        std::uint32_t handshake_send_attempts{0};
         wgnx::platform::ktime_t state_changed_ns{0};
         wgnx::platform::ktime_t last_handshake_ns{0};
         wgnx::platform::ktime_t last_rx_ns{0};
@@ -135,6 +134,9 @@ constinit TimerActionDispatcher g_keepalive_dispatcher = {
 constinit TimerActionDispatcher g_rekey_dispatcher = {
     .hook = wgnx::wireguard::TimerHook::Rekey,
 };
+constinit TimerActionDispatcher g_zero_key_material_dispatcher = {
+    .hook = wgnx::wireguard::TimerHook::ZeroKeyMaterial,
+};
 wgnx::platform::workqueue_struct *g_timer_action_workqueue = nullptr;
 struct PayloadProbeTimeoutDispatcher {
     wgnx::platform::work_struct work{};
@@ -155,11 +157,9 @@ struct InnerPacketSubmissionDispatcher {
 };
 constinit InnerPacketSubmissionDispatcher g_inner_packet_submission_dispatcher = {};
 
-constexpr inline auto SimulatedHandshakeRetransmitDelay = std::chrono::seconds{5};
 constexpr inline auto SimulatedRekeyDelay = std::chrono::seconds{120};
 constexpr inline wgnx::platform::jiffies_t DebugProbeTimeoutJiffies = 5U * wgnx::platform::HZ;
 constexpr inline wgnx::platform::jiffies_t NetworkPathObservationJiffies = 2U * wgnx::platform::HZ;
-constexpr inline std::uint32_t MaxHandshakeSendAttempts = 5;
 constexpr inline std::size_t ReceivePacketCapacity = 4096;
 constexpr inline std::size_t MaxTransportPayloadSize = 1500;
 constexpr inline std::size_t MaxPaddedTransportPayloadSize =
@@ -365,6 +365,7 @@ bool IsRecoverableTransportIoError(wgnx::PeerErrorCode code) {
 }
 
 void CancelAllTransportTimers();
+void CancelProtocolTimer(std::size_t peer_index, wgnx::wireguard::TimerHook hook);
 
 void SuspendRuntimeTransportAfterSendFailure(std::size_t peer_index, const char *operation) {
     if constexpr (!development_config::SuspendUdpTransportOnFirstSendFailure) {
@@ -391,7 +392,9 @@ void SuspendRuntimeTransportAfterSendFailure(std::size_t peer_index, const char 
         socket_generation,
         static_cast<int>(socket),
         operation != nullptr ? operation : "unspecified");
-    CancelAllTransportTimers();
+    CancelProtocolTimer(peer_index, wgnx::wireguard::TimerHook::RetransmitHandshake);
+    CancelProtocolTimer(peer_index, wgnx::wireguard::TimerHook::SendKeepalive);
+    CancelProtocolTimer(peer_index, wgnx::wireguard::TimerHook::Rekey);
     CloseRuntimeSocket(std::addressof(runtime));
     logger::Log(
         "EXPERIMENT UDP transport suspended peer=%zu activation=%u old_socket_generation=%u old_socket=%d state=%s",
@@ -475,16 +478,10 @@ wgnx::PeerErrorCode InstantiateProtocolPeer(std::size_t peer_index, std::uint32_
     }
     protocol.instantiated = true;
 
-    if (wgnx::wireguard::wg_peer *peer = GetProtocolPeer(peer_index)) {
-        const std::uint32_t local_index = wgnx::wireguard::wg_device_allocate_index(std::addressof(protocol.device));
-        wgnx::wireguard::noise_handshake_set_local_index(std::addressof(peer->handshake), local_index);
-        wgnx::wireguard::wg_device_register_handshake_index(std::addressof(protocol.device), local_index);
-        logger::Log(
-            "Instantiated WG protocol peer '%s' activation=%u local_index=0x%08x",
-            peer->name,
-            activation_generation,
-            local_index);
-    }
+    logger::Log(
+        "Instantiated WG protocol peer '%s' activation=%u",
+        CStr(g_state.configured_peers[peer_index].name),
+        activation_generation);
 
     return wgnx::PeerErrorCode::None;
 }
@@ -500,14 +497,6 @@ wgnx::PeerErrorCode BindResolvedEndpointToProtocolPeer(std::size_t peer_index) {
         peer,
         runtime.resolved_endpoint,
         runtime.resolved_endpoint_text);
-    if (!wgnx::wireguard::noise_handshake_create_initiation(
-            std::addressof(peer->last_initiation),
-            peer)) {
-        logger::Log(
-            "Failed to create real WG handshake initiation for peer '%s'",
-            peer->name);
-        return wgnx::PeerErrorCode::HandshakeInitFailed;
-    }
     return wgnx::PeerErrorCode::None;
 }
 
@@ -703,7 +692,7 @@ TimerActionDispatcher *GetTimerDispatcher(wgnx::wireguard::TimerHook hook) {
         case wgnx::wireguard::TimerHook::Rekey:
             return std::addressof(g_rekey_dispatcher);
         case wgnx::wireguard::TimerHook::ZeroKeyMaterial:
-            break;
+            return std::addressof(g_zero_key_material_dispatcher);
     }
 
     return nullptr;
@@ -754,7 +743,8 @@ void CancelAllTransportTimers() {
         for (TimerActionDispatcher *dispatcher : {
                  std::addressof(g_retransmit_dispatcher),
                  std::addressof(g_keepalive_dispatcher),
-                 std::addressof(g_rekey_dispatcher)}) {
+                 std::addressof(g_rekey_dispatcher),
+                 std::addressof(g_zero_key_material_dispatcher)}) {
             wgnx::platform::timer_delete(std::addressof(dispatcher->timer));
         }
         return;
@@ -764,6 +754,7 @@ void CancelAllTransportTimers() {
     CancelProtocolTimer(peer_index, wgnx::wireguard::TimerHook::RetransmitHandshake);
     CancelProtocolTimer(peer_index, wgnx::wireguard::TimerHook::SendKeepalive);
     CancelProtocolTimer(peer_index, wgnx::wireguard::TimerHook::Rekey);
+    CancelProtocolTimer(peer_index, wgnx::wireguard::TimerHook::ZeroKeyMaterial);
 }
 
 [[maybe_unused]] void SchedulePayloadProbeTimeout() {
@@ -794,26 +785,58 @@ void ScheduleProtocolSessionTimers(std::size_t peer_index, wgnx::wireguard::wg_p
         wgnx::wireguard::TimerHook::Rekey,
         wgnx::wireguard::TimerDeadlineFromJiffies(wgnx::platform::get_jiffies_64()) +
             SimulatedRekeyDelay);
+    ScheduleProtocolTimer(
+        peer_index,
+        wgnx::wireguard::TimerHook::ZeroKeyMaterial,
+        wgnx::wireguard::TimerDeadlineFromJiffies(wgnx::platform::get_jiffies_64()) +
+            wgnx::wireguard::ZeroKeyMaterialAfterTime);
 }
 
-bool PrepareRekeyInitiation(std::size_t peer_index) {
+bool PrepareFreshHandshakeInitiation(std::size_t peer_index) {
     auto &protocol = g_state.protocol[peer_index];
     wgnx::wireguard::wg_peer *peer = GetProtocolPeer(peer_index);
     if (peer == nullptr) {
         return false;
     }
 
-    const std::uint32_t local_index = wgnx::wireguard::wg_device_allocate_index(std::addressof(protocol.device));
-    if (local_index == 0) {
-        return false;
+    return wgnx::wireguard::wg_device_create_handshake_initiation(
+        std::addressof(protocol.device),
+        std::addressof(peer->last_initiation));
+}
+
+void ScheduleNextHandshakeRetry(std::size_t peer_index) {
+    const auto jitter_ms = wgnx::platform::get_random_u32_below(
+        wgnx::wireguard::RekeyTimeoutJitterMaxMs);
+    ScheduleProtocolTimer(
+        peer_index,
+        wgnx::wireguard::TimerHook::RetransmitHandshake,
+        wgnx::wireguard::TimerDeadlineFromJiffies(wgnx::platform::get_jiffies_64()) +
+            wgnx::wireguard::GetHandshakeRetryDelay(jitter_ms));
+}
+
+wgnx::PeerErrorCode SendFreshHandshakeInitiation(
+    std::size_t peer_index,
+    bool begin_sequence,
+    const char *reason) {
+    wgnx::wireguard::wg_peer *peer = GetProtocolPeer(peer_index);
+    if (peer == nullptr || !PrepareFreshHandshakeInitiation(peer_index)) {
+        return wgnx::PeerErrorCode::HandshakeInitFailed;
     }
 
-    wgnx::wireguard::noise_handshake_set_local_index(std::addressof(peer->handshake), local_index);
-    wgnx::wireguard::noise_handshake_set_remote_index(std::addressof(peer->handshake), 0);
-    wgnx::wireguard::wg_device_register_handshake_index(std::addressof(protocol.device), local_index);
-    return wgnx::wireguard::noise_handshake_create_initiation(
-        std::addressof(peer->last_initiation),
-        peer);
+    if (begin_sequence) {
+        wgnx::wireguard::wg_peer_begin_handshake_retry_sequence(peer);
+    }
+
+    const wgnx::PeerErrorCode send_error = SendProtocolPeerInitiation(peer_index);
+    ScheduleNextHandshakeRetry(peer_index);
+    logger::Log(
+        "WG handshake attempt peer=%zu sequence=%u attempt=%u retry=%u reason=%s",
+        peer_index,
+        peer->handshake_retry.sequence_count,
+        peer->handshake_retry.send_attempts,
+        begin_sequence ? 0U : 1U,
+        reason != nullptr ? reason : "unspecified");
+    return send_error;
 }
 
 wgnx::PeerErrorCode BeginProtocolPeerSession(std::size_t peer_index) {
@@ -831,40 +854,8 @@ wgnx::PeerErrorCode BeginProtocolPeerSession(std::size_t peer_index) {
         return wgnx::PeerErrorCode::InternalFailure;
     }
 
-    g_state.runtime[peer_index].handshake_send_attempts = 0;
+    wgnx::wireguard::wg_peer_complete_handshake_retry_sequence(peer);
     ScheduleProtocolSessionTimers(peer_index, peer);
-    return wgnx::PeerErrorCode::None;
-}
-
-wgnx::PeerErrorCode RetryHandshakeSend(std::size_t peer_index, const char *reason) {
-    auto &runtime = g_state.runtime[peer_index];
-    if (runtime.handshake_send_attempts >= MaxHandshakeSendAttempts) {
-        logger::Log(
-            "WG handshake retry give-up for peer %zu endpoint=%s attempts=%u reason=%s",
-            peer_index,
-            runtime.resolved_endpoint_text,
-            runtime.handshake_send_attempts,
-            reason != nullptr ? reason : "none");
-        if (runtime.state == wgnx::PeerRuntimeState::Handshaking) {
-            return wgnx::PeerErrorCode::HandshakeTimedOut;
-        }
-        return wgnx::PeerErrorCode::None;
-    }
-
-    const wgnx::PeerErrorCode send_error = SendProtocolPeerInitiation(peer_index);
-    if (send_error != wgnx::PeerErrorCode::None) {
-        if (!IsRecoverableTransportIoError(send_error)) {
-            return send_error;
-        }
-        LogRecoverableTransportIoError(peer_index, send_error, reason);
-    }
-
-    ++runtime.handshake_send_attempts;
-    ScheduleProtocolTimer(
-        peer_index,
-        wgnx::wireguard::TimerHook::RetransmitHandshake,
-        wgnx::wireguard::TimerDeadlineFromJiffies(wgnx::platform::get_jiffies_64()) +
-            SimulatedHandshakeRetransmitDelay);
     return wgnx::PeerErrorCode::None;
 }
 
@@ -877,7 +868,7 @@ wgnx::PeerErrorCode EnsureHandshakeForOutboundTraffic(
         return wgnx::PeerErrorCode::InternalFailure;
     }
 
-    if (peer->has_last_initiation && peer->timers.retransmit_handshake.pending) {
+    if (peer->handshake_retry.active && peer->timers.retransmit_handshake.pending) {
         logger::Log(
             "Coalesced WG handshake request peer=%zu activation=%u reason=%s staged_depth=%zu",
             peer_index,
@@ -887,11 +878,6 @@ wgnx::PeerErrorCode EnsureHandshakeForOutboundTraffic(
         return wgnx::PeerErrorCode::None;
     }
 
-    if (!PrepareRekeyInitiation(peer_index)) {
-        return wgnx::PeerErrorCode::HandshakeInitFailed;
-    }
-
-    runtime.handshake_send_attempts = 0;
     logger::Log(
         "Starting WG handshake for outbound traffic peer=%zu activation=%u reason=%s staged_depth=%zu key_state=%s",
         peer_index,
@@ -900,7 +886,10 @@ wgnx::PeerErrorCode EnsureHandshakeForOutboundTraffic(
         peer->staged_outbound_packets.Size(),
         wgnx::wireguard::GetKeypairSendStateName(
             peer->current_keypair.SendStateAt(wgnx::wireguard::GetMonotonicTime())));
-    return RetryHandshakeSend(peer_index, reason != nullptr ? reason : "outbound traffic");
+    return SendFreshHandshakeInitiation(
+        peer_index,
+        true,
+        reason != nullptr ? reason : "outbound traffic");
 }
 
 void FailProtocolPeer(std::size_t peer_index, const char *reason) {
@@ -927,7 +916,6 @@ void ResetRuntimeMetrics(DaemonState::PeerRuntimeInfo *runtime) {
     }
 
     runtime->state_ticks = 0;
-    runtime->handshake_send_attempts = 0;
     runtime->state_changed_ns = 0;
     runtime->last_handshake_ns = 0;
     runtime->last_rx_ns = 0;
@@ -1369,7 +1357,10 @@ void CommitResolveResult(const ResolveRequest &request, const wgnx::platform::en
         SetPeerError(request.peer_index, wgnx::PeerErrorStage::Transport, socket_error);
         return;
     }
-    const wgnx::PeerErrorCode send_error = SendProtocolPeerInitiation(request.peer_index);
+    const wgnx::PeerErrorCode send_error = SendFreshHandshakeInitiation(
+        request.peer_index,
+        true,
+        "initial handshake");
     if (send_error != wgnx::PeerErrorCode::None) {
         if (!IsRecoverableTransportIoError(send_error)) {
             SetPeerError(request.peer_index, wgnx::PeerErrorStage::Transport, send_error);
@@ -1377,12 +1368,6 @@ void CommitResolveResult(const ResolveRequest &request, const wgnx::platform::en
         }
         LogRecoverableTransportIoError(request.peer_index, send_error, "initial handshake");
     }
-    runtime.handshake_send_attempts = 1;
-    ScheduleProtocolTimer(
-        request.peer_index,
-        wgnx::wireguard::TimerHook::RetransmitHandshake,
-        wgnx::wireguard::TimerDeadlineFromJiffies(wgnx::platform::get_jiffies_64()) +
-            SimulatedHandshakeRetransmitDelay);
     SetPeerHandshaking(request.peer_index);
     QueueReceiveWork();
     logger::Log("Endpoint resolved for peer %zu activation=%u -> %s",
@@ -1630,16 +1615,11 @@ void CommitReceivedPacket(
         case wgnx::wireguard::HandshakePacketOutcome::Invalid:
             return;
         case wgnx::wireguard::HandshakePacketOutcome::CookieReplyConsumed: {
-            const wgnx::PeerErrorCode retry_error = RetryHandshakeSend(peer_index, "cookie reply");
-            if (retry_error == wgnx::PeerErrorCode::None) {
-                return;
-            }
-            SetPeerError(
+            logger::Log(
+                "Stored WG cookie reply peer=%zu sequence=%u attempt=%u; applying it to the next fresh retry",
                 peer_index,
-                retry_error == wgnx::PeerErrorCode::HandshakeTimedOut
-                    ? wgnx::PeerErrorStage::Handshake
-                    : wgnx::PeerErrorStage::Transport,
-                retry_error);
+                peer->handshake_retry.sequence_count,
+                peer->handshake_retry.send_attempts);
             return;
         }
         case wgnx::wireguard::HandshakePacketOutcome::ResponseConsumed: {
@@ -1854,7 +1834,7 @@ void ProcessPendingBindBump() {
         }
     } else {
         resume_action = "handshake_initiation";
-        send_error = SendProtocolPeerInitiation(request.peer_index);
+        send_error = EnsureHandshakeForOutboundTraffic(request.peer_index, "UDP bind bump");
     }
 
     if (send_error != wgnx::PeerErrorCode::None) {
@@ -1981,11 +1961,11 @@ void ReceiveWorkMain(wgnx::platform::work_struct *) {
                 runtime.activation_generation);
             continue;
         }
-        if (runtime.state == wgnx::PeerRuntimeState::ResolvingEndpoint ||
-            runtime.state == wgnx::PeerRuntimeState::Handshaking) {
+        if (runtime.state == wgnx::PeerRuntimeState::ResolvingEndpoint) {
             return;
         }
-        if (runtime.state != wgnx::PeerRuntimeState::Active) {
+        if (runtime.state != wgnx::PeerRuntimeState::Handshaking &&
+            runtime.state != wgnx::PeerRuntimeState::Active) {
             wgnx::wireguard::InnerPacketRecord unavailable{};
             static_cast<void>(queue.Pop(std::addressof(unavailable)));
             logger::Log(
@@ -2003,12 +1983,19 @@ void ReceiveWorkMain(wgnx::platform::work_struct *) {
                 active_peer_index,
                 "staged outbound traffic");
             if (handshake_error != wgnx::PeerErrorCode::None) {
-                SetPeerError(
-                    active_peer_index,
-                    handshake_error == wgnx::PeerErrorCode::HandshakeInitFailed
-                        ? wgnx::PeerErrorStage::Handshake
-                        : wgnx::PeerErrorStage::Transport,
-                    handshake_error);
+                if (IsRecoverableTransportIoError(handshake_error)) {
+                    LogRecoverableTransportIoError(
+                        active_peer_index,
+                        handshake_error,
+                        "staged outbound handshake");
+                } else {
+                    SetPeerError(
+                        active_peer_index,
+                        handshake_error == wgnx::PeerErrorCode::HandshakeInitFailed
+                            ? wgnx::PeerErrorStage::Handshake
+                            : wgnx::PeerErrorStage::Transport,
+                        handshake_error);
+                }
             }
             return;
         }
@@ -2016,13 +2003,39 @@ void ReceiveWorkMain(wgnx::platform::work_struct *) {
             return;
         }
 
-        wgnx::wireguard::InnerPacketRecord record{};
-        static_cast<void>(queue.Pop(std::addressof(record)));
+        const wgnx::wireguard::InnerPacketRecord record = *front;
         const wgnx::PeerErrorCode send_error = SendInnerIpv4PacketLocked(
             record.peer_index,
             std::span<const std::uint8_t>(record.bytes.data(), record.size),
             "packet-api");
         if (send_error != wgnx::PeerErrorCode::None) {
+            if (!peer->current_keypair.CanSendAt(wgnx::wireguard::GetMonotonicTime())) {
+                logger::Log(
+                    "Retained queued inner packet id=%llu peer=%u reason=key_became_unusable error=%s",
+                    static_cast<unsigned long long>(record.packet_id),
+                    record.peer_index,
+                    wgnx::GetPeerErrorCodeName(send_error));
+                const wgnx::PeerErrorCode handshake_error = EnsureHandshakeForOutboundTraffic(
+                    active_peer_index,
+                    "key changed during staged send");
+                if (handshake_error != wgnx::PeerErrorCode::None) {
+                    if (IsRecoverableTransportIoError(handshake_error)) {
+                        LogRecoverableTransportIoError(
+                            active_peer_index,
+                            handshake_error,
+                            "key-change handshake");
+                    } else {
+                        SetPeerError(
+                            active_peer_index,
+                            handshake_error == wgnx::PeerErrorCode::HandshakeInitFailed
+                                ? wgnx::PeerErrorStage::Handshake
+                                : wgnx::PeerErrorStage::Transport,
+                            handshake_error);
+                    }
+                }
+                return;
+            }
+
             logger::Log(
                 "Failed queued inner packet id=%llu peer=%u activation=%u error=%s",
                 static_cast<unsigned long long>(record.packet_id),
@@ -2030,6 +2043,8 @@ void ReceiveWorkMain(wgnx::platform::work_struct *) {
                 record.activation_generation,
                 wgnx::GetPeerErrorCodeName(send_error));
             if (IsRecoverableTransportIoError(send_error)) {
+                wgnx::wireguard::InnerPacketRecord dropped{};
+                static_cast<void>(queue.Pop(std::addressof(dropped)));
                 LogRecoverableTransportIoError(record.peer_index, send_error, "packet API");
                 continue;
             }
@@ -2037,12 +2052,14 @@ void ReceiveWorkMain(wgnx::platform::work_struct *) {
             return;
         }
 
+        wgnx::wireguard::InnerPacketRecord sent{};
+        static_cast<void>(queue.Pop(std::addressof(sent)));
         logger::Log(
             "Sent queued inner packet id=%llu peer=%u activation=%u bytes=%u remaining=%zu",
-            static_cast<unsigned long long>(record.packet_id),
-            record.peer_index,
-            record.activation_generation,
-            static_cast<unsigned int>(record.size),
+            static_cast<unsigned long long>(sent.packet_id),
+            sent.peer_index,
+            sent.activation_generation,
+            static_cast<unsigned int>(sent.size),
             queue.Size());
     }
 }
@@ -2087,9 +2104,10 @@ void RunTimerAction(wgnx::wireguard::TimerHook hook) {
         return;
     }
 
-    if (runtime.transport_suspended) {
+    if (runtime.transport_suspended && hook != wgnx::wireguard::TimerHook::ZeroKeyMaterial) {
+        CancelProtocolTimer(peer_index, hook);
         logger::Log(
-            "WG timer ignored for suspended UDP transport peer=%zu activation=%u hook=%s",
+            "WG timer canceled for suspended UDP transport peer=%zu activation=%u hook=%s",
             peer_index,
             runtime.activation_generation,
             wgnx::wireguard::GetTimerHookName(hook));
@@ -2105,25 +2123,46 @@ void RunTimerAction(wgnx::wireguard::TimerHook hook) {
         case wgnx::wireguard::TimerHook::RetransmitHandshake: {
             if ((runtime.state != wgnx::PeerRuntimeState::Handshaking &&
                  runtime.state != wgnx::PeerRuntimeState::Active) ||
-                !peer->has_last_initiation) {
+                !peer->handshake_retry.active) {
                 return;
             }
 
-            const wgnx::PeerErrorCode retry_error = RetryHandshakeSend(peer_index, "timer");
-            if (retry_error == wgnx::PeerErrorCode::None) {
-                if (runtime.state == wgnx::PeerRuntimeState::Active &&
-                    runtime.handshake_send_attempts >= MaxHandshakeSendAttempts) {
-                    CancelProtocolTimer(peer_index, hook);
+            CancelProtocolTimer(peer_index, hook);
+            const auto retry_result =
+                wgnx::wireguard::wg_peer_handle_handshake_retry_timeout(peer);
+            if (retry_result.action == wgnx::wireguard::HandshakeRetryTimeoutAction::Ignore) {
+                return;
+            }
+            if (retry_result.action == wgnx::wireguard::HandshakeRetryTimeoutAction::Exhausted) {
+                if (!peer->timers.zero_key_material.pending) {
+                    ScheduleProtocolTimer(
+                        peer_index,
+                        wgnx::wireguard::TimerHook::ZeroKeyMaterial,
+                        wgnx::wireguard::TimerDeadlineFromJiffies(wgnx::platform::get_jiffies_64()) +
+                            wgnx::wireguard::ZeroKeyMaterialAfterTime);
                 }
+                logger::Log(
+                    "WG handshake retry sequence exhausted peer=%zu endpoint=%s sequence=%u attempts=%u dropped_staged=%zu; peer and UDP binding preserved",
+                    peer_index,
+                    runtime.resolved_endpoint_text,
+                    peer->handshake_retry.sequence_count,
+                    peer->handshake_retry.send_attempts,
+                    retry_result.dropped_staged_packets);
                 return;
             }
 
-            SetPeerError(
+            const wgnx::PeerErrorCode retry_error = SendFreshHandshakeInitiation(
                 peer_index,
-                retry_error == wgnx::PeerErrorCode::HandshakeTimedOut
-                    ? wgnx::PeerErrorStage::Handshake
-                    : wgnx::PeerErrorStage::Transport,
-                retry_error);
+                false,
+                "retransmit timer");
+            if (retry_error == wgnx::PeerErrorCode::None) {
+                return;
+            }
+            if (IsRecoverableTransportIoError(retry_error)) {
+                LogRecoverableTransportIoError(peer_index, retry_error, "handshake retransmit timer");
+                return;
+            }
+            SetPeerError(peer_index, wgnx::PeerErrorStage::Handshake, retry_error);
             return;
         }
         case wgnx::wireguard::TimerHook::SendKeepalive: {
@@ -2169,13 +2208,10 @@ void RunTimerAction(wgnx::wireguard::TimerHook hook) {
                 return;
             }
 
-            if (!PrepareRekeyInitiation(peer_index)) {
-                SetPeerError(peer_index, wgnx::PeerErrorStage::Handshake, wgnx::PeerErrorCode::HandshakeInitFailed);
-                return;
-            }
-
-            runtime.handshake_send_attempts = 0;
-            const wgnx::PeerErrorCode send_error = SendProtocolPeerInitiation(peer_index);
+            const wgnx::PeerErrorCode send_error = SendFreshHandshakeInitiation(
+                peer_index,
+                true,
+                "rekey timer");
             if (send_error != wgnx::PeerErrorCode::None) {
                 if (!IsRecoverableTransportIoError(send_error)) {
                     SetPeerError(peer_index, wgnx::PeerErrorStage::Transport, send_error);
@@ -2183,16 +2219,17 @@ void RunTimerAction(wgnx::wireguard::TimerHook hook) {
                 }
                 LogRecoverableTransportIoError(peer_index, send_error, "rekey initiation");
             }
-
-            runtime.handshake_send_attempts = 1;
-            ScheduleProtocolTimer(
-                peer_index,
-                wgnx::wireguard::TimerHook::RetransmitHandshake,
-                wgnx::wireguard::TimerDeadlineFromJiffies(wgnx::platform::get_jiffies_64()) +
-                    SimulatedHandshakeRetransmitDelay);
             return;
         }
         case wgnx::wireguard::TimerHook::ZeroKeyMaterial:
+            CancelProtocolTimer(peer_index, hook);
+            wgnx::wireguard::wg_peer_zero_key_material(peer);
+            wgnx::wireguard::wg_device_clear_index_registry(
+                std::addressof(g_state.protocol[peer_index].device));
+            logger::Log(
+                "WG zeroed stale handshake and keypair material peer=%zu activation=%u; peer and UDP binding preserved",
+                peer_index,
+                runtime.activation_generation);
             return;
     }
 }
@@ -2218,6 +2255,14 @@ void RekeyTimerCallback(wgnx::platform::timer_list *) {
         static_cast<void>(wgnx::platform::queue_work(
             g_timer_action_workqueue,
             std::addressof(g_rekey_dispatcher.work)));
+    }
+}
+
+void ZeroKeyMaterialTimerCallback(wgnx::platform::timer_list *) {
+    if (g_timer_action_workqueue != nullptr) {
+        static_cast<void>(wgnx::platform::queue_work(
+            g_timer_action_workqueue,
+            std::addressof(g_zero_key_material_dispatcher.work)));
     }
 }
 
@@ -2264,6 +2309,10 @@ void TimerActionWorkMain(wgnx::platform::work_struct *work) {
     }
     if (work == std::addressof(g_rekey_dispatcher.work)) {
         RunTimerAction(wgnx::wireguard::TimerHook::Rekey);
+        return;
+    }
+    if (work == std::addressof(g_zero_key_material_dispatcher.work)) {
+        RunTimerAction(wgnx::wireguard::TimerHook::ZeroKeyMaterial);
         return;
     }
 
@@ -2322,10 +2371,14 @@ void InitializeTransportTimerExecutor() {
     wgnx::platform::INIT_WORK(std::addressof(g_retransmit_dispatcher.work), TimerActionWorkMain);
     wgnx::platform::INIT_WORK(std::addressof(g_keepalive_dispatcher.work), TimerActionWorkMain);
     wgnx::platform::INIT_WORK(std::addressof(g_rekey_dispatcher.work), TimerActionWorkMain);
+    wgnx::platform::INIT_WORK(std::addressof(g_zero_key_material_dispatcher.work), TimerActionWorkMain);
     wgnx::platform::INIT_WORK(std::addressof(g_payload_probe_timeout_dispatcher.work), TimerActionWorkMain);
     wgnx::platform::timer_setup(std::addressof(g_retransmit_dispatcher.timer), RetransmitTimerCallback);
     wgnx::platform::timer_setup(std::addressof(g_keepalive_dispatcher.timer), KeepaliveTimerCallback);
     wgnx::platform::timer_setup(std::addressof(g_rekey_dispatcher.timer), RekeyTimerCallback);
+    wgnx::platform::timer_setup(
+        std::addressof(g_zero_key_material_dispatcher.timer),
+        ZeroKeyMaterialTimerCallback);
     wgnx::platform::timer_setup(
         std::addressof(g_payload_probe_timeout_dispatcher.timer),
         PayloadProbeTimeoutTimerCallback);
@@ -2612,7 +2665,8 @@ ams::Result ControlService::SubmitInnerIpv4Packet(
 
         result.packet_id = record.packet_id;
         result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::Queued);
-        queue_worker = runtime.state == wgnx::PeerRuntimeState::Active;
+        queue_worker = runtime.state == wgnx::PeerRuntimeState::Handshaking ||
+                       runtime.state == wgnx::PeerRuntimeState::Active;
         logger::Log(
             "Queued packet API submission id=%llu pid=%llu peer=%zu activation=%u bytes=%zu depth=%zu state=%s",
             static_cast<unsigned long long>(record.packet_id),

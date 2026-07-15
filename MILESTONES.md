@@ -178,7 +178,7 @@ timers before adding more lifecycle complexity.
 
 ## Milestone 3: Key Validity And Outbound Packet Staging
 
-**Status:** Implementation complete; real-peer on-device regression pending.
+**Status:** Implementation complete; real-peer on-device regression confirmed.
 
 ### Goal
 
@@ -202,6 +202,8 @@ is being established.
 - a test covers outbound submission after the previous keypair has expired
 
 ## Milestone 4: Handshake Retry And Recovery Lifecycle
+
+**Status:** Implementation complete; outage-recovery on-device validation pending.
 
 ### Goal
 
@@ -374,6 +376,7 @@ peer lifecycle; Milestone 7 establishes the conformance baseline; and
 Milestone 8 hardens the remaining cryptographic and parsing code before
 transparent Horizon integration resumes in Milestone 9.
 
-The first concrete recovery slice is Milestone 3: record keypair age, reject
-outbound use past `RejectAfterTime`, stage the packet, initiate a fresh
-handshake, and release the packet after the new session is established.
+The current validation target is Milestone 4: exhaust one unanswered retry
+sequence without making the peer terminal, restore reachability, and confirm
+that later outbound traffic starts a new sequence and releases after session
+derivation without peer restart or UDP rebinding.

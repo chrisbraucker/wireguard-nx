@@ -109,6 +109,39 @@ void wg_device_register_handshake_index(wg_device *device, std::uint32_t index) 
     SetRegistryEntry(device, wg_index_slot::Handshake, index);
 }
 
+bool wg_device_create_handshake_initiation(
+    wg_device *device,
+    message_handshake_initiation *out_message) {
+    wg_peer *peer = wg_device_first_peer(device);
+    if (peer == nullptr || out_message == nullptr) {
+        return false;
+    }
+
+    const std::uint32_t local_index = wg_device_allocate_index(device);
+    if (local_index == 0) {
+        return false;
+    }
+
+    noise_handshake_set_local_index(&peer->handshake, local_index);
+    noise_handshake_set_remote_index(&peer->handshake, 0);
+    wg_device_register_handshake_index(device, local_index);
+    return noise_handshake_create_initiation(out_message, peer);
+}
+
+bool wg_device_promote_next_keypair(wg_device *device, wg_peer *peer) {
+    if (device == nullptr || peer == nullptr || !peer->next_keypair.IsValid()) {
+        return false;
+    }
+
+    peer->previous_keypair.Reset();
+    peer->previous_keypair = peer->current_keypair;
+    peer->current_keypair.Reset();
+    peer->current_keypair = peer->next_keypair;
+    peer->next_keypair.Reset();
+    wg_device_refresh_keypair_indices(device, peer);
+    return true;
+}
+
 void wg_device_refresh_keypair_indices(wg_device *device, const wg_peer *peer) {
     if (device == nullptr) {
         return;

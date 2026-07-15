@@ -22,6 +22,14 @@ Transport serialization reserves and advances the nonce before encryption.
 The nonce therefore remains consumed if encryption or the later UDP send
 fails, avoiding reuse with another plaintext.
 
+Session derivation follows upstream keypair rotation. An initiator installs the
+new keypair as current and retains the old current keypair as previous. A
+responder installs a derived keypair as next while retaining current; the first
+transport packet authenticated through next promotes it to current and moves
+the old current keypair to previous. The device index registry is refreshed at
+each transition so in-flight packets may still resolve through the retained
+previous keypair while an unconfirmed responder key cannot be used for sends.
+
 `RekeyAfterTime` and `RekeyAfterMessages` remain distinct soft thresholds. The
 existing time-based rekey timer is still provisional, and message-count-driven
 rekey scheduling belongs to Milestone 5. Neither soft threshold permits use
@@ -44,6 +52,13 @@ The packet worker evaluates the front packet without removing it:
 4. Successful session derivation schedules the worker and releases the staged
    packets through the replacement keypair.
 
+The production worker does not remove the queue front before transport packet
+construction. If the current key crosses a hard limit between the readiness
+check and nonce reservation, the plaintext remains staged and starts a fresh
+handshake. A successfully serialized datagram consumes its nonce; a later UDP
+send failure follows the explicit transport-drop policy and does not retry the
+same plaintext with that nonce.
+
 Peer deactivation, peer error, packet-API ownership transfer, and protocol
 reset clear staged records and overwrite their packet storage. Staged traffic
 cannot cross an activation generation or survive peer shutdown.
@@ -53,10 +68,10 @@ The daemon currently supports one remote peer per configured tunnel entry, so
 eight-peer array and keeps the bounded staging storage proportional to the
 eight configured tunnel slots.
 
-## Deferred Recovery Behavior
+## Recovery Behavior
 
-Milestone 3 starts a handshake when staged traffic has no usable session, but
-does not replace the proof-of-concept retry state machine. Retry windows,
+Milestone 4 replaces the proof-of-concept retry state machine. Retry windows,
 attempt exhaustion, later traffic restarting a new sequence, and stale
-handshake-material cleanup are Milestone 4. Authenticated-activity-driven
+handshake-material cleanup are documented in
+[`handshake-recovery.md`](handshake-recovery.md). Authenticated-activity-driven
 rekey and keepalive scheduling remain Milestone 5.

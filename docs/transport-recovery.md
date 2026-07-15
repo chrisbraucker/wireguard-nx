@@ -196,11 +196,11 @@ upstream WireGuard in several material ways:
 - upstream timer hooks use authenticated send and receive activity to schedule
   a new handshake when a peer stops responding.
 
-The next recovery work should implement the smallest coherent subset of those
-upstream semantics. In particular, packet submission must not send with a
-keypair past reject-after-time, and a new outbound packet after a completed
-give-up interval must be able to create and transmit a fresh initiation without
-requiring peer reactivation.
+Milestones 3 and 4 now implement that coherent subset: hard key rejection,
+bounded staging, upstream-style retry exhaustion, delayed stale-key cleanup,
+and later traffic-triggered retry restart. The next validation pass is the same
+prolonged-outage shape above, now expecting recovery after restored reachability
+without peer reactivation or UDP rebinding.
 
 ## Logger reliability
 

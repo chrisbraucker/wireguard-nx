@@ -46,6 +46,7 @@ struct TransportDataCreateResult {
 struct IncomingTransportDataResult {
     wg_index_slot slot{wg_index_slot::None};
     TransportDataDecryptResult decrypt{};
+    bool promoted_next_keypair{false};
 };
 
 const char *GetTransportDataErrorName(TransportDataError error);
@@ -64,7 +65,7 @@ TransportDataError noise_consume_transport_data_packet(
     TransportDataDecryptResult &out_result);
 TransportDataError noise_consume_incoming_transport_data_packet(
     std::span<const std::uint8_t> packet,
-    const wg_device &device,
+    wg_device &device,
     wg_peer &peer,
     std::span<std::uint8_t> out_payload,
     IncomingTransportDataResult &out_result);

@@ -13,5 +13,6 @@ void TestKeypairLifetime(TestContext &context);
 void TestBoundedQueueObservability(TestContext &context);
 void TestKeypairProtocolLimits(TestContext &context);
 void TestOutboundStagingLifecycle(TestContext &context);
+void TestHandshakeRetryLifecycle(TestContext &context);
 
 } // namespace wgnx::test

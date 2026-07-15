@@ -90,8 +90,14 @@ The protocol suite currently verifies:
 - traffic submitted without a keypair remains staged across a deterministic
   handshake and is sent after session derivation
 - traffic submitted after key expiry remains staged until replacement key
-  derivation, and peer shutdown clears all staged packet storage
+  derivation through a second serialized handshake, including initiator
+  current/previous rotation and responder next-key confirmation
 - the peer staging queue rejects new traffic at capacity and records overflow
+- every timed handshake retry replaces both ephemeral material and sender index
+- retry exhaustion occurs at the upstream send-attempt boundary, drops staged
+  work, and permits later traffic to begin a new sequence
+- stale key-material cleanup clears sessions and handshake secrets while
+  preserving configured identity and reusable peer state
 
 The previous message, primitive, and core self-tests remain in the host suite
 as legacy regression cases. They live under `sysmodule/test/host` and are no

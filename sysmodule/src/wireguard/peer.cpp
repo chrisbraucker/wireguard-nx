@@ -1,7 +1,5 @@
 #include "wireguard/peer.hpp"
 
-#include "wireguard/crypto/primitives.hpp"
-
 #include "logger.hpp"
 
 #include <cstdio>
@@ -29,6 +27,7 @@ void wg_peer_init_from_config(wg_peer *peer, const wgnx::PeerConfigEntry &config
     wg_timers_init(&peer->timers);
     wg_peer_reset_keypairs(peer);
     wg_peer_clear_last_initiation(peer);
+    peer->handshake_retry = {};
 }
 
 bool wg_peer_prepare_static_identity(wg_peer *peer, const char *local_private_key_text) {
@@ -123,29 +122,72 @@ void wg_peer_clear_last_initiation(wg_peer *peer) {
     peer->has_last_initiation = false;
 }
 
+void wg_peer_begin_handshake_retry_sequence(wg_peer *peer) {
+    if (peer == nullptr) {
+        return;
+    }
+
+    peer->handshake_retry.active = true;
+    peer->handshake_retry.send_attempts = 1;
+    ++peer->handshake_retry.sequence_count;
+}
+
+HandshakeRetryTimeoutResult wg_peer_handle_handshake_retry_timeout(wg_peer *peer) {
+    if (peer == nullptr || !peer->handshake_retry.active) {
+        return {};
+    }
+
+    /*
+     * wireguard-go permits MaxTimerHandshakes + 2 sends: the initial send,
+     * followed by retries numbered 2 through 20. The next expiry gives up.
+     */
+    constexpr std::uint32_t MaxSendAttempts = MaxTimerHandshakes + 2;
+    if (peer->handshake_retry.send_attempts < MaxSendAttempts) {
+        ++peer->handshake_retry.send_attempts;
+        return {.action = HandshakeRetryTimeoutAction::Retry};
+    }
+
+    peer->handshake_retry.active = false;
+    ++peer->handshake_retry.exhausted_sequence_count;
+    const std::size_t dropped = wg_peer_clear_staged_outbound_packets(peer);
+    wg_peer_clear_last_initiation(peer);
+    return {
+        .action = HandshakeRetryTimeoutAction::Exhausted,
+        .dropped_staged_packets = dropped,
+    };
+}
+
+void wg_peer_complete_handshake_retry_sequence(wg_peer *peer) {
+    if (peer == nullptr) {
+        return;
+    }
+
+    peer->handshake_retry.active = false;
+    peer->handshake_retry.send_attempts = 0;
+    wg_peer_clear_last_initiation(peer);
+}
+
+void wg_peer_zero_key_material(wg_peer *peer) {
+    if (peer == nullptr) {
+        return;
+    }
+
+    noise_handshake_clear_transcript(peer);
+    noise_handshake_init(&peer->handshake);
+    wg_peer_complete_handshake_retry_sequence(peer);
+    wg_peer_reset_keypairs(peer);
+    static_cast<void>(wg_peer_clear_staged_outbound_packets(peer));
+}
+
 void wg_peer_scrub_transient_state(wg_peer *peer) {
     if (peer == nullptr) {
         return;
     }
 
-    crypto::secure_clear(
-        peer->handshake_material.ephemeral_private.bytes.data(),
-        peer->handshake_material.ephemeral_private.bytes.size());
-    peer->handshake_material.ephemeral_private.valid = false;
-    crypto::secure_clear(
-        peer->handshake_material.ephemeral_public.bytes.data(),
-        peer->handshake_material.ephemeral_public.bytes.size());
-    peer->handshake_material.ephemeral_public.valid = false;
-    crypto::secure_clear(
-        peer->handshake_material.remote_ephemeral.bytes.data(),
-        peer->handshake_material.remote_ephemeral.bytes.size());
-    peer->handshake_material.remote_ephemeral.valid = false;
-    crypto::secure_clear(peer->handshake_material.chaining_key.bytes.data(), peer->handshake_material.chaining_key.bytes.size());
-    peer->handshake_material.chaining_key.valid = false;
-    crypto::secure_clear(peer->handshake_material.hash.bytes.data(), peer->handshake_material.hash.bytes.size());
-    peer->handshake_material.hash.valid = false;
+    noise_handshake_clear_transcript(peer);
     noise_cookie_reset(&peer->cookie);
     wg_peer_clear_last_initiation(peer);
+    peer->handshake_retry = {};
     wg_peer_reset_keypairs(peer);
     static_cast<void>(wg_peer_clear_staged_outbound_packets(peer));
 }

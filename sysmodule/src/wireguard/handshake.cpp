@@ -507,6 +507,7 @@ void ClearHandshakeTranscript(wg_peer *peer) {
     peer->handshake_material.chaining_key.valid = false;
     crypto::secure_clear(peer->handshake_material.hash.bytes.data(), peer->handshake_material.hash.bytes.size());
     peer->handshake_material.hash.valid = false;
+    peer->handshake.local_index = 0;
     peer->handshake.remote_index = 0;
 }
 
@@ -566,6 +567,10 @@ const char *GetHandshakePacketOutcomeName(HandshakePacketOutcome outcome) {
     }
 
     return "unknown";
+}
+
+void noise_handshake_clear_transcript(wg_peer *peer) {
+    ClearHandshakeTranscript(peer);
 }
 
 void noise_handshake_init(noise_handshake *handshake) {
@@ -1062,7 +1067,8 @@ bool noise_handshake_begin_session(wg_device *device, wg_peer *peer) {
             peer->handshake_material.chaining_key.bytes.data());
     }
 
-    peer->current_keypair.Establish(
+    noise_keypair new_keypair{};
+    new_keypair.Establish(
         peer->handshake.local_index,
         peer->handshake.remote_index,
         GetMonotonicTime(),
@@ -1070,18 +1076,34 @@ bool noise_handshake_begin_session(wg_device *device, wg_peer *peer) {
         receiving_key);
     crypto::secure_clear(&sending_key, sizeof(sending_key));
     crypto::secure_clear(&receiving_key, sizeof(receiving_key));
-    if (!peer->current_keypair.IsValid()) {
+    if (!new_keypair.IsValid()) {
         return false;
     }
-    peer->next_keypair.Reset();
-    peer->previous_keypair.Reset();
+
+    if (state == HandshakeState::ResponseReceived) {
+        peer->previous_keypair.Reset();
+        if (peer->next_keypair.IsValid()) {
+            peer->previous_keypair = peer->next_keypair;
+            peer->next_keypair.Reset();
+            peer->current_keypair.Reset();
+        } else {
+            peer->previous_keypair = peer->current_keypair;
+            peer->current_keypair.Reset();
+        }
+        peer->current_keypair = new_keypair;
+    } else {
+        peer->next_keypair.Reset();
+        peer->next_keypair = new_keypair;
+        peer->previous_keypair.Reset();
+    }
+    new_keypair.Reset();
     ::wgnx::wireguard::wg_device_refresh_keypair_indices(device, peer);
     static_cast<void>(noise_handshake_transition(
         &peer->handshake,
         HandshakeState::SessionDerived,
         peer->name,
         "derived real session keys"));
-    ClearHandshakeTranscript(peer);
+    noise_handshake_clear_transcript(peer);
     return true;
 }
 

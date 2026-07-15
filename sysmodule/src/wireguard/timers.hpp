@@ -2,6 +2,8 @@
 
 #include "wgnx/platform/work.hpp"
 
+#include "wireguard/constants.hpp"
+
 #include <chrono>
 #include <cstdint>
 
@@ -54,5 +56,9 @@ void wg_timers_schedule(
 void wg_timers_cancel(wg_timers *timers, TimerHook hook, const char *peer_name);
 void wg_timers_cancel_all(wg_timers *timers, const char *peer_name);
 bool wg_timers_any_pending(const wg_timers &timers);
+constexpr TimerDeadline GetHandshakeRetryDelay(std::uint32_t jitter_ms) {
+    return std::chrono::duration_cast<TimerDeadline>(RekeyTimeout) +
+           std::chrono::milliseconds{jitter_ms % RekeyTimeoutJitterMaxMs};
+}
 
 } // namespace wgnx::wireguard

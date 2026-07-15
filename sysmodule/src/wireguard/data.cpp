@@ -187,7 +187,7 @@ TransportDataError noise_consume_transport_data_packet(
 
 TransportDataError noise_consume_incoming_transport_data_packet(
     std::span<const std::uint8_t> packet,
-    const wg_device &device,
+    wg_device &device,
     wg_peer &peer,
     std::span<std::uint8_t> out_payload,
     IncomingTransportDataResult &out_result) {
@@ -213,7 +213,13 @@ TransportDataError noise_consume_incoming_transport_data_packet(
         return error;
     }
 
-    out_result = {.slot = slot, .decrypt = decrypt};
+    const bool promoted = slot == wg_index_slot::NextKeypair &&
+                          wg_device_promote_next_keypair(&device, &peer);
+    out_result = {
+        .slot = slot,
+        .decrypt = decrypt,
+        .promoted_next_keypair = promoted,
+    };
     return TransportDataError::None;
 }
 

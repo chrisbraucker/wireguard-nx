@@ -27,6 +27,7 @@ int main() {
         TestCase{"protocol.bounded-queue-observability", wgnx::test::TestBoundedQueueObservability},
         TestCase{"protocol.keypair-protocol-limits", wgnx::test::TestKeypairProtocolLimits},
         TestCase{"protocol.outbound-staging-lifecycle", wgnx::test::TestOutboundStagingLifecycle},
+        TestCase{"protocol.handshake-retry-lifecycle", wgnx::test::TestHandshakeRetryLifecycle},
     };
 
     return wgnx::test::RunTests(tests);

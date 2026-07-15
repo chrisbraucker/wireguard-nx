@@ -184,7 +184,12 @@ struct ProtocolPair {
 
     bool CreateAndSendInitiation(std::array<std::uint8_t, wgnx::wireguard::HandshakeInitiationSize> *out_bytes = nullptr) {
         wgnx::wireguard::message_handshake_initiation initiation{};
-        if (!wgnx::wireguard::noise_handshake_create_initiation(&initiation, initiator)) {
+        const bool created = initiator->handshake.local_index == 0
+            ? wgnx::wireguard::wg_device_create_handshake_initiation(
+                  &initiator_device,
+                  &initiation)
+            : wgnx::wireguard::noise_handshake_create_initiation(&initiation, initiator);
+        if (!created) {
             return false;
         }
 
@@ -206,6 +211,16 @@ struct ProtocolPair {
         }
 
         wgnx::wireguard::message_handshake_initiation initiation{};
+        if (responder->handshake.local_index == 0) {
+            const std::uint32_t local_index =
+                wgnx::wireguard::wg_device_allocate_index(&responder_device);
+            wgnx::wireguard::noise_handshake_set_local_index(
+                &responder->handshake,
+                local_index);
+            wgnx::wireguard::wg_device_register_handshake_index(
+                &responder_device,
+                local_index);
+        }
         if (!wgnx::wireguard::ParseHandshakeInitiation(incoming, initiation).success ||
             !wgnx::wireguard::noise_handshake_consume_initiation(&initiation, responder)) {
             return false;
@@ -245,7 +260,9 @@ struct ProtocolPair {
 
 bool CheckSessionKeys(TestContext &context, const ProtocolPair &pair) {
     const auto &initiator_keypair = pair.initiator->current_keypair;
-    const auto &responder_keypair = pair.responder->current_keypair;
+    const auto &responder_keypair = pair.responder->current_keypair.IsValid()
+        ? pair.responder->current_keypair
+        : pair.responder->next_keypair;
     if (!initiator_keypair.IsValid()) {
         context.Fail("initiator_keypair.valid", __FILE__, __LINE__, "initiator current keypair is invalid");
         return false;
@@ -286,7 +303,8 @@ struct TransportResult {
 
 TransportResult SendTransport(
     wgnx::wireguard::noise_keypair *sender,
-    wgnx::wireguard::noise_keypair *receiver,
+    wgnx::wireguard::wg_device *receiver_device,
+    wgnx::wireguard::wg_peer *receiver,
     std::span<const std::uint8_t> payload,
     InMemoryDatagramLink *link) {
     TransportResult result{};
@@ -313,11 +331,14 @@ TransportResult SendTransport(
         result.error = wgnx::wireguard::TransportDataError::InvalidPacket;
         return result;
     }
-    result.error = wgnx::wireguard::noise_consume_transport_data_packet(
+    wgnx::wireguard::IncomingTransportDataResult incoming_result{};
+    result.error = wgnx::wireguard::noise_consume_incoming_transport_data_packet(
         incoming,
+        *receiver_device,
         *receiver,
         result.plaintext,
-        result.decrypt);
+        incoming_result);
+    result.decrypt = incoming_result.decrypt;
     return result;
 }
 
@@ -450,7 +471,8 @@ void TestBidirectionalTransport(TestContext &context) {
 
     const TransportResult first = SendTransport(
         &pair.initiator->current_keypair,
-        &pair.responder->current_keypair,
+        &pair.responder_device,
+        pair.responder,
         InitiatorPayload,
         &pair.initiator_to_responder);
     WGNX_TEST_REQUIRE(
@@ -466,7 +488,8 @@ void TestBidirectionalTransport(TestContext &context) {
 
     const TransportResult reverse = SendTransport(
         &pair.responder->current_keypair,
-        &pair.initiator->current_keypair,
+        &pair.initiator_device,
+        pair.initiator,
         ResponderPayload,
         &pair.responder_to_initiator);
     WGNX_TEST_REQUIRE(
@@ -482,7 +505,8 @@ void TestBidirectionalTransport(TestContext &context) {
 
     const TransportResult second = SendTransport(
         &pair.initiator->current_keypair,
-        &pair.responder->current_keypair,
+        &pair.responder_device,
+        pair.responder,
         InitiatorPayload,
         &pair.initiator_to_responder);
     WGNX_TEST_REQUIRE(
@@ -850,7 +874,8 @@ void TestOutboundStagingLifecycle(TestContext &context) {
     WGNX_TEST_REQUIRE(context, first_front != nullptr, "staged packet disappeared during handshake");
     const TransportResult first_send = SendTransport(
         &pair.initiator->current_keypair,
-        &pair.responder->current_keypair,
+        &pair.responder_device,
+        pair.responder,
         std::span<const std::uint8_t>(first_front->bytes.data(), first_front->size),
         &pair.initiator_to_responder);
     WGNX_TEST_REQUIRE(
@@ -889,42 +914,44 @@ void TestOutboundStagingLifecycle(TestContext &context) {
             pair.initiator->staged_outbound_packets.Size() == 1,
         "submission after key expiry did not remain staged for a fresh handshake");
 
-    const noise_symmetric_key initiator_sending = pair.initiator->current_keypair.SendingKey();
-    const noise_symmetric_key initiator_receiving = pair.initiator->current_keypair.ReceivingKey();
-    const noise_symmetric_key responder_sending = pair.responder->current_keypair.SendingKey();
-    const noise_symmetric_key responder_receiving = pair.responder->current_keypair.ReceivingKey();
+    const std::uint32_t old_initiator_index = pair.initiator->current_keypair.LocalIndex();
+    const std::uint32_t old_responder_index = pair.responder->current_keypair.LocalIndex();
+    const noise_symmetric_key old_initiator_sending = pair.initiator->current_keypair.SendingKey();
     const MonotonicTime replacement_birth = expired_time + std::chrono::seconds{1};
     runtime::SetMonotonicTime(static_cast<wgnx::platform::ktime_t>(replacement_birth.count()));
-    pair.initiator->current_keypair.Establish(
-        InitiatorIndex + 1,
-        ResponderIndex + 1,
-        replacement_birth,
-        initiator_sending,
-        initiator_receiving);
-    pair.responder->current_keypair.Establish(
-        ResponderIndex + 1,
-        InitiatorIndex + 1,
-        replacement_birth,
-        responder_sending,
-        responder_receiving);
+    WGNX_TEST_REQUIRE(
+        context,
+        pair.CreateAndSendInitiation() &&
+            pair.ReceiveInitiationAndSendResponse() &&
+            pair.ReceiveResponseAndDeriveSession(),
+        "replacement handshake did not derive a new session");
     WGNX_TEST_REQUIRE(
         context,
         wg_peer_get_outbound_staging_action(*pair.initiator, GetMonotonicTime()) ==
                 OutboundStagingAction::Send &&
-            pair.initiator->staged_outbound_packets.Size() == 1,
+            pair.initiator->staged_outbound_packets.Size() == 1 &&
+            pair.initiator->current_keypair.LocalIndex() != old_initiator_index &&
+            pair.initiator->previous_keypair.LocalIndex() == old_initiator_index &&
+            pair.initiator->current_keypair.SendingKey().bytes != old_initiator_sending.bytes &&
+            pair.responder->current_keypair.LocalIndex() == old_responder_index &&
+            pair.responder->next_keypair.IsValid(),
         "replacement key derivation did not release the expired-key submission");
 
     const InnerPacketRecord *replacement_front = pair.initiator->staged_outbound_packets.Front();
     WGNX_TEST_REQUIRE(context, replacement_front != nullptr, "expired-key submission disappeared");
     const TransportResult replacement_send = SendTransport(
         &pair.initiator->current_keypair,
-        &pair.responder->current_keypair,
+        &pair.responder_device,
+        pair.responder,
         std::span<const std::uint8_t>(replacement_front->bytes.data(), replacement_front->size),
         &pair.initiator_to_responder);
     WGNX_TEST_REQUIRE(
         context,
         replacement_send.error == TransportDataError::None &&
-            replacement_send.decrypt.payload_size == GetPaddedTransportPayloadSize(FirstPayload.size()),
+            replacement_send.decrypt.payload_size == GetPaddedTransportPayloadSize(FirstPayload.size()) &&
+            pair.responder->current_keypair.LocalIndex() != old_responder_index &&
+            pair.responder->previous_keypair.LocalIndex() == old_responder_index &&
+            !pair.responder->next_keypair.IsValid(),
         "expired-key submission was not transmitted with the replacement keypair");
     WGNX_TEST_REQUIRE(
         context,
@@ -953,6 +980,153 @@ void TestOutboundStagingLifecycle(TestContext &context) {
             wg_peer_get_outbound_staging_action(*pair.initiator, GetMonotonicTime()) ==
                 OutboundStagingAction::Idle,
         "peer shutdown retained staged outbound traffic");
+}
+
+void TestHandshakeRetryLifecycle(TestContext &context) {
+    using namespace wgnx::wireguard;
+
+    runtime::Reset(InitialRuntimeState);
+    ProtocolPair pair{};
+    WGNX_TEST_REQUIRE(context, pair.Initialize(), "protocol pair initialization failed");
+
+    message_handshake_initiation first_initiation{};
+    message_handshake_initiation second_initiation{};
+    WGNX_TEST_REQUIRE(
+        context,
+        wg_device_create_handshake_initiation(
+            &pair.initiator_device,
+            &first_initiation) &&
+            wg_device_create_handshake_initiation(
+                &pair.initiator_device,
+                &second_initiation),
+        "failed to construct fresh retry initiations");
+    WGNX_TEST_REQUIRE(
+        context,
+        first_initiation.sender_index != second_initiation.sender_index &&
+            first_initiation.unencrypted_ephemeral != second_initiation.unencrypted_ephemeral &&
+            wg_device_lookup_index_slot(
+                &pair.initiator_device,
+                first_initiation.sender_index) == wg_index_slot::None &&
+            wg_device_lookup_index_slot(
+                &pair.initiator_device,
+                second_initiation.sender_index) == wg_index_slot::Handshake,
+        "retry initiation reused ephemeral material or retained the old sender index");
+
+    InnerPacketRecord first{.packet_id = 51};
+    InnerPacketRecord second{.packet_id = 52};
+    WGNX_TEST_REQUIRE(
+        context,
+        pair.initiator->staged_outbound_packets.Push(first) == QueuePushResult::Pushed &&
+            pair.initiator->staged_outbound_packets.Push(second) == QueuePushResult::Pushed,
+        "failed to stage packets for retry exhaustion");
+    pair.initiator->has_last_initiation = true;
+
+    wg_peer_begin_handshake_retry_sequence(pair.initiator);
+    WGNX_TEST_REQUIRE(
+        context,
+        pair.initiator->handshake_retry.active &&
+            pair.initiator->handshake_retry.send_attempts == 1 &&
+            pair.initiator->handshake_retry.sequence_count == 1 &&
+            GetHandshakeRetryDelay(0) == std::chrono::seconds{5} &&
+            GetHandshakeRetryDelay(RekeyTimeoutJitterMaxMs - 1) ==
+                std::chrono::milliseconds{5333} &&
+            ZeroKeyMaterialAfterTime == std::chrono::seconds{540},
+        "retry sequence or upstream timing constants initialized incorrectly");
+
+    constexpr std::uint32_t MaxSendAttempts = MaxTimerHandshakes + 2;
+    for (std::uint32_t expected_attempt = 2; expected_attempt <= MaxSendAttempts;
+         ++expected_attempt) {
+        const auto retry = wg_peer_handle_handshake_retry_timeout(pair.initiator);
+        WGNX_TEST_REQUIRE(
+            context,
+            retry.action == HandshakeRetryTimeoutAction::Retry &&
+                retry.dropped_staged_packets == 0 &&
+                pair.initiator->handshake_retry.send_attempts == expected_attempt,
+            "retry sequence exhausted before the upstream send-attempt boundary");
+    }
+
+    const auto exhausted = wg_peer_handle_handshake_retry_timeout(pair.initiator);
+    WGNX_TEST_REQUIRE(
+        context,
+        exhausted.action == HandshakeRetryTimeoutAction::Exhausted &&
+            exhausted.dropped_staged_packets == 2 &&
+            !pair.initiator->handshake_retry.active &&
+            pair.initiator->handshake_retry.send_attempts == MaxSendAttempts &&
+            pair.initiator->handshake_retry.exhausted_sequence_count == 1 &&
+            pair.initiator->staged_outbound_packets.Size() == 0 &&
+            !pair.initiator->has_last_initiation,
+        "retry exhaustion retained failed work or left the sequence active");
+    WGNX_TEST_REQUIRE(
+        context,
+        wg_peer_handle_handshake_retry_timeout(pair.initiator).action ==
+            HandshakeRetryTimeoutAction::Ignore,
+        "inactive retry timeout mutated exhausted state");
+
+    InnerPacketRecord later{.packet_id = 53};
+    WGNX_TEST_REQUIRE(
+        context,
+        pair.initiator->staged_outbound_packets.Push(later) == QueuePushResult::Pushed,
+        "failed to stage traffic after retry exhaustion");
+    wg_peer_begin_handshake_retry_sequence(pair.initiator);
+    WGNX_TEST_REQUIRE(
+        context,
+        pair.initiator->handshake_retry.active &&
+            pair.initiator->handshake_retry.send_attempts == 1 &&
+            pair.initiator->handshake_retry.sequence_count == 2 &&
+            pair.initiator->handshake_retry.exhausted_sequence_count == 1 &&
+            pair.initiator->staged_outbound_packets.Size() == 1,
+        "later outbound traffic could not begin a new retry sequence");
+    wg_peer_complete_handshake_retry_sequence(pair.initiator);
+    WGNX_TEST_REQUIRE(
+        context,
+        !pair.initiator->handshake_retry.active &&
+            pair.initiator->handshake_retry.send_attempts == 0 &&
+            pair.initiator->staged_outbound_packets.Size() == 1,
+        "successful handshake completion discarded staged traffic or retained retry state");
+
+    WGNX_TEST_REQUIRE(
+        context,
+        pair.CreateAndSendInitiation() &&
+            pair.ReceiveInitiationAndSendResponse() &&
+            pair.ReceiveResponseAndDeriveSession(),
+        "failed to derive key material for zeroing test");
+    const noise_secret32 precomputed = pair.initiator->handshake_material.precomputed_static_static;
+    const noise_private_key static_private = pair.initiator->static_identity.static_private;
+    pair.initiator->cookie.valid = true;
+    pair.initiator->cookie.value.fill(0x6A);
+    pair.initiator->handshake_material.ephemeral_private.valid = true;
+    pair.initiator->handshake_material.ephemeral_private.bytes.fill(0xA5);
+    pair.initiator->handshake_material.hash.valid = true;
+    pair.initiator->handshake_material.hash.bytes.fill(0x5A);
+    wg_peer_zero_key_material(pair.initiator);
+
+    WGNX_TEST_REQUIRE(
+        context,
+        !pair.initiator->current_keypair.IsValid() &&
+            !pair.initiator->next_keypair.IsValid() &&
+            !pair.initiator->previous_keypair.IsValid() &&
+            pair.initiator->handshake.state == HandshakeState::Zeroed &&
+            pair.initiator->handshake.local_index == 0 &&
+            !pair.initiator->handshake_material.ephemeral_private.valid &&
+            std::ranges::all_of(
+                pair.initiator->handshake_material.ephemeral_private.bytes,
+                [](std::uint8_t byte) { return byte == 0; }) &&
+            !pair.initiator->handshake_material.hash.valid &&
+            std::ranges::all_of(
+                pair.initiator->handshake_material.hash.bytes,
+                [](std::uint8_t byte) { return byte == 0; }),
+        "zero-key expiry retained session or handshake secrets");
+    WGNX_TEST_REQUIRE(
+        context,
+        pair.initiator->handshake_material.precomputed_static_static.valid &&
+            pair.initiator->handshake_material.precomputed_static_static.bytes == precomputed.bytes &&
+            pair.initiator->static_identity.static_private.valid &&
+            pair.initiator->static_identity.static_private.bytes == static_private.bytes &&
+            pair.initiator->cookie.valid &&
+            std::ranges::all_of(
+                pair.initiator->cookie.value,
+                [](std::uint8_t byte) { return byte == 0x6A; }),
+        "zero-key expiry erased configured identity, precomputation, or cookie state");
 }
 
 } // namespace wgnx::test

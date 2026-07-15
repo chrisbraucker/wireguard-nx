@@ -250,7 +250,7 @@ TransportDataError noise_consume_transport_data_packet(
 
 TransportDataError noise_consume_incoming_transport_data_packet(
     const wgnx::platform::packet_buffer *packet,
-    const wg_device *device,
+    wg_device *device,
     wg_peer *peer,
     std::span<std::uint8_t> output,
     IncomingTransportDataResult *result) {
@@ -974,6 +974,18 @@ bool TestHandshakeResponseAndSessionDerivation() {
         return false;
     }
 
+    message_handshake_cookie &cookie = g_core_self_test_storage.cookie;
+    if (!BuildHarnessCookieReply(&cookie, *initiator, *responder)) {
+        return false;
+    }
+    auto &cookie_buffer = g_core_self_test_storage.cookie_buffer;
+    if (SerializeHandshakeCookie(&cookie_buffer.packet, cookie) != ParseError::None) {
+        return false;
+    }
+    if (noise_handshake_consume_incoming_packet(&cookie_buffer.packet, &initiator_device, initiator) != HandshakePacketOutcome::CookieReplyConsumed) {
+        return false;
+    }
+
     auto &response_buffer = g_core_self_test_storage.response_buffer;
     if (SerializeHandshakeResponse(&response_buffer.packet, response) != ParseError::None) {
         return false;
@@ -991,33 +1003,24 @@ bool TestHandshakeResponseAndSessionDerivation() {
         return false;
     }
 
-    message_handshake_cookie &cookie = g_core_self_test_storage.cookie;
-    if (!BuildHarnessCookieReply(&cookie, *initiator, *responder)) {
-        return false;
-    }
-    auto &cookie_buffer = g_core_self_test_storage.cookie_buffer;
-    if (SerializeHandshakeCookie(&cookie_buffer.packet, cookie) != ParseError::None) {
-        return false;
-    }
-    if (noise_handshake_consume_incoming_packet(&cookie_buffer.packet, &initiator_device, initiator) != HandshakePacketOutcome::CookieReplyConsumed) {
-        return false;
-    }
-
     auto &keepalive_buffer = g_core_self_test_storage.keepalive_buffer;
     if (!noise_create_keepalive_packet(&keepalive_buffer.packet, initiator->current_keypair)) {
         return false;
     }
 
-    TransportDataDecryptResult keepalive_result{};
-    const TransportDataError keepalive_error = noise_consume_transport_data_packet(
+    IncomingTransportDataResult keepalive_incoming{};
+    const TransportDataError keepalive_error = noise_consume_incoming_transport_data_packet(
         &keepalive_buffer.packet,
-        &responder->current_keypair,
+        &responder_device,
+        responder,
         {},
-        &keepalive_result);
+        &keepalive_incoming);
     if (keepalive_error != TransportDataError::None) {
         return false;
     }
+    const TransportDataDecryptResult &keepalive_result = keepalive_incoming.decrypt;
     if (keepalive_buffer.packet.len != (TransportDataHeaderSize + NoiseMacSize) ||
+        !keepalive_incoming.promoted_next_keypair ||
         keepalive_result.header.receiver_index != initiator->current_keypair.RemoteIndex() ||
         keepalive_result.header.counter + 1 != initiator->current_keypair.SendCounter() ||
         keepalive_result.payload_size != 0) {
