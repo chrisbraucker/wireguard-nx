@@ -325,11 +325,11 @@ bool noise_parse_private_key(noise_private_key *out_key, std::string_view text) 
         return false;
     }
 
-    ClampX25519PrivateKey(key.bytes);
     if (IsAllZero(key.bytes)) {
         crypto::secure_clear(&key, sizeof(key));
         return false;
     }
+    ClampX25519PrivateKey(key.bytes);
 
     key.valid = true;
     *out_key = key;

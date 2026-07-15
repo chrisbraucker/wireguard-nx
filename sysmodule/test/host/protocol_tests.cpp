@@ -28,6 +28,7 @@ constexpr char InitiatorPublicKey[] = "B6N8vBQgk8i3VdwbEOhstCY3StFqqFPtC9/AsrhtH
 constexpr char ResponderPrivateKey[] = "ZWZnaGlqa2xtbm9wcXJzdHV2d3h5ent8fX5/gIGCg4Q=";
 constexpr char ResponderPublicKey[] = "VxR2nRFr92Q2rnS8eT0sMK0ZA8WaxSc4BcfiaYtBDDY=";
 constexpr char PresharedKey[] = "ycrLzM3Oz9DR0tPU1dbX2Nna29zd3t/g4eLj5OXm5+g=";
+constexpr char ZeroKey[] = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
 
 constexpr std::uint32_t InitiatorIndex = 0x01020304U;
 constexpr std::uint32_t ResponderIndex = 0xA1A2A3A4U;
@@ -629,6 +630,39 @@ void TestTypedMessageBoundaries(TestContext &context) {
              parsed_transport)
              .success,
         "transport parser accepted an undersized header");
+}
+
+void TestPrivateKeyParsing(TestContext &context) {
+    using namespace wgnx::wireguard;
+
+    noise_private_key key{};
+    key.valid = true;
+    std::ranges::fill(key.bytes, 0xA5);
+
+    WGNX_TEST_REQUIRE(
+        context,
+        noise_is_valid_encoded_key(ZeroKey),
+        "all-zero key encoding was rejected as malformed base64");
+    WGNX_TEST_REQUIRE(
+        context,
+        !noise_parse_private_key(&key, ZeroKey),
+        "all-zero private key was accepted after X25519 clamping");
+    WGNX_TEST_REQUIRE(
+        context,
+        key.valid && std::ranges::all_of(key.bytes, [](std::uint8_t byte) { return byte == 0xA5; }),
+        "failed private-key parsing modified the caller's key");
+
+    WGNX_TEST_REQUIRE(
+        context,
+        noise_parse_private_key(&key, InitiatorPrivateKey),
+        "valid private key was rejected");
+    WGNX_TEST_REQUIRE(
+        context,
+        key.valid &&
+            (key.bytes.front() & 0x07U) == 0 &&
+            (key.bytes.back() & 0x80U) == 0 &&
+            (key.bytes.back() & 0x40U) != 0,
+        "valid private key was not clamped for X25519");
 }
 
 void TestKeypairLifetime(TestContext &context) {
