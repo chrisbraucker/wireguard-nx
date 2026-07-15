@@ -33,33 +33,23 @@ int DecodeBase64Char(char ch) {
     return -1;
 }
 
-bool IsAllZero(const std::uint8_t *bytes, std::size_t size) {
-    if (bytes == nullptr) {
-        return true;
-    }
-
+bool IsAllZero(std::span<const std::uint8_t> bytes) {
     std::uint8_t value = 0;
-    for (std::size_t i = 0; i < size; ++i) {
-        value |= bytes[i];
+    for (const std::uint8_t byte : bytes) {
+        value |= byte;
     }
     return value == 0;
 }
 
-void ClampX25519PrivateKey(std::uint8_t bytes[NoisePublicKeySize]) {
-    if (bytes == nullptr) {
-        return;
-    }
-
+void ClampX25519PrivateKey(std::array<std::uint8_t, NoisePublicKeySize> &bytes) {
     bytes[0] &= 248U;
     bytes[31] &= 127U;
     bytes[31] |= 64U;
 }
 
-bool DecodeWireGuardKey(std::uint8_t out[NoisePublicKeySize], std::string_view text) {
-    if (out == nullptr) {
-        return false;
-    }
-
+bool DecodeWireGuardKey(
+    std::array<std::uint8_t, NoisePublicKeySize> &out,
+    std::string_view text) {
     if (text.size() != WireGuardEncodedKeySize || text.back() != '=') {
         return false;
     }
@@ -112,8 +102,10 @@ bool DecodeWireGuardKey(std::uint8_t out[NoisePublicKeySize], std::string_view t
     return out_index == NoisePublicKeySize;
 }
 
-bool EncodeWireGuardKey(std::span<char> out_text, const std::uint8_t bytes[NoisePublicKeySize]) {
-    if (bytes == nullptr || out_text.size() < (WireGuardEncodedKeySize + 1)) {
+bool EncodeWireGuardKey(
+    std::span<char> out_text,
+    const std::array<std::uint8_t, NoisePublicKeySize> &bytes) {
+    if (out_text.size() < (WireGuardEncodedKeySize + 1)) {
         return false;
     }
 
@@ -137,6 +129,10 @@ bool EncodeWireGuardKey(std::span<char> out_text, const std::uint8_t bytes[Noise
 
 } // namespace
 
+MonotonicTime GetMonotonicTime() {
+    return MonotonicTime{wgnx::platform::ktime_get_coarse_boottime_ns()};
+}
+
 void noise_cookie_reset(noise_cookie *cookie) {
     if (cookie == nullptr) {
         return;
@@ -150,7 +146,7 @@ void noise_cookie_record_last_mac1(noise_cookie *cookie, const std::uint8_t mac1
         return;
     }
 
-    std::memcpy(cookie->last_mac1, mac1, sizeof(cookie->last_mac1));
+    std::memcpy(cookie->last_mac1.data(), mac1, cookie->last_mac1.size());
     cookie->has_last_mac1 = true;
 }
 
@@ -159,10 +155,10 @@ bool noise_cookie_is_valid(const noise_cookie *cookie) {
         return false;
     }
 
-    constexpr wgnx::platform::ktime_t CookieLifetimeNs = 120LL * wgnx::platform::NSEC_PER_SEC;
-    const wgnx::platform::ktime_t now = wgnx::platform::ktime_get_coarse_boottime_ns();
-    return cookie->birthdate_ns != 0 && now >= cookie->birthdate_ns &&
-           (now - cookie->birthdate_ns) <= CookieLifetimeNs;
+    constexpr MonotonicTime CookieLifetime = std::chrono::seconds{120};
+    const MonotonicTime now = GetMonotonicTime();
+    return cookie->birth_time > MonotonicTime::zero() && now >= cookie->birth_time &&
+           (now - cookie->birth_time) <= CookieLifetime;
 }
 
 void noise_static_identity_reset(noise_static_identity *identity) {
@@ -181,12 +177,131 @@ void noise_handshake_material_reset(noise_handshake_material *material) {
     crypto::secure_clear(material, sizeof(*material));
 }
 
-void noise_keypair_reset(noise_keypair *keypair) {
-    if (keypair == nullptr) {
+bool ReplayWindow::TryAdvance(std::uint64_t counter) {
+    constexpr std::uint64_t ReplayWindowBits = 64;
+    if (!m_initialized) {
+        m_highest_counter = counter;
+        m_bitmap = 1U;
+        m_initialized = true;
+        return true;
+    }
+
+    if (counter > m_highest_counter) {
+        const std::uint64_t shift = counter - m_highest_counter;
+        m_bitmap = shift >= ReplayWindowBits ? 0 : (m_bitmap << shift);
+        m_bitmap |= 1U;
+        m_highest_counter = counter;
+        return true;
+    }
+
+    const std::uint64_t delta = m_highest_counter - counter;
+    if (delta >= ReplayWindowBits) {
+        return false;
+    }
+    const std::uint64_t mask = std::uint64_t{1} << delta;
+    if ((m_bitmap & mask) != 0) {
+        return false;
+    }
+    m_bitmap |= mask;
+    return true;
+}
+
+void ReplayWindow::Reset() {
+    m_highest_counter = 0;
+    m_bitmap = 0;
+    m_initialized = false;
+}
+
+void noise_keypair::Establish(
+    std::uint32_t local_index,
+    std::uint32_t remote_index,
+    MonotonicTime birth_time,
+    const noise_symmetric_key &sending_key,
+    const noise_symmetric_key &receiving_key,
+    std::uint64_t send_counter) {
+    Reset();
+    if (local_index == 0 || remote_index == 0 ||
+        birth_time < MonotonicTime::zero() ||
+        !sending_key.valid || !receiving_key.valid) {
         return;
     }
 
-    crypto::secure_clear(keypair, sizeof(*keypair));
+    m_state = KeypairState::Established;
+    m_local_index = local_index;
+    m_remote_index = remote_index;
+    m_birth_time = birth_time;
+    m_sending_key = sending_key;
+    m_receiving_key = receiving_key;
+    m_send_counter = send_counter;
+}
+
+void noise_keypair::Reset() {
+    crypto::secure_clear(this, sizeof(*this));
+}
+
+bool noise_keypair::IsValid() const {
+    return m_state == KeypairState::Established &&
+           m_local_index != 0 && m_remote_index != 0 &&
+           m_sending_key.valid && m_receiving_key.valid;
+}
+
+bool noise_keypair::CanSendAt(MonotonicTime now) const {
+    return SendStateAt(now) == KeypairSendState::Ready;
+}
+
+bool noise_keypair::CanReceiveAt(MonotonicTime now) const {
+    const KeypairAgeResult age = AgeAt(now);
+    return age.valid && age.age < RejectAfterTime;
+}
+
+KeypairSendState noise_keypair::SendStateAt(MonotonicTime now) const {
+    const KeypairAgeResult age = AgeAt(now);
+    if (!age.valid) {
+        return KeypairSendState::Invalid;
+    }
+    if (age.age >= RejectAfterTime) {
+        return KeypairSendState::Expired;
+    }
+    if (m_send_counter >= RejectAfterMessages) {
+        return KeypairSendState::CounterExhausted;
+    }
+
+    return KeypairSendState::Ready;
+}
+
+const char *GetKeypairSendStateName(KeypairSendState state) {
+    switch (state) {
+        case KeypairSendState::Ready:
+            return "ready";
+        case KeypairSendState::Invalid:
+            return "invalid";
+        case KeypairSendState::Expired:
+            return "expired";
+        case KeypairSendState::CounterExhausted:
+            return "counter_exhausted";
+    }
+
+    return "unknown";
+}
+
+KeypairSendState noise_keypair::ReserveSendCounterAt(
+    MonotonicTime now,
+    std::uint64_t &out_counter) {
+    const KeypairSendState state = SendStateAt(now);
+    if (state != KeypairSendState::Ready) {
+        return state;
+    }
+
+    out_counter = m_send_counter;
+    ++m_send_counter;
+    return KeypairSendState::Ready;
+}
+
+KeypairAgeResult noise_keypair::AgeAt(MonotonicTime now) const {
+    if (!IsValid() || now < m_birth_time) {
+        return {};
+    }
+    return {.valid = true, .age = now - m_birth_time};
 }
 
 bool noise_is_valid_encoded_key(std::string_view text, bool allow_empty) {
@@ -194,9 +309,9 @@ bool noise_is_valid_encoded_key(std::string_view text, bool allow_empty) {
         return allow_empty;
     }
 
-    std::uint8_t decoded[NoisePublicKeySize] = {};
+    std::array<std::uint8_t, NoisePublicKeySize> decoded{};
     const bool ok = DecodeWireGuardKey(decoded, text);
-    crypto::secure_clear(decoded, sizeof(decoded));
+    crypto::secure_clear(decoded.data(), decoded.size());
     return ok;
 }
 
@@ -211,7 +326,7 @@ bool noise_parse_private_key(noise_private_key *out_key, std::string_view text) 
     }
 
     ClampX25519PrivateKey(key.bytes);
-    if (IsAllZero(key.bytes, sizeof(key.bytes))) {
+    if (IsAllZero(key.bytes)) {
         crypto::secure_clear(&key, sizeof(key));
         return false;
     }
@@ -263,7 +378,7 @@ bool noise_derive_public_key_text(std::span<char> out_text, std::string_view pri
     noise_private_key private_key{};
     noise_public_key public_key{};
     if (!noise_parse_private_key(&private_key, private_key_text) ||
-        !crypto::x25519_public_key(public_key.bytes, private_key.bytes)) {
+        !crypto::x25519_public_key(public_key.bytes.data(), private_key.bytes.data())) {
         crypto::secure_clear(&private_key, sizeof(private_key));
         crypto::secure_clear(&public_key, sizeof(public_key));
         return false;
@@ -290,7 +405,9 @@ bool noise_static_identity_init(
         noise_static_identity_reset(identity);
         return false;
     }
-    if (!crypto::x25519_public_key(identity->static_public.bytes, identity->static_private.bytes)) {
+    if (!crypto::x25519_public_key(
+            identity->static_public.bytes.data(),
+            identity->static_private.bytes.data())) {
         noise_static_identity_reset(identity);
         return false;
     }
@@ -318,10 +435,10 @@ bool noise_precompute_static_static(
 
     noise_secret32 precomputed{};
     if (!crypto::x25519(
-            precomputed.bytes,
-            identity->static_private.bytes,
-            identity->remote_static.bytes) ||
-        IsAllZero(precomputed.bytes, sizeof(precomputed.bytes))) {
+            precomputed.bytes.data(),
+            identity->static_private.bytes.data(),
+            identity->remote_static.bytes.data()) ||
+        IsAllZero(precomputed.bytes)) {
         crypto::secure_clear(&precomputed, sizeof(precomputed));
         return false;
     }

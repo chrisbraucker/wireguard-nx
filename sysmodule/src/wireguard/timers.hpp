@@ -2,6 +2,7 @@
 
 #include "wgnx/platform/work.hpp"
 
+#include <chrono>
 #include <cstdint>
 
 namespace wgnx::wireguard {
@@ -13,9 +14,19 @@ enum class TimerHook : std::uint8_t {
     Rekey = 3,
 };
 
+using TimerDeadline = std::chrono::milliseconds;
+
+constexpr TimerDeadline TimerDeadlineFromJiffies(wgnx::platform::jiffies_t value) {
+    return TimerDeadline{value};
+}
+
+constexpr wgnx::platform::jiffies_t TimerDeadlineToJiffies(TimerDeadline value) {
+    return static_cast<wgnx::platform::jiffies_t>(value.count());
+}
+
 struct wg_timer_hook_state {
     bool pending{false};
-    wgnx::platform::jiffies_t expires{0};
+    TimerDeadline deadline{};
 };
 
 /*
@@ -38,7 +49,7 @@ void wg_timers_init(wg_timers *timers);
 void wg_timers_schedule(
     wg_timers *timers,
     TimerHook hook,
-    wgnx::platform::jiffies_t expires,
+    TimerDeadline deadline,
     const char *peer_name);
 void wg_timers_cancel(wg_timers *timers, TimerHook hook, const char *peer_name);
 void wg_timers_cancel_all(wg_timers *timers, const char *peer_name);

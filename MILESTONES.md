@@ -8,6 +8,40 @@ The completed proof-of-concept roadmap is retained in
 [POC_MILESTONES.md](POC_MILESTONES.md). It records how the project reached its
 current state and is not the implementation plan for this phase.
 
+## Refactor Approach
+
+This roadmap treats the current implementation as a validated proof of concept,
+not as a compatibility contract. Until this refactor establishes a stable
+foundation, preserving existing internal APIs, source layout, development IPC
+shapes, or incidental runtime behavior is subordinate to producing a coherent,
+testable, and maintainable implementation.
+
+In practical terms, work in these milestones may:
+
+- rename, move, split, or remove types, functions, and source files
+- replace internal interfaces and data representations rather than layer new
+  behavior over weak ownership or lifecycle boundaries
+- update in-tree clients together with a development IPC change instead of
+  retaining compatibility adapters
+- remove obsolete proof-of-concept paths when their replacement is covered and
+  demonstrably working
+
+The compatibility exception is the behavior that defines the product: WireGuard
+protocol correctness and interoperability with upstream peers must remain
+intact. Each milestone should also end with its deterministic tests passing and
+the applicable on-device vertical slice working. Development IPC changes must
+continue to increment the API version so incompatible binaries fail explicitly
+rather than communicating under a misleading shared version.
+
+This approach accepts larger diffs, temporary API instability, coordinated
+changes across components, and reduced usefulness of out-of-tree consumers
+during development. In return, it avoids preserving accidental complexity,
+allows ownership and lifecycle boundaries to be corrected at their source, and
+reduces the long-term cost and risk of building upstream lifecycle behavior and
+Horizon integration on the proof-of-concept structure. Compatibility policy and
+security guarantees must be defined before the service is presented as stable
+or public.
+
 ## Current Baseline
 
 The sysmodule can establish a tunnel with a real WireGuard peer and exchange
@@ -119,6 +153,8 @@ every state-machine change.
 
 ## Milestone 2: Typed Protocol And Ownership Model
 
+**Status:** Implementation complete; real-peer on-device regression confirmed.
+
 ### Goal
 
 Establish maintainable C++ boundaries for packets, keypairs, peer state, and
@@ -141,6 +177,8 @@ timers before adding more lifecycle complexity.
 - all Milestone 1 tests and the on-device round trip remain passing
 
 ## Milestone 3: Key Validity And Outbound Packet Staging
+
+**Status:** Implementation complete; real-peer on-device regression pending.
 
 ### Goal
 

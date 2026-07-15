@@ -21,6 +21,11 @@ int main() {
         TestCase{"protocol.deterministic-handshake", wgnx::test::TestDeterministicHandshake},
         TestCase{"protocol.bidirectional-transport", wgnx::test::TestBidirectionalTransport},
         TestCase{"protocol.timer-intent", wgnx::test::TestTimerIntent},
+        TestCase{"protocol.typed-message-boundaries", wgnx::test::TestTypedMessageBoundaries},
+        TestCase{"protocol.keypair-lifetime", wgnx::test::TestKeypairLifetime},
+        TestCase{"protocol.bounded-queue-observability", wgnx::test::TestBoundedQueueObservability},
+        TestCase{"protocol.keypair-protocol-limits", wgnx::test::TestKeypairProtocolLimits},
+        TestCase{"protocol.outbound-staging-lifecycle", wgnx::test::TestOutboundStagingLifecycle},
     };
 
     return wgnx::test::RunTests(tests);

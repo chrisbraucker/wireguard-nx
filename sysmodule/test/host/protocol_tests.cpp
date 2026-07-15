@@ -6,10 +6,13 @@
 #include "wireguard/data.hpp"
 #include "wireguard/device.hpp"
 #include "wireguard/handshake.hpp"
+#include "wireguard/inner_packet.hpp"
 #include "wireguard/messages.hpp"
 #include "wireguard/timers.hpp"
 
+#include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -47,27 +50,26 @@ public:
     static constexpr std::size_t Capacity = 8;
     static constexpr std::size_t MaximumPacketSize = 2048;
 
-    bool Send(const wgnx::platform::packet_buffer &packet) {
-        if (m_count == Capacity || packet.data == nullptr || packet.len > MaximumPacketSize) {
+    bool Send(std::span<const std::uint8_t> packet) {
+        if (m_count == Capacity || packet.size() > MaximumPacketSize) {
             return false;
         }
 
         Datagram &datagram = m_datagrams[(m_head + m_count) % Capacity];
-        std::memcpy(datagram.bytes.data(), packet.data, packet.len);
-        datagram.size = packet.len;
+        std::ranges::copy(packet, datagram.bytes.begin());
+        datagram.size = packet.size();
         ++m_count;
         ++m_total_sent;
         return true;
     }
 
-    bool Receive(wgnx::platform::packet_buffer *out_packet) {
-        if (out_packet == nullptr || m_count == 0) {
+    bool Receive(std::span<const std::uint8_t> &out_packet) {
+        if (m_count == 0) {
             return false;
         }
 
         Datagram &datagram = m_datagrams[m_head];
-        wgnx::platform::packet_init(out_packet, datagram.bytes.data(), datagram.bytes.size());
-        out_packet->len = datagram.size;
+        out_packet = std::span<const std::uint8_t>(datagram.bytes.data(), datagram.size);
         m_head = (m_head + 1) % Capacity;
         --m_count;
         return true;
@@ -185,25 +187,25 @@ struct ProtocolPair {
             return false;
         }
 
-        wgnx::platform::static_packet_buffer<wgnx::wireguard::HandshakeInitiationSize> packet{};
-        if (wgnx::wireguard::SerializeHandshakeInitiation(&packet.packet, initiation) !=
+        std::array<std::uint8_t, wgnx::wireguard::HandshakeInitiationSize> packet{};
+        if (wgnx::wireguard::SerializeHandshakeInitiation(packet, initiation) !=
             wgnx::wireguard::ParseError::None) {
             return false;
         }
         if (out_bytes != nullptr) {
-            std::memcpy(out_bytes->data(), packet.packet.data, packet.packet.len);
+            *out_bytes = packet;
         }
-        return initiator_to_responder.Send(packet.packet);
+        return initiator_to_responder.Send(packet);
     }
 
     bool ReceiveInitiationAndSendResponse() {
-        wgnx::platform::packet_buffer incoming{};
-        if (!initiator_to_responder.Receive(&incoming)) {
+        std::span<const std::uint8_t> incoming{};
+        if (!initiator_to_responder.Receive(incoming)) {
             return false;
         }
 
         wgnx::wireguard::message_handshake_initiation initiation{};
-        if (!wgnx::wireguard::ParseHandshakeInitiation(&incoming, &initiation).success ||
+        if (!wgnx::wireguard::ParseHandshakeInitiation(incoming, initiation).success ||
             !wgnx::wireguard::noise_handshake_consume_initiation(&initiation, responder)) {
             return false;
         }
@@ -213,21 +215,21 @@ struct ProtocolPair {
             return false;
         }
 
-        wgnx::platform::static_packet_buffer<wgnx::wireguard::HandshakeResponseSize> packet{};
-        if (wgnx::wireguard::SerializeHandshakeResponse(&packet.packet, response) !=
+        std::array<std::uint8_t, wgnx::wireguard::HandshakeResponseSize> packet{};
+        if (wgnx::wireguard::SerializeHandshakeResponse(packet, response) !=
             wgnx::wireguard::ParseError::None) {
             return false;
         }
-        return responder_to_initiator.Send(packet.packet);
+        return responder_to_initiator.Send(packet);
     }
 
     bool ReceiveResponseAndDeriveSession() {
-        wgnx::platform::packet_buffer incoming{};
-        if (!responder_to_initiator.Receive(&incoming)) {
+        std::span<const std::uint8_t> incoming{};
+        if (!responder_to_initiator.Receive(incoming)) {
             return false;
         }
         if (wgnx::wireguard::noise_handshake_consume_incoming_packet(
-                &incoming,
+                incoming,
                 &initiator_device,
                 initiator) != wgnx::wireguard::HandshakePacketOutcome::ResponseConsumed) {
             return false;
@@ -243,30 +245,30 @@ struct ProtocolPair {
 bool CheckSessionKeys(TestContext &context, const ProtocolPair &pair) {
     const auto &initiator_keypair = pair.initiator->current_keypair;
     const auto &responder_keypair = pair.responder->current_keypair;
-    if (!initiator_keypair.valid) {
+    if (!initiator_keypair.IsValid()) {
         context.Fail("initiator_keypair.valid", __FILE__, __LINE__, "initiator current keypair is invalid");
         return false;
     }
-    if (!responder_keypair.valid) {
+    if (!responder_keypair.IsValid()) {
         context.Fail("responder_keypair.valid", __FILE__, __LINE__, "responder current keypair is invalid");
         return false;
     }
-    if (initiator_keypair.birthdate_ns != SessionBirthTime ||
-        responder_keypair.birthdate_ns != SessionBirthTime) {
+    if (initiator_keypair.BirthTime() != wgnx::wireguard::MonotonicTime{SessionBirthTime} ||
+        responder_keypair.BirthTime() != wgnx::wireguard::MonotonicTime{SessionBirthTime}) {
         context.Fail("keypair birth time", __FILE__, __LINE__, "controlled monotonic time was not used");
         return false;
     }
     if (std::memcmp(
-            initiator_keypair.sending_key.bytes,
-            responder_keypair.receiving_key.bytes,
-            sizeof(initiator_keypair.sending_key.bytes)) != 0) {
+            initiator_keypair.SendingKey().bytes.data(),
+            responder_keypair.ReceivingKey().bytes.data(),
+            initiator_keypair.SendingKey().bytes.size()) != 0) {
         context.Fail("session keys", __FILE__, __LINE__, "initiator sending key does not match responder receiving key");
         return false;
     }
     if (std::memcmp(
-            responder_keypair.sending_key.bytes,
-            initiator_keypair.receiving_key.bytes,
-            sizeof(responder_keypair.sending_key.bytes)) != 0) {
+            responder_keypair.SendingKey().bytes.data(),
+            initiator_keypair.ReceivingKey().bytes.data(),
+            responder_keypair.SendingKey().bytes.size()) != 0) {
         context.Fail("session keys", __FILE__, __LINE__, "responder sending key does not match initiator receiving key");
         return false;
     }
@@ -287,33 +289,34 @@ TransportResult SendTransport(
     std::span<const std::uint8_t> payload,
     InMemoryDatagramLink *link) {
     TransportResult result{};
-    wgnx::platform::static_packet_buffer<2048> outgoing{};
-    result.error = wgnx::wireguard::noise_create_transport_data_packet(
-        &outgoing.packet,
+    std::array<std::uint8_t, 2048> outgoing{};
+    const auto create_result = wgnx::wireguard::noise_create_transport_data_packet(
+        outgoing,
         *sender,
         payload);
+    result.error = create_result.error;
     if (result.error != wgnx::wireguard::TransportDataError::None) {
         return result;
     }
-    if (!link->Send(outgoing.packet)) {
+    const auto wire_packet = std::span<const std::uint8_t>(outgoing).first(create_result.packet_size);
+    if (!link->Send(wire_packet)) {
         result.error = wgnx::wireguard::TransportDataError::InvalidPacket;
         return result;
     }
 
-    ++sender->send_counter;
-    std::memcpy(result.wire_packet.data(), outgoing.packet.data, outgoing.packet.len);
-    result.wire_packet_size = outgoing.packet.len;
+    std::ranges::copy(wire_packet, result.wire_packet.begin());
+    result.wire_packet_size = wire_packet.size();
 
-    wgnx::platform::packet_buffer incoming{};
-    if (!link->Receive(&incoming)) {
+    std::span<const std::uint8_t> incoming{};
+    if (!link->Receive(incoming)) {
         result.error = wgnx::wireguard::TransportDataError::InvalidPacket;
         return result;
     }
     result.error = wgnx::wireguard::noise_consume_transport_data_packet(
-        &incoming,
-        receiver,
+        incoming,
+        *receiver,
         result.plaintext,
-        &result.decrypt);
+        result.decrypt);
     return result;
 }
 
@@ -487,25 +490,24 @@ void TestBidirectionalTransport(TestContext &context) {
             second.decrypt.header.counter == 1,
         "second initiator packet did not advance the send counter");
 
-    wgnx::platform::packet_buffer replay{};
-    wgnx::platform::packet_init(&replay, const_cast<std::uint8_t *>(second.wire_packet.data()), second.wire_packet_size);
-    replay.len = second.wire_packet_size;
+    const auto replay = std::span<const std::uint8_t>(second.wire_packet).first(second.wire_packet_size);
     std::array<std::uint8_t, 256> replay_plaintext{};
+    wgnx::wireguard::TransportDataDecryptResult replay_result{};
     const auto replay_error = wgnx::wireguard::noise_consume_transport_data_packet(
-        &replay,
-        &pair.responder->current_keypair,
+        replay,
+        pair.responder->current_keypair,
         replay_plaintext,
-        nullptr);
+        replay_result);
     WGNX_TEST_REQUIRE(
         context,
         replay_error == wgnx::wireguard::TransportDataError::ReplayRejected,
         wgnx::wireguard::GetTransportDataErrorName(replay_error));
     WGNX_TEST_REQUIRE(
         context,
-        pair.initiator->current_keypair.send_counter == 2 &&
-            pair.responder->current_keypair.send_counter == 1 &&
-            pair.initiator->current_keypair.receive_counter == 0 &&
-            pair.responder->current_keypair.receive_counter == 1,
+        pair.initiator->current_keypair.SendCounter() == 2 &&
+            pair.responder->current_keypair.SendCounter() == 1 &&
+            pair.initiator->current_keypair.ReceiveReplayWindow().HighestCounter() == 0 &&
+            pair.responder->current_keypair.ReceiveReplayWindow().HighestCounter() == 1,
         "final send or receive counter state diverged");
     WGNX_TEST_REQUIRE(
         context,
@@ -526,29 +528,30 @@ void TestTimerIntent(TestContext &context) {
     wgnx::wireguard::wg_timers_schedule(
         &timers,
         wgnx::wireguard::TimerHook::RetransmitHandshake,
-        5'000,
+        std::chrono::milliseconds{5'000},
         pair.initiator->name);
     wgnx::wireguard::wg_timers_schedule(
         &timers,
         wgnx::wireguard::TimerHook::Rekey,
-        120'000,
+        std::chrono::milliseconds{120'000},
         pair.initiator->name);
     WGNX_TEST_REQUIRE(
         context,
         timers.retransmit_handshake.pending &&
-            timers.retransmit_handshake.expires == 5'000 &&
+            timers.retransmit_handshake.deadline == std::chrono::milliseconds{5'000} &&
             timers.rekey.pending &&
-            timers.rekey.expires == 120'000,
+            timers.rekey.deadline == std::chrono::milliseconds{120'000},
         "timer schedule state or deadline diverged");
 
     wgnx::wireguard::wg_timers_schedule(
         &timers,
         wgnx::wireguard::TimerHook::RetransmitHandshake,
-        7'500,
+        std::chrono::milliseconds{7'500},
         pair.initiator->name);
     WGNX_TEST_REQUIRE(
         context,
-        timers.retransmit_handshake.pending && timers.retransmit_handshake.expires == 7'500,
+        timers.retransmit_handshake.pending &&
+            timers.retransmit_handshake.deadline == std::chrono::milliseconds{7'500},
         "rescheduling did not replace the timer deadline");
 
     wgnx::wireguard::wg_timers_cancel(
@@ -558,11 +561,364 @@ void TestTimerIntent(TestContext &context) {
     WGNX_TEST_REQUIRE(
         context,
         !timers.retransmit_handshake.pending &&
-            timers.retransmit_handshake.expires == 0 &&
+            timers.retransmit_handshake.deadline == wgnx::wireguard::TimerDeadline::zero() &&
             timers.rekey.pending,
         "single timer cancellation changed the wrong timer state");
     wgnx::wireguard::wg_timers_cancel_all(&timers, pair.initiator->name);
     WGNX_TEST_REQUIRE(context, !wgnx::wireguard::wg_timers_any_pending(timers), "cancel-all left timer intent pending");
+}
+
+void TestTypedMessageBoundaries(TestContext &context) {
+    using namespace wgnx::wireguard;
+
+    message_handshake_initiation initiation{};
+    SetMessageType(initiation.type, MessageType::HandshakeInitiation);
+    initiation.sender_index = InitiatorIndex;
+    std::array<std::uint8_t, HandshakeInitiationSize> initiation_bytes{};
+    WGNX_TEST_REQUIRE(
+        context,
+        SerializeHandshakeInitiation(initiation_bytes, initiation) == ParseError::None,
+        "valid initiation serialization failed");
+
+    for (std::size_t size = 0; size < HandshakeInitiationSize; ++size) {
+        message_handshake_initiation parsed{};
+        const ParseResult result = ParseHandshakeInitiation(
+            std::span<const std::uint8_t>(initiation_bytes).first(size),
+            parsed);
+        if (result.success) {
+            context.Fail("undersized initiation rejected", __FILE__, __LINE__, "parser accepted truncated input");
+            return;
+        }
+    }
+
+    std::array<std::uint8_t, HandshakeInitiationSize + 1> oversized{};
+    std::ranges::copy(initiation_bytes, oversized.begin());
+    message_handshake_initiation parsed_oversized{};
+    const ParseResult oversized_result = ParseHandshakeInitiation(oversized, parsed_oversized);
+    WGNX_TEST_REQUIRE(
+        context,
+        !oversized_result.success && oversized_result.error == ParseError::InvalidLength,
+        "fixed-size initiation parser accepted trailing bytes");
+
+    std::array<std::uint8_t, HandshakeInitiationSize - 1> short_output{};
+    WGNX_TEST_REQUIRE(
+        context,
+        SerializeHandshakeInitiation(short_output, initiation) == ParseError::InsufficientCapacity,
+        "serializer did not reject an undersized destination");
+
+    message_transport_data transport{};
+    SetMessageType(transport.type, MessageType::TransportData);
+    transport.receiver_index = ResponderIndex;
+    transport.counter = 7;
+    std::array<std::uint8_t, TransportDataHeaderSize + NoiseTagSize> transport_bytes{};
+    WGNX_TEST_REQUIRE(
+        context,
+        SerializeTransportDataHeader(transport_bytes, transport) == ParseError::None,
+        "valid transport header serialization failed");
+    message_transport_data parsed_transport{};
+    WGNX_TEST_REQUIRE(
+        context,
+        ParseTransportDataHeader(transport_bytes, parsed_transport).success &&
+            parsed_transport.receiver_index == transport.receiver_index &&
+            parsed_transport.counter == transport.counter,
+        "transport parser rejected a checked variable-length packet");
+    WGNX_TEST_REQUIRE(
+        context,
+        !ParseTransportDataHeader(
+             std::span<const std::uint8_t>(transport_bytes).first(TransportDataHeaderSize - 1),
+             parsed_transport)
+             .success,
+        "transport parser accepted an undersized header");
+}
+
+void TestKeypairLifetime(TestContext &context) {
+    using namespace wgnx::wireguard;
+
+    noise_symmetric_key sending_key{};
+    noise_symmetric_key receiving_key{};
+    sending_key.valid = true;
+    receiving_key.valid = true;
+    std::ranges::fill(sending_key.bytes, 0x11);
+    std::ranges::fill(receiving_key.bytes, 0x22);
+
+    noise_keypair keypair{};
+    const MonotonicTime birth_time = std::chrono::seconds{9};
+    keypair.Establish(InitiatorIndex, ResponderIndex, birth_time, sending_key, receiving_key);
+    WGNX_TEST_REQUIRE(
+        context,
+        keypair.IsValid() && keypair.CanSendAt(birth_time) && keypair.CanReceiveAt(birth_time) &&
+            keypair.State() == KeypairState::Established,
+        "established keypair did not expose a coherent validity state");
+
+    const KeypairAgeResult before_birth = keypair.AgeAt(birth_time - std::chrono::nanoseconds{1});
+    const KeypairAgeResult at_birth = keypair.AgeAt(birth_time);
+    const KeypairAgeResult after_birth = keypair.AgeAt(birth_time + std::chrono::seconds{3});
+    WGNX_TEST_REQUIRE(
+        context,
+        !before_birth.valid &&
+            at_birth.valid && at_birth.age == MonotonicTime::zero() &&
+            after_birth.valid && after_birth.age == std::chrono::seconds{3},
+        "keypair age evaluation depends on invalid or implicit clock state");
+
+    keypair.Reset();
+    WGNX_TEST_REQUIRE(
+        context,
+        !keypair.IsValid() && keypair.State() == KeypairState::Empty &&
+            !keypair.SendingKey().valid && !keypair.ReceivingKey().valid &&
+            std::ranges::all_of(keypair.SendingKey().bytes, [](std::uint8_t byte) { return byte == 0; }) &&
+            std::ranges::all_of(keypair.ReceivingKey().bytes, [](std::uint8_t byte) { return byte == 0; }),
+        "keypair reset retained validity or session key material");
+
+    keypair.Establish(0, ResponderIndex, birth_time, sending_key, receiving_key);
+    WGNX_TEST_REQUIRE(context, !keypair.IsValid(), "zero-index keypair establishment succeeded");
+}
+
+void TestBoundedQueueObservability(TestContext &context) {
+    using namespace wgnx::wireguard;
+
+    InnerPacketQueue<2> queue{};
+    InnerPacketRecord first{.packet_id = 1};
+    InnerPacketRecord second{.packet_id = 2};
+    InnerPacketRecord overflow{.packet_id = 3};
+    WGNX_TEST_REQUIRE(
+        context,
+        queue.Push(first) == QueuePushResult::Pushed &&
+            queue.Push(second) == QueuePushResult::Pushed &&
+            queue.Push(overflow) == QueuePushResult::Full,
+        "bounded queue did not expose its overflow policy");
+
+    const QueueStatistics full_statistics = queue.Statistics();
+    WGNX_TEST_REQUIRE(
+        context,
+        full_statistics.pushed == 2 &&
+            full_statistics.popped == 0 &&
+            full_statistics.rejected_full == 1 &&
+            full_statistics.high_watermark == 2,
+        "bounded queue statistics diverged at capacity");
+
+    InnerPacketRecord popped{};
+    WGNX_TEST_REQUIRE(
+        context,
+        queue.Pop(&popped) && popped.packet_id == first.packet_id &&
+            queue.Statistics().popped == 1,
+        "bounded queue pop statistics diverged");
+}
+
+void TestKeypairProtocolLimits(TestContext &context) {
+    using namespace wgnx::wireguard;
+
+    noise_symmetric_key sending_key{};
+    noise_symmetric_key receiving_key{};
+    sending_key.valid = true;
+    receiving_key.valid = true;
+    std::ranges::fill(sending_key.bytes, 0x31);
+    std::ranges::fill(receiving_key.bytes, 0x42);
+
+    const MonotonicTime birth_time = std::chrono::seconds{30};
+    noise_keypair keypair{};
+    keypair.Establish(InitiatorIndex, ResponderIndex, birth_time, sending_key, receiving_key);
+    WGNX_TEST_REQUIRE(
+        context,
+        keypair.SendStateAt(birth_time + RejectAfterTime - std::chrono::nanoseconds{1}) ==
+                KeypairSendState::Ready &&
+            keypair.SendStateAt(birth_time + RejectAfterTime) == KeypairSendState::Expired &&
+            keypair.CanReceiveAt(birth_time + RejectAfterTime - std::chrono::nanoseconds{1}) &&
+            !keypair.CanReceiveAt(birth_time + RejectAfterTime),
+        "RejectAfterTime boundary was not enforced exactly");
+
+    noise_keypair final_counter_keypair{};
+    final_counter_keypair.Establish(
+        InitiatorIndex,
+        ResponderIndex,
+        birth_time,
+        sending_key,
+        receiving_key,
+        RejectAfterMessages - 1);
+    std::uint64_t reserved_counter = 0;
+    WGNX_TEST_REQUIRE(
+        context,
+        final_counter_keypair.ReserveSendCounterAt(birth_time, reserved_counter) ==
+                KeypairSendState::Ready &&
+            reserved_counter == RejectAfterMessages - 1 &&
+            final_counter_keypair.SendCounter() == RejectAfterMessages &&
+            final_counter_keypair.ReserveSendCounterAt(birth_time, reserved_counter) ==
+                KeypairSendState::CounterExhausted,
+        "RejectAfterMessages boundary allowed an exhausted nonce");
+
+    runtime::SetMonotonicTime(
+        static_cast<wgnx::platform::ktime_t>((birth_time + RejectAfterTime).count()));
+    std::array<std::uint8_t, 64> output{};
+    std::ranges::fill(output, 0xA5);
+    const auto expired_result = noise_create_transport_data_packet(
+        output,
+        keypair,
+        std::span<const std::uint8_t>{});
+    WGNX_TEST_REQUIRE(
+        context,
+        expired_result.error == TransportDataError::KeyExpired &&
+            keypair.SendCounter() == 0 &&
+            std::ranges::all_of(output, [](std::uint8_t byte) { return byte == 0xA5; }),
+        "expired keypair emitted bytes or consumed a nonce");
+
+    runtime::SetMonotonicTime(static_cast<wgnx::platform::ktime_t>(birth_time.count()));
+    noise_keypair exhausted_keypair{};
+    exhausted_keypair.Establish(
+        InitiatorIndex,
+        ResponderIndex,
+        birth_time,
+        sending_key,
+        receiving_key,
+        RejectAfterMessages);
+    const auto exhausted_result = noise_create_transport_data_packet(
+        output,
+        exhausted_keypair,
+        std::span<const std::uint8_t>{});
+    WGNX_TEST_REQUIRE(
+        context,
+        exhausted_result.error == TransportDataError::CounterExhausted &&
+            exhausted_keypair.SendCounter() == RejectAfterMessages,
+        "counter-exhausted keypair emitted a transport packet");
+}
+
+void TestOutboundStagingLifecycle(TestContext &context) {
+    using namespace wgnx::wireguard;
+
+    runtime::Reset(InitialRuntimeState);
+    ProtocolPair pair{};
+    WGNX_TEST_REQUIRE(context, pair.Initialize(), "protocol pair initialization failed");
+
+    constexpr std::array<std::uint8_t, 20> FirstPayload = {
+        0x45, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00, 0x00, 0x40, 0x11,
+        0x00, 0x00, 0x0A, 0x42, 0x42, 0x02, 0x0A, 0x42, 0x42, 0x01,
+    };
+    InnerPacketRecord first_record{
+        .packet_id = 41,
+        .size = static_cast<std::uint16_t>(FirstPayload.size()),
+    };
+    std::ranges::copy(FirstPayload, first_record.bytes.begin());
+    WGNX_TEST_REQUIRE(
+        context,
+        pair.initiator->staged_outbound_packets.Push(first_record) == QueuePushResult::Pushed &&
+            wg_peer_get_outbound_staging_action(*pair.initiator, GetMonotonicTime()) ==
+                OutboundStagingAction::InitiateHandshake,
+        "packet without a keypair was not staged for handshake initiation");
+
+    WGNX_TEST_REQUIRE(context, pair.CreateAndSendInitiation(), "staged-traffic initiation failed");
+    WGNX_TEST_REQUIRE(context, pair.ReceiveInitiationAndSendResponse(), "staged-traffic response failed");
+    WGNX_TEST_REQUIRE(context, pair.ReceiveResponseAndDeriveSession(), "staged-traffic session derivation failed");
+    WGNX_TEST_REQUIRE(
+        context,
+        wg_peer_get_outbound_staging_action(*pair.initiator, GetMonotonicTime()) ==
+            OutboundStagingAction::Send,
+        "session derivation did not release staged traffic");
+
+    const InnerPacketRecord *first_front = pair.initiator->staged_outbound_packets.Front();
+    WGNX_TEST_REQUIRE(context, first_front != nullptr, "staged packet disappeared during handshake");
+    const TransportResult first_send = SendTransport(
+        &pair.initiator->current_keypair,
+        &pair.responder->current_keypair,
+        std::span<const std::uint8_t>(first_front->bytes.data(), first_front->size),
+        &pair.initiator_to_responder);
+    WGNX_TEST_REQUIRE(
+        context,
+        first_send.error == TransportDataError::None &&
+            first_send.decrypt.payload_size == GetPaddedTransportPayloadSize(FirstPayload.size()) &&
+            std::ranges::equal(
+                FirstPayload,
+                std::span<const std::uint8_t>(first_send.plaintext).first(FirstPayload.size())) &&
+            std::ranges::all_of(
+                std::span<const std::uint8_t>(first_send.plaintext).subspan(
+                    FirstPayload.size(),
+                    first_send.decrypt.payload_size - FirstPayload.size()),
+                [](std::uint8_t byte) { return byte == 0; }),
+        "staged packet was not transmitted after session derivation");
+    InnerPacketRecord sent_record{};
+    WGNX_TEST_REQUIRE(
+        context,
+        pair.initiator->staged_outbound_packets.Pop(&sent_record) &&
+            sent_record.packet_id == first_record.packet_id,
+        "transmitted staged packet was not retired exactly once");
+
+    const MonotonicTime expired_time =
+        pair.initiator->current_keypair.BirthTime() + RejectAfterTime;
+    runtime::SetMonotonicTime(static_cast<wgnx::platform::ktime_t>(expired_time.count()));
+    InnerPacketRecord expired_record{
+        .packet_id = 42,
+        .size = static_cast<std::uint16_t>(FirstPayload.size()),
+    };
+    std::ranges::copy(FirstPayload, expired_record.bytes.begin());
+    WGNX_TEST_REQUIRE(
+        context,
+        pair.initiator->staged_outbound_packets.Push(expired_record) == QueuePushResult::Pushed &&
+            wg_peer_get_outbound_staging_action(*pair.initiator, GetMonotonicTime()) ==
+                OutboundStagingAction::InitiateHandshake &&
+            pair.initiator->staged_outbound_packets.Size() == 1,
+        "submission after key expiry did not remain staged for a fresh handshake");
+
+    const noise_symmetric_key initiator_sending = pair.initiator->current_keypair.SendingKey();
+    const noise_symmetric_key initiator_receiving = pair.initiator->current_keypair.ReceivingKey();
+    const noise_symmetric_key responder_sending = pair.responder->current_keypair.SendingKey();
+    const noise_symmetric_key responder_receiving = pair.responder->current_keypair.ReceivingKey();
+    const MonotonicTime replacement_birth = expired_time + std::chrono::seconds{1};
+    runtime::SetMonotonicTime(static_cast<wgnx::platform::ktime_t>(replacement_birth.count()));
+    pair.initiator->current_keypair.Establish(
+        InitiatorIndex + 1,
+        ResponderIndex + 1,
+        replacement_birth,
+        initiator_sending,
+        initiator_receiving);
+    pair.responder->current_keypair.Establish(
+        ResponderIndex + 1,
+        InitiatorIndex + 1,
+        replacement_birth,
+        responder_sending,
+        responder_receiving);
+    WGNX_TEST_REQUIRE(
+        context,
+        wg_peer_get_outbound_staging_action(*pair.initiator, GetMonotonicTime()) ==
+                OutboundStagingAction::Send &&
+            pair.initiator->staged_outbound_packets.Size() == 1,
+        "replacement key derivation did not release the expired-key submission");
+
+    const InnerPacketRecord *replacement_front = pair.initiator->staged_outbound_packets.Front();
+    WGNX_TEST_REQUIRE(context, replacement_front != nullptr, "expired-key submission disappeared");
+    const TransportResult replacement_send = SendTransport(
+        &pair.initiator->current_keypair,
+        &pair.responder->current_keypair,
+        std::span<const std::uint8_t>(replacement_front->bytes.data(), replacement_front->size),
+        &pair.initiator_to_responder);
+    WGNX_TEST_REQUIRE(
+        context,
+        replacement_send.error == TransportDataError::None &&
+            replacement_send.decrypt.payload_size == GetPaddedTransportPayloadSize(FirstPayload.size()),
+        "expired-key submission was not transmitted with the replacement keypair");
+    WGNX_TEST_REQUIRE(
+        context,
+        pair.initiator->staged_outbound_packets.Pop(&sent_record) &&
+            sent_record.packet_id == expired_record.packet_id,
+        "replacement-key transmission did not retire its staged packet");
+
+    for (std::size_t i = 0; i < PeerStagedPacketCapacity; ++i) {
+        InnerPacketRecord shutdown_record{.packet_id = 43 + i};
+        WGNX_TEST_REQUIRE(
+            context,
+            pair.initiator->staged_outbound_packets.Push(shutdown_record) == QueuePushResult::Pushed,
+            "peer staging queue reached capacity early");
+    }
+    InnerPacketRecord overflow_record{.packet_id = 43 + PeerStagedPacketCapacity};
+    WGNX_TEST_REQUIRE(
+        context,
+        pair.initiator->staged_outbound_packets.Push(overflow_record) == QueuePushResult::Full &&
+            pair.initiator->staged_outbound_packets.Statistics().rejected_full == 1 &&
+            pair.initiator->staged_outbound_packets.Size() == PeerStagedPacketCapacity,
+        "peer staging queue did not apply reject-new overflow policy");
+    WGNX_TEST_REQUIRE(
+        context,
+        wg_peer_clear_staged_outbound_packets(pair.initiator) == PeerStagedPacketCapacity &&
+            pair.initiator->staged_outbound_packets.Size() == 0 &&
+            wg_peer_get_outbound_staging_action(*pair.initiator, GetMonotonicTime()) ==
+                OutboundStagingAction::Idle,
+        "peer shutdown retained staged outbound traffic");
 }
 
 } // namespace wgnx::test

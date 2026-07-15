@@ -5,7 +5,6 @@
 #include "wireguard/index_allocator.hpp"
 #include "wireguard/peer.hpp"
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
 
@@ -35,9 +34,9 @@ struct wg_index_registry {
  * Deviation from Linux:
  * Each current config entry maps to one device with one instantiated peer,
  * because the project config model is currently single-peer per tunnel entry.
- * The implication is that `wg_device` keeps array-based peer ownership for
- * future expansion, but `wg_device_init_from_config_entry` currently populates
- * exactly one peer.
+ * Each config entry is a complete tunnel with exactly one remote peer, so the
+ * device owns that peer directly. Multi-peer interface support would require a
+ * different config and routing model rather than an unused nested peer array.
  */
 struct wg_device {
     char name[sizeof(wgnx::PeerInfo::name)]{};
@@ -50,8 +49,8 @@ struct wg_device {
     bool has_dns{false};
     wg_index_allocator index_allocator{};
     wg_index_registry index_registry{};
-    std::array<wg_peer, wgnx::MaxPeers> peers{};
-    std::size_t peer_count{0};
+    wg_peer peer{};
+    bool has_peer{false};
 };
 
 bool wg_device_init_from_config_entry(wg_device *device, const wgnx::PeerConfigEntry &config);

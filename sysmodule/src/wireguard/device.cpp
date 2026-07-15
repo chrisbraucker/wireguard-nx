@@ -65,12 +65,12 @@ bool wg_device_init_from_config_entry(wg_device *device, const wgnx::PeerConfigE
     wg_index_allocator_init(&device->index_allocator);
     wg_device_clear_index_registry(device);
 
-    wg_peer_init_from_config(&device->peers[0], config);
-    if (!wg_peer_prepare_static_identity(&device->peers[0], config.private_key.data())) {
+    wg_peer_init_from_config(&device->peer, config);
+    if (!wg_peer_prepare_static_identity(&device->peer, config.private_key.data())) {
         wg_device_reset(device);
         return false;
     }
-    device->peer_count = 1;
+    device->has_peer = true;
     return true;
 }
 
@@ -118,15 +118,21 @@ void wg_device_refresh_keypair_indices(wg_device *device, const wg_peer *peer) {
     SetRegistryEntry(
         device,
         wg_index_slot::CurrentKeypair,
-        peer != nullptr && peer->current_keypair.valid ? peer->current_keypair.local_index : 0);
+        peer != nullptr && peer->current_keypair.IsValid()
+            ? peer->current_keypair.LocalIndex()
+            : 0);
     SetRegistryEntry(
         device,
         wg_index_slot::NextKeypair,
-        peer != nullptr && peer->next_keypair.valid ? peer->next_keypair.local_index : 0);
+        peer != nullptr && peer->next_keypair.IsValid()
+            ? peer->next_keypair.LocalIndex()
+            : 0);
     SetRegistryEntry(
         device,
         wg_index_slot::PreviousKeypair,
-        peer != nullptr && peer->previous_keypair.valid ? peer->previous_keypair.local_index : 0);
+        peer != nullptr && peer->previous_keypair.IsValid()
+            ? peer->previous_keypair.LocalIndex()
+            : 0);
 }
 
 wg_index_slot wg_device_lookup_index_slot(const wg_device *device, std::uint32_t index) {
@@ -188,11 +194,11 @@ const noise_keypair *wg_peer_keypair_for_slot(const wg_peer *peer, wg_index_slot
 }
 
 wg_peer *wg_device_first_peer(wg_device *device) {
-    if (device == nullptr || device->peer_count == 0) {
+    if (device == nullptr || !device->has_peer) {
         return nullptr;
     }
 
-    return &device->peers[0];
+    return &device->peer;
 }
 
 const wg_peer *wg_device_first_peer(const wg_device *device) {

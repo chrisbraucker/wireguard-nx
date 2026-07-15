@@ -1,7 +1,9 @@
 #pragma once
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 
 namespace wgnx::wireguard {
 
@@ -29,5 +31,12 @@ constexpr inline std::size_t EncryptedStaticSize = NoisePublicKeySize + NoiseTag
 constexpr inline std::size_t EncryptedTimestampSize = TAI64NTimestampSize + NoiseTagSize;
 constexpr inline std::size_t EncryptedNothingSize = NoiseTagSize;
 constexpr inline std::size_t EncryptedCookieSize = CookieValueSize + NoiseTagSize;
+
+// WireGuard protocol limits, matching wireguard-go/device/constants.go.
+constexpr inline std::uint64_t RekeyAfterMessages = std::uint64_t{1} << 60U;
+constexpr inline std::uint64_t RejectAfterMessages =
+    std::numeric_limits<std::uint64_t>::max() - (std::uint64_t{1} << 13U);
+constexpr inline auto RekeyAfterTime = std::chrono::seconds{120};
+constexpr inline auto RejectAfterTime = std::chrono::seconds{180};
 
 } // namespace wgnx::wireguard

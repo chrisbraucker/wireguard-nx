@@ -1,7 +1,5 @@
 #pragma once
 
-#include "wgnx/platform/packet.hpp"
-
 #include "wireguard/messages.hpp"
 
 #include <span>
@@ -20,7 +18,7 @@ struct PacketDispatchHandlers {
 };
 
 ParseResult DispatchPacket(
-    const wgnx::platform::packet_buffer *packet,
+    std::span<const std::uint8_t> packet,
     const PacketDispatchHandlers &handlers);
 
 } // namespace wgnx::wireguard

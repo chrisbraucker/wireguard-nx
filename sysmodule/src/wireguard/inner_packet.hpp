@@ -36,19 +36,36 @@ struct InnerPacketRecord {
     std::uint16_t size{0};
 };
 
+enum class QueuePushResult : std::uint8_t {
+    Pushed = 0,
+    Full,
+};
+
+struct QueueStatistics {
+    std::uint64_t pushed{0};
+    std::uint64_t popped{0};
+    std::uint64_t rejected_full{0};
+    std::size_t high_watermark{0};
+};
+
 template<std::size_t Capacity>
 class InnerPacketQueue {
 public:
     static_assert(Capacity > 0);
 
-    bool Push(const InnerPacketRecord &packet) {
+    QueuePushResult Push(const InnerPacketRecord &packet) {
         if (m_count == Capacity) {
-            return false;
+            ++m_statistics.rejected_full;
+            return QueuePushResult::Full;
         }
 
         m_records[(m_head + m_count) % Capacity] = packet;
         ++m_count;
-        return true;
+        ++m_statistics.pushed;
+        if (m_count > m_statistics.high_watermark) {
+            m_statistics.high_watermark = m_count;
+        }
+        return QueuePushResult::Pushed;
     }
 
     const InnerPacketRecord *Front() const {
@@ -63,12 +80,17 @@ public:
         if (out != nullptr) {
             *out = m_records[m_head];
         }
+        m_records[m_head] = {};
         m_head = (m_head + 1) % Capacity;
         --m_count;
+        ++m_statistics.popped;
         return true;
     }
 
     void Clear() {
+        for (std::size_t i = 0; i < m_count; ++i) {
+            m_records[(m_head + i) % Capacity] = {};
+        }
         m_head = 0;
         m_count = 0;
     }
@@ -81,10 +103,15 @@ public:
         return Capacity;
     }
 
+    const QueueStatistics &Statistics() const {
+        return m_statistics;
+    }
+
 private:
     std::array<InnerPacketRecord, Capacity> m_records{};
     std::size_t m_head{0};
     std::size_t m_count{0};
+    QueueStatistics m_statistics{};
 };
 
 } // namespace wgnx::wireguard

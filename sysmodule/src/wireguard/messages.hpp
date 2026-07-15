@@ -1,53 +1,52 @@
 #pragma once
 
-#include "wgnx/platform/packet.hpp"
-
 #include "wireguard/constants.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 
 namespace wgnx::wireguard {
 
 struct message_macs {
-    std::uint8_t mac1[NoiseMacSize];
-    std::uint8_t mac2[NoiseMacSize];
+    std::array<std::uint8_t, NoiseMacSize> mac1{};
+    std::array<std::uint8_t, NoiseMacSize> mac2{};
 };
 
 struct message_handshake_initiation {
-    std::uint32_t type;
-    std::uint32_t sender_index;
-    std::uint8_t unencrypted_ephemeral[NoisePublicKeySize];
-    std::uint8_t encrypted_static[EncryptedStaticSize];
-    std::uint8_t encrypted_timestamp[EncryptedTimestampSize];
+    std::uint32_t type{0};
+    std::uint32_t sender_index{0};
+    std::array<std::uint8_t, NoisePublicKeySize> unencrypted_ephemeral{};
+    std::array<std::uint8_t, EncryptedStaticSize> encrypted_static{};
+    std::array<std::uint8_t, EncryptedTimestampSize> encrypted_timestamp{};
     message_macs macs;
 };
 
 struct message_handshake_response {
-    std::uint32_t type;
-    std::uint32_t sender_index;
-    std::uint32_t receiver_index;
-    std::uint8_t unencrypted_ephemeral[NoisePublicKeySize];
-    std::uint8_t encrypted_nothing[EncryptedNothingSize];
+    std::uint32_t type{0};
+    std::uint32_t sender_index{0};
+    std::uint32_t receiver_index{0};
+    std::array<std::uint8_t, NoisePublicKeySize> unencrypted_ephemeral{};
+    std::array<std::uint8_t, EncryptedNothingSize> encrypted_nothing{};
     message_macs macs;
 };
 
 struct message_handshake_cookie {
-    std::uint32_t type;
-    std::uint32_t receiver_index;
-    std::uint8_t nonce[CookieNonceSize];
-    std::uint8_t encrypted_cookie[EncryptedCookieSize];
+    std::uint32_t type{0};
+    std::uint32_t receiver_index{0};
+    std::array<std::uint8_t, CookieNonceSize> nonce{};
+    std::array<std::uint8_t, EncryptedCookieSize> encrypted_cookie{};
 };
 
 struct message_transport_data {
-    std::uint32_t type;
-    std::uint32_t receiver_index;
-    std::uint64_t counter;
+    std::uint32_t type{0};
+    std::uint32_t receiver_index{0};
+    std::uint64_t counter{0};
 };
 
 enum class ParseError : std::uint8_t {
     None = 0,
-    NullPacket,
     MissingType,
     UnknownType,
     InvalidLength,
@@ -69,34 +68,34 @@ constexpr inline std::size_t TransportDataHeaderSize = sizeof(message_transport_
 const char *GetMessageTypeName(MessageType type);
 const char *GetParseErrorName(ParseError error);
 
-ParseResult InspectMessageType(const wgnx::platform::packet_buffer *packet, MessageType *out_type);
-void SetMessageType(std::uint32_t *field, MessageType type);
+ParseResult InspectMessageType(std::span<const std::uint8_t> packet);
+void SetMessageType(std::uint32_t &field, MessageType type);
 MessageType GetMessageType(std::uint32_t field);
 
 ParseResult ParseHandshakeInitiation(
-    const wgnx::platform::packet_buffer *packet,
-    message_handshake_initiation *out_message);
+    std::span<const std::uint8_t> packet,
+    message_handshake_initiation &out_message);
 ParseResult ParseHandshakeResponse(
-    const wgnx::platform::packet_buffer *packet,
-    message_handshake_response *out_message);
+    std::span<const std::uint8_t> packet,
+    message_handshake_response &out_message);
 ParseResult ParseHandshakeCookie(
-    const wgnx::platform::packet_buffer *packet,
-    message_handshake_cookie *out_message);
+    std::span<const std::uint8_t> packet,
+    message_handshake_cookie &out_message);
 ParseResult ParseTransportDataHeader(
-    const wgnx::platform::packet_buffer *packet,
-    message_transport_data *out_message);
+    std::span<const std::uint8_t> packet,
+    message_transport_data &out_message);
 
 ParseError SerializeHandshakeInitiation(
-    wgnx::platform::packet_buffer *packet,
+    std::span<std::uint8_t> output,
     const message_handshake_initiation &message);
 ParseError SerializeHandshakeResponse(
-    wgnx::platform::packet_buffer *packet,
+    std::span<std::uint8_t> output,
     const message_handshake_response &message);
 ParseError SerializeHandshakeCookie(
-    wgnx::platform::packet_buffer *packet,
+    std::span<std::uint8_t> output,
     const message_handshake_cookie &message);
 ParseError SerializeTransportDataHeader(
-    wgnx::platform::packet_buffer *packet,
+    std::span<std::uint8_t> output,
     const message_transport_data &message);
 
 static_assert(sizeof(message_macs) == 32);

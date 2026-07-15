@@ -4,37 +4,44 @@
 
 #include "wireguard/constants.hpp"
 
+#include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <span>
 #include <string_view>
+#include <type_traits>
 
 namespace wgnx::wireguard {
 
+using MonotonicTime = std::chrono::nanoseconds;
+
+MonotonicTime GetMonotonicTime();
+
 struct noise_public_key {
-    std::uint8_t bytes[NoisePublicKeySize]{};
+    std::array<std::uint8_t, NoisePublicKeySize> bytes{};
     bool valid{false};
 };
 
 struct noise_private_key {
-    std::uint8_t bytes[NoisePublicKeySize]{};
+    std::array<std::uint8_t, NoisePublicKeySize> bytes{};
     bool valid{false};
 };
 
 struct noise_symmetric_key {
-    std::uint8_t bytes[32]{};
+    std::array<std::uint8_t, 32> bytes{};
     bool valid{false};
 };
 
 struct noise_secret32 {
-    std::uint8_t bytes[32]{};
+    std::array<std::uint8_t, 32> bytes{};
     bool valid{false};
 };
 
 struct noise_cookie {
-    std::uint8_t value[CookieValueSize]{};
-    std::uint8_t last_mac1[NoiseMacSize]{};
-    wgnx::platform::ktime_t birthdate_ns{0};
+    std::array<std::uint8_t, CookieValueSize> value{};
+    std::array<std::uint8_t, NoiseMacSize> last_mac1{};
+    MonotonicTime birth_time{};
     bool valid{false};
     bool has_last_mac1{false};
 };
@@ -55,11 +62,16 @@ struct noise_handshake_material {
     noise_symmetric_key hash{};
 };
 
-struct noise_keypair {
-    bool valid{false};
-    std::uint32_t local_index{0};
-    std::uint32_t remote_index{0};
-    std::uint64_t send_counter{0};
+class ReplayWindow {
+public:
+    bool TryAdvance(std::uint64_t counter);
+    void Reset();
+
+    bool HasReceivedPacket() const { return m_initialized; }
+    std::uint64_t HighestCounter() const { return m_highest_counter; }
+    std::uint64_t Bitmap() const { return m_bitmap; }
+
+private:
     /*
      * Deviation from Linux:
      * Replay tracking is currently compressed to a 64-packet window instead of
@@ -70,20 +82,75 @@ struct noise_keypair {
      * counters behind the highest accepted value are rejected earlier than they
      * would be upstream.
      */
-    std::uint64_t receive_counter{0};
-    std::uint64_t replay_window{0};
-    wgnx::platform::ktime_t birthdate_ns{0};
-    noise_symmetric_key sending_key{};
-    noise_symmetric_key receiving_key{};
-    bool has_receive_counter{false};
+    std::uint64_t m_highest_counter{0};
+    std::uint64_t m_bitmap{0};
+    bool m_initialized{false};
 };
+
+enum class KeypairState : std::uint8_t {
+    Empty = 0,
+    Established,
+};
+
+enum class KeypairSendState : std::uint8_t {
+    Ready = 0,
+    Invalid,
+    Expired,
+    CounterExhausted,
+};
+
+const char *GetKeypairSendStateName(KeypairSendState state);
+
+struct KeypairAgeResult {
+    bool valid{false};
+    MonotonicTime age{};
+};
+
+class noise_keypair {
+public:
+    void Establish(
+        std::uint32_t local_index,
+        std::uint32_t remote_index,
+        MonotonicTime birth_time,
+        const noise_symmetric_key &sending_key,
+        const noise_symmetric_key &receiving_key,
+        std::uint64_t send_counter = 0);
+    void Reset();
+
+    bool IsValid() const;
+    bool CanSendAt(MonotonicTime now) const;
+    bool CanReceiveAt(MonotonicTime now) const;
+    KeypairSendState SendStateAt(MonotonicTime now) const;
+    KeypairState State() const { return m_state; }
+    std::uint32_t LocalIndex() const { return m_local_index; }
+    std::uint32_t RemoteIndex() const { return m_remote_index; }
+    std::uint64_t SendCounter() const { return m_send_counter; }
+    KeypairSendState ReserveSendCounterAt(MonotonicTime now, std::uint64_t &out_counter);
+    MonotonicTime BirthTime() const { return m_birth_time; }
+    KeypairAgeResult AgeAt(MonotonicTime now) const;
+    const noise_symmetric_key &SendingKey() const { return m_sending_key; }
+    const noise_symmetric_key &ReceivingKey() const { return m_receiving_key; }
+    const ReplayWindow &ReceiveReplayWindow() const { return m_receive_replay_window; }
+    ReplayWindow &ReceiveReplayWindow() { return m_receive_replay_window; }
+
+private:
+    KeypairState m_state{KeypairState::Empty};
+    std::uint32_t m_local_index{0};
+    std::uint32_t m_remote_index{0};
+    std::uint64_t m_send_counter{0};
+    MonotonicTime m_birth_time{};
+    noise_symmetric_key m_sending_key{};
+    noise_symmetric_key m_receiving_key{};
+    ReplayWindow m_receive_replay_window{};
+};
+
+static_assert(std::is_trivially_copyable_v<noise_keypair>);
 
 void noise_cookie_reset(noise_cookie *cookie);
 void noise_cookie_record_last_mac1(noise_cookie *cookie, const std::uint8_t mac1[NoiseMacSize]);
 bool noise_cookie_is_valid(const noise_cookie *cookie);
 void noise_static_identity_reset(noise_static_identity *identity);
 void noise_handshake_material_reset(noise_handshake_material *material);
-void noise_keypair_reset(noise_keypair *keypair);
 
 bool noise_is_valid_encoded_key(std::string_view text, bool allow_empty = false);
 bool noise_parse_private_key(noise_private_key *out_key, std::string_view text);

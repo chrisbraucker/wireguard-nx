@@ -3,18 +3,17 @@
 namespace wgnx::wireguard {
 
 ParseResult DispatchPacket(
-    const wgnx::platform::packet_buffer *packet,
+    std::span<const std::uint8_t> packet,
     const PacketDispatchHandlers &handlers) {
-    MessageType type = MessageType::Invalid;
-    ParseResult result = InspectMessageType(packet, &type);
+    ParseResult result = InspectMessageType(packet);
     if (!result.success) {
         return result;
     }
 
-    switch (type) {
+    switch (result.type) {
         case MessageType::HandshakeInitiation: {
             message_handshake_initiation message = {};
-            result = ParseHandshakeInitiation(packet, &message);
+            result = ParseHandshakeInitiation(packet, message);
             if (result.success && handlers.handshake_initiation != nullptr) {
                 handlers.handshake_initiation(handlers.context, message);
             }
@@ -22,7 +21,7 @@ ParseResult DispatchPacket(
         }
         case MessageType::HandshakeResponse: {
             message_handshake_response message = {};
-            result = ParseHandshakeResponse(packet, &message);
+            result = ParseHandshakeResponse(packet, message);
             if (result.success && handlers.handshake_response != nullptr) {
                 handlers.handshake_response(handlers.context, message);
             }
@@ -30,7 +29,7 @@ ParseResult DispatchPacket(
         }
         case MessageType::CookieReply: {
             message_handshake_cookie message = {};
-            result = ParseHandshakeCookie(packet, &message);
+            result = ParseHandshakeCookie(packet, message);
             if (result.success && handlers.cookie_reply != nullptr) {
                 handlers.cookie_reply(handlers.context, message);
             }
@@ -38,9 +37,9 @@ ParseResult DispatchPacket(
         }
         case MessageType::TransportData: {
             message_transport_data message = {};
-            result = ParseTransportDataHeader(packet, &message);
+            result = ParseTransportDataHeader(packet, message);
             if (result.success && handlers.transport_data != nullptr) {
-                handlers.transport_data(handlers.context, message, packet->bytes().subspan(TransportDataHeaderSize));
+                handlers.transport_data(handlers.context, message, packet.subspan(TransportDataHeaderSize));
             }
             return result;
         }
@@ -51,7 +50,7 @@ ParseResult DispatchPacket(
     return ParseResult{
         .success = false,
         .error = ParseError::UnknownType,
-        .type = type,
+        .type = result.type,
     };
 }
 

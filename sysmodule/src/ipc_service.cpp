@@ -4,6 +4,7 @@
 #include "development_config.hpp"
 #include "logger.hpp"
 #include "wgnx/platform/clock.hpp"
+#include "wgnx/platform/packet.hpp"
 #include "wgnx/platform/random.hpp"
 #include "wgnx/platform/udp.hpp"
 #include "wgnx/platform/work.hpp"
@@ -17,6 +18,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <limits>
@@ -145,7 +147,6 @@ struct NetworkPathObserverDispatcher {
 };
 constinit NetworkPathObserverDispatcher g_network_path_observer_dispatcher = {};
 constexpr inline std::size_t InnerPacketQueueCapacity = 8;
-wgnx::wireguard::InnerPacketQueue<InnerPacketQueueCapacity> g_inner_packet_tx_queue{};
 wgnx::wireguard::InnerPacketQueue<InnerPacketQueueCapacity> g_inner_packet_rx_queue{};
 std::uint64_t g_inner_packet_owner_process_id = 0;
 std::uint64_t g_next_inner_packet_id = 1;
@@ -154,8 +155,8 @@ struct InnerPacketSubmissionDispatcher {
 };
 constinit InnerPacketSubmissionDispatcher g_inner_packet_submission_dispatcher = {};
 
-constexpr inline wgnx::platform::jiffies_t SimulatedHandshakeRetransmitJiffies = 5U * wgnx::platform::HZ;
-constexpr inline wgnx::platform::jiffies_t SimulatedRekeyJiffies = 120U * wgnx::platform::HZ;
+constexpr inline auto SimulatedHandshakeRetransmitDelay = std::chrono::seconds{5};
+constexpr inline auto SimulatedRekeyDelay = std::chrono::seconds{120};
 constexpr inline wgnx::platform::jiffies_t DebugProbeTimeoutJiffies = 5U * wgnx::platform::HZ;
 constexpr inline wgnx::platform::jiffies_t NetworkPathObservationJiffies = 2U * wgnx::platform::HZ;
 constexpr inline std::uint32_t MaxHandshakeSendAttempts = 5;
@@ -344,6 +345,7 @@ wgnx::PeerErrorCode MapTransportDataErrorToPeerErrorCode(wgnx::wireguard::Transp
         case wgnx::wireguard::TransportDataError::None:
             return wgnx::PeerErrorCode::None;
         case wgnx::wireguard::TransportDataError::CounterExhausted:
+        case wgnx::wireguard::TransportDataError::KeyExpired:
         case wgnx::wireguard::TransportDataError::InvalidArgument:
         case wgnx::wireguard::TransportDataError::InvalidKeypair:
         case wgnx::wireguard::TransportDataError::InsufficientCapacity:
@@ -561,10 +563,13 @@ wgnx::PeerErrorCode SendProtocolPeerInitiation(std::size_t peer_index) {
 
     wgnx::platform::static_packet_buffer<wgnx::wireguard::HandshakeInitiationSize> packet;
     if (wgnx::wireguard::SerializeHandshakeInitiation(
-            std::addressof(packet.packet),
+            packet.storage,
             peer->last_initiation) != wgnx::wireguard::ParseError::None) {
         return wgnx::PeerErrorCode::InternalFailure;
     }
+    static_cast<void>(wgnx::platform::packet_set_len(
+        std::addressof(packet.packet),
+        wgnx::wireguard::HandshakeInitiationSize));
 
     std::size_t sent = 0;
     const auto send_error = wgnx::platform::udp_send(
@@ -601,7 +606,7 @@ wgnx::PeerErrorCode SendProtocolPeerPayload(
         return wgnx::PeerErrorCode::TransportSendFailed;
     }
     wgnx::wireguard::wg_peer *peer = GetProtocolPeer(peer_index);
-    if (peer == nullptr || !peer->current_keypair.valid || !runtime.has_resolved_endpoint ||
+    if (peer == nullptr || !runtime.has_resolved_endpoint ||
         runtime.socket == wgnx::platform::InvalidSocket) {
         return wgnx::PeerErrorCode::InternalFailure;
     }
@@ -611,21 +616,24 @@ wgnx::PeerErrorCode SendProtocolPeerPayload(
         packet;
     const auto payload_span = payload != nullptr ? std::span<const std::uint8_t>(payload, payload_size)
                                                  : std::span<const std::uint8_t>{};
-    const wgnx::wireguard::TransportDataError build_error =
+    const wgnx::wireguard::TransportDataCreateResult build_result =
         wgnx::wireguard::noise_create_transport_data_packet(
-            std::addressof(packet.packet),
+            packet.storage,
             peer->current_keypair,
             payload_span);
-    if (build_error != wgnx::wireguard::TransportDataError::None) {
+    if (build_result.error != wgnx::wireguard::TransportDataError::None) {
         logger::Log(
             "Failed to build WG transport payload for peer %zu endpoint=%s reason=%s payload=%zu err=%s",
             peer_index,
             runtime.resolved_endpoint_text,
             reason != nullptr ? reason : "unspecified",
             payload_size,
-            wgnx::wireguard::GetTransportDataErrorName(build_error));
-        return MapTransportDataErrorToPeerErrorCode(build_error);
+            wgnx::wireguard::GetTransportDataErrorName(build_result.error));
+        return MapTransportDataErrorToPeerErrorCode(build_result.error);
     }
+    static_cast<void>(wgnx::platform::packet_set_len(
+        std::addressof(packet.packet),
+        build_result.packet_size));
 
     std::size_t sent = 0;
     const auto send_error = wgnx::platform::udp_send(
@@ -644,7 +652,6 @@ wgnx::PeerErrorCode SendProtocolPeerPayload(
         return MapSocketErrorToPeerErrorCode(send_error);
     }
 
-    ++peer->current_keypair.send_counter;
     runtime.tx_bytes += sent;
     StampRuntimeNow(std::addressof(runtime.last_tx_ns));
     logger::Log(
@@ -678,7 +685,8 @@ wgnx::PeerErrorCode SendProtocolPeerPayload(
 wgnx::PeerErrorCode SendProtocolPeerKeepalive(std::size_t peer_index) {
     auto &runtime = g_state.runtime[peer_index];
     wgnx::wireguard::wg_peer *peer = GetProtocolPeer(peer_index);
-    if (peer == nullptr || !peer->current_keypair.valid || !runtime.has_resolved_endpoint ||
+    if (peer == nullptr || !peer->current_keypair.CanSendAt(wgnx::wireguard::GetMonotonicTime()) ||
+        !runtime.has_resolved_endpoint ||
         runtime.socket == wgnx::platform::InvalidSocket) {
         return wgnx::PeerErrorCode::InternalFailure;
     }
@@ -701,7 +709,10 @@ TimerActionDispatcher *GetTimerDispatcher(wgnx::wireguard::TimerHook hook) {
     return nullptr;
 }
 
-void ScheduleProtocolTimer(std::size_t peer_index, wgnx::wireguard::TimerHook hook, wgnx::platform::jiffies_t expires) {
+void ScheduleProtocolTimer(
+    std::size_t peer_index,
+    wgnx::wireguard::TimerHook hook,
+    wgnx::wireguard::TimerDeadline deadline) {
     wgnx::wireguard::wg_peer *peer = GetProtocolPeer(peer_index);
     if (peer == nullptr) {
         return;
@@ -714,11 +725,13 @@ void ScheduleProtocolTimer(std::size_t peer_index, wgnx::wireguard::TimerHook ho
     wgnx::wireguard::wg_timers_schedule(
         std::addressof(peer->timers),
         hook,
-        expires,
+        deadline,
         peer->name);
 
     if (TimerActionDispatcher *dispatcher = GetTimerDispatcher(hook)) {
-        static_cast<void>(wgnx::platform::mod_timer(std::addressof(dispatcher->timer), expires));
+        static_cast<void>(wgnx::platform::mod_timer(
+            std::addressof(dispatcher->timer),
+            wgnx::wireguard::TimerDeadlineToJiffies(deadline)));
     }
 }
 
@@ -773,13 +786,14 @@ void ScheduleProtocolSessionTimers(std::size_t peer_index, wgnx::wireguard::wg_p
         ScheduleProtocolTimer(
             peer_index,
             wgnx::wireguard::TimerHook::SendKeepalive,
-            wgnx::platform::get_jiffies_64() +
-                static_cast<wgnx::platform::jiffies_t>(peer->persistent_keepalive_interval) * wgnx::platform::HZ);
+            wgnx::wireguard::TimerDeadlineFromJiffies(wgnx::platform::get_jiffies_64()) +
+                std::chrono::seconds{peer->persistent_keepalive_interval});
     }
     ScheduleProtocolTimer(
         peer_index,
         wgnx::wireguard::TimerHook::Rekey,
-        wgnx::platform::get_jiffies_64() + SimulatedRekeyJiffies);
+        wgnx::wireguard::TimerDeadlineFromJiffies(wgnx::platform::get_jiffies_64()) +
+            SimulatedRekeyDelay);
 }
 
 bool PrepareRekeyInitiation(std::size_t peer_index) {
@@ -849,8 +863,44 @@ wgnx::PeerErrorCode RetryHandshakeSend(std::size_t peer_index, const char *reaso
     ScheduleProtocolTimer(
         peer_index,
         wgnx::wireguard::TimerHook::RetransmitHandshake,
-        wgnx::platform::get_jiffies_64() + SimulatedHandshakeRetransmitJiffies);
+        wgnx::wireguard::TimerDeadlineFromJiffies(wgnx::platform::get_jiffies_64()) +
+            SimulatedHandshakeRetransmitDelay);
     return wgnx::PeerErrorCode::None;
+}
+
+wgnx::PeerErrorCode EnsureHandshakeForOutboundTraffic(
+    std::size_t peer_index,
+    const char *reason) {
+    auto &runtime = g_state.runtime[peer_index];
+    wgnx::wireguard::wg_peer *peer = GetProtocolPeer(peer_index);
+    if (peer == nullptr) {
+        return wgnx::PeerErrorCode::InternalFailure;
+    }
+
+    if (peer->has_last_initiation && peer->timers.retransmit_handshake.pending) {
+        logger::Log(
+            "Coalesced WG handshake request peer=%zu activation=%u reason=%s staged_depth=%zu",
+            peer_index,
+            runtime.activation_generation,
+            reason != nullptr ? reason : "outbound traffic",
+            peer->staged_outbound_packets.Size());
+        return wgnx::PeerErrorCode::None;
+    }
+
+    if (!PrepareRekeyInitiation(peer_index)) {
+        return wgnx::PeerErrorCode::HandshakeInitFailed;
+    }
+
+    runtime.handshake_send_attempts = 0;
+    logger::Log(
+        "Starting WG handshake for outbound traffic peer=%zu activation=%u reason=%s staged_depth=%zu key_state=%s",
+        peer_index,
+        runtime.activation_generation,
+        reason != nullptr ? reason : "outbound traffic",
+        peer->staged_outbound_packets.Size(),
+        wgnx::wireguard::GetKeypairSendStateName(
+            peer->current_keypair.SendStateAt(wgnx::wireguard::GetMonotonicTime())));
+    return RetryHandshakeSend(peer_index, reason != nullptr ? reason : "outbound traffic");
 }
 
 void FailProtocolPeer(std::size_t peer_index, const char *reason) {
@@ -934,9 +984,13 @@ void RefreshDerivedPublicKey(std::size_t peer_index) {
 }
 
 void ClearInnerPacketStateLocked(const char *reason) {
-    const std::size_t tx_count = g_inner_packet_tx_queue.Size();
+    std::size_t tx_count = 0;
+    for (std::size_t peer_index = 0; peer_index < g_state.peer_count; ++peer_index) {
+        if (wgnx::wireguard::wg_peer *peer = GetProtocolPeer(peer_index)) {
+            tx_count += wgnx::wireguard::wg_peer_clear_staged_outbound_packets(peer);
+        }
+    }
     const std::size_t rx_count = g_inner_packet_rx_queue.Size();
-    g_inner_packet_tx_queue.Clear();
     g_inner_packet_rx_queue.Clear();
     g_inner_packet_owner_process_id = 0;
     if (tx_count != 0 || rx_count != 0) {
@@ -1084,7 +1138,7 @@ void QueueInnerPacketSubmissionWork() {
     if (runtime.state != wgnx::PeerRuntimeState::Active ||
         runtime.socket == wgnx::platform::InvalidSocket ||
         peer == nullptr ||
-        !peer->current_keypair.valid) {
+        !peer->current_keypair.CanSendAt(wgnx::wireguard::GetMonotonicTime())) {
         return false;
     }
     if (g_payload_submission_request.pending || IsDebugProbePending(runtime)) {
@@ -1327,7 +1381,8 @@ void CommitResolveResult(const ResolveRequest &request, const wgnx::platform::en
     ScheduleProtocolTimer(
         request.peer_index,
         wgnx::wireguard::TimerHook::RetransmitHandshake,
-        wgnx::platform::get_jiffies_64() + SimulatedHandshakeRetransmitJiffies);
+        wgnx::wireguard::TimerDeadlineFromJiffies(wgnx::platform::get_jiffies_64()) +
+            SimulatedHandshakeRetransmitDelay);
     SetPeerHandshaking(request.peer_index);
     QueueReceiveWork();
     logger::Log("Endpoint resolved for peer %zu activation=%u -> %s",
@@ -1375,7 +1430,7 @@ void EnqueueReceivedInnerIpv4PacketLocked(
     record.peer_index = static_cast<std::uint32_t>(peer_index);
     record.size = static_cast<std::uint16_t>(packet.size());
     std::memcpy(record.bytes.data(), packet.data(), packet.size());
-    if (!g_inner_packet_rx_queue.Push(record)) {
+    if (g_inner_packet_rx_queue.Push(record) == wgnx::wireguard::QueuePushResult::Full) {
         logger::Log(
             "Dropped decrypted inner packet peer=%zu activation=%u bytes=%zu reason=rx_queue_full capacity=%zu",
             peer_index,
@@ -1399,7 +1454,7 @@ void CommitReceivedPacket(
     std::uint32_t activation_generation,
     std::uint32_t socket_generation,
     wgnx::platform::socket_handle socket,
-    const wgnx::platform::packet_buffer *packet,
+    std::span<const std::uint8_t> packet,
     const wgnx::platform::endpoint &source) {
     std::scoped_lock lock(g_state_mutex);
     if (peer_index >= g_state.peer_count || g_state.active_peer_index != static_cast<std::int32_t>(peer_index)) {
@@ -1415,7 +1470,7 @@ void CommitReceivedPacket(
         return;
     }
 
-    runtime.rx_bytes += packet->len;
+    runtime.rx_bytes += packet.size();
     StampRuntimeNow(std::addressof(runtime.last_rx_ns));
 
     wgnx::wireguard::wg_peer *peer = GetProtocolPeer(peer_index);
@@ -1424,19 +1479,18 @@ void CommitReceivedPacket(
         return;
     }
 
-    wgnx::wireguard::MessageType type = wgnx::wireguard::MessageType::Invalid;
-    const wgnx::wireguard::ParseResult type_result = wgnx::wireguard::InspectMessageType(packet, &type);
+    const wgnx::wireguard::ParseResult type_result = wgnx::wireguard::InspectMessageType(packet);
     if (!type_result.success) {
         logger::Log(
             "Rejected UDP packet for peer %zu bytes=%zu source_family=%s inspect_err=%s",
             peer_index,
-            packet->len,
+            packet.size(),
             wgnx::GetPeerResolvedFamilyName(static_cast<wgnx::PeerResolvedFamily>(source.family)),
             wgnx::wireguard::GetParseErrorName(type_result.error));
         return;
     }
 
-    if (type == wgnx::wireguard::MessageType::TransportData) {
+    if (type_result.type == wgnx::wireguard::MessageType::TransportData) {
         char source_text[sizeof(wgnx::PeerInfo::resolved_endpoint)] = {};
         char expected_text[sizeof(wgnx::PeerInfo::resolved_endpoint)] = {};
         FormatEndpointText(source, source_text, sizeof(source_text));
@@ -1446,7 +1500,7 @@ void CommitReceivedPacket(
             logger::Log(
                 "Rejected WG transport data for peer %zu bytes=%zu source=%s expected=%s reason=source_mismatch",
                 peer_index,
-                packet->len,
+                packet.size(),
                 source_text,
                 expected_text);
             return;
@@ -1456,15 +1510,15 @@ void CommitReceivedPacket(
         const wgnx::wireguard::TransportDataError decrypt_error =
             wgnx::wireguard::noise_consume_incoming_transport_data_packet(
                 packet,
-                std::addressof(g_state.protocol[peer_index].device),
-                peer,
+                g_state.protocol[peer_index].device,
+                *peer,
                 g_receive_payload_buffer,
-                std::addressof(decrypt_result));
+                decrypt_result);
         if (decrypt_error != wgnx::wireguard::TransportDataError::None) {
             logger::Log(
                 "Rejected WG transport data for peer %zu bytes=%zu source=%s slot=%s err=%s",
                 peer_index,
-                packet->len,
+                packet.size(),
                 source_text,
                 GetIndexSlotName(decrypt_result.slot),
                 wgnx::wireguard::GetTransportDataErrorName(decrypt_error));
@@ -1474,7 +1528,7 @@ void CommitReceivedPacket(
         logger::Log(
             "Accepted WG transport data for peer %zu bytes=%zu payload=%zu source=%s slot=%s counter=%llu",
             peer_index,
-            packet->len,
+            packet.size(),
             decrypt_result.decrypt.payload_size,
             source_text,
             GetIndexSlotName(decrypt_result.slot),
@@ -1568,7 +1622,7 @@ void CommitReceivedPacket(
     logger::Log(
         "Received UDP packet for peer %zu bytes=%zu source_family=%s outcome=%s",
         peer_index,
-        packet->len,
+        packet.size(),
         wgnx::GetPeerResolvedFamilyName(static_cast<wgnx::PeerResolvedFamily>(source.family)),
         wgnx::wireguard::GetHandshakePacketOutcomeName(outcome));
 
@@ -1790,8 +1844,14 @@ void ProcessPendingBindBump() {
     const char *resume_action = nullptr;
     wgnx::PeerErrorCode send_error = wgnx::PeerErrorCode::None;
     if (runtime.state == wgnx::PeerRuntimeState::Active) {
-        resume_action = "keepalive";
-        send_error = SendProtocolPeerKeepalive(request.peer_index);
+        if (wgnx::wireguard::wg_peer *peer = GetProtocolPeer(request.peer_index);
+            peer != nullptr && peer->current_keypair.CanSendAt(wgnx::wireguard::GetMonotonicTime())) {
+            resume_action = "keepalive";
+            send_error = SendProtocolPeerKeepalive(request.peer_index);
+        } else {
+            resume_action = "handshake_initiation";
+            send_error = EnsureHandshakeForOutboundTraffic(request.peer_index, "UDP bind bump");
+        }
     } else {
         resume_action = "handshake_initiation";
         send_error = SendProtocolPeerInitiation(request.peer_index);
@@ -1868,7 +1928,7 @@ void ReceiveWorkMain(wgnx::platform::work_struct *) {
             activation_generation,
             socket_generation,
             socket,
-            std::addressof(packet.packet),
+            packet.packet.bytes(),
             source);
         wgnx::platform::packet_clear(std::addressof(packet.packet));
     }
@@ -1884,7 +1944,18 @@ void ReceiveWorkMain(wgnx::platform::work_struct *) {
 [[maybe_unused]] void InnerPacketSubmissionWorkMain(wgnx::platform::work_struct *) {
     while (true) {
         std::scoped_lock lock(g_state_mutex);
-        const auto *front = g_inner_packet_tx_queue.Front();
+        if (g_state.active_peer_index < 0) {
+            return;
+        }
+
+        const std::size_t active_peer_index = static_cast<std::size_t>(g_state.active_peer_index);
+        wgnx::wireguard::wg_peer *peer = GetProtocolPeer(active_peer_index);
+        if (peer == nullptr) {
+            return;
+        }
+
+        auto &queue = peer->staged_outbound_packets;
+        const auto *front = queue.Front();
         if (front == nullptr) {
             return;
         }
@@ -1892,7 +1963,7 @@ void ReceiveWorkMain(wgnx::platform::work_struct *) {
         if (front->peer_index >= g_state.peer_count ||
             g_state.active_peer_index != static_cast<std::int32_t>(front->peer_index)) {
             wgnx::wireguard::InnerPacketRecord stale{};
-            static_cast<void>(g_inner_packet_tx_queue.Pop(std::addressof(stale)));
+            static_cast<void>(queue.Pop(std::addressof(stale)));
             logger::Log(
                 "Discarded queued inner packet id=%llu reason=stale_peer",
                 static_cast<unsigned long long>(stale.packet_id));
@@ -1902,7 +1973,7 @@ void ReceiveWorkMain(wgnx::platform::work_struct *) {
         auto &runtime = g_state.runtime[front->peer_index];
         if (runtime.activation_generation != front->activation_generation) {
             wgnx::wireguard::InnerPacketRecord stale{};
-            static_cast<void>(g_inner_packet_tx_queue.Pop(std::addressof(stale)));
+            static_cast<void>(queue.Pop(std::addressof(stale)));
             logger::Log(
                 "Discarded queued inner packet id=%llu reason=stale_activation queued=%u current=%u",
                 static_cast<unsigned long long>(stale.packet_id),
@@ -1916,7 +1987,7 @@ void ReceiveWorkMain(wgnx::platform::work_struct *) {
         }
         if (runtime.state != wgnx::PeerRuntimeState::Active) {
             wgnx::wireguard::InnerPacketRecord unavailable{};
-            static_cast<void>(g_inner_packet_tx_queue.Pop(std::addressof(unavailable)));
+            static_cast<void>(queue.Pop(std::addressof(unavailable)));
             logger::Log(
                 "Discarded queued inner packet id=%llu reason=tunnel_unavailable state=%s",
                 static_cast<unsigned long long>(unavailable.packet_id),
@@ -1924,8 +1995,29 @@ void ReceiveWorkMain(wgnx::platform::work_struct *) {
             continue;
         }
 
+        const auto staging_action = wgnx::wireguard::wg_peer_get_outbound_staging_action(
+            *peer,
+            wgnx::wireguard::GetMonotonicTime());
+        if (staging_action == wgnx::wireguard::OutboundStagingAction::InitiateHandshake) {
+            const wgnx::PeerErrorCode handshake_error = EnsureHandshakeForOutboundTraffic(
+                active_peer_index,
+                "staged outbound traffic");
+            if (handshake_error != wgnx::PeerErrorCode::None) {
+                SetPeerError(
+                    active_peer_index,
+                    handshake_error == wgnx::PeerErrorCode::HandshakeInitFailed
+                        ? wgnx::PeerErrorStage::Handshake
+                        : wgnx::PeerErrorStage::Transport,
+                    handshake_error);
+            }
+            return;
+        }
+        if (staging_action != wgnx::wireguard::OutboundStagingAction::Send) {
+            return;
+        }
+
         wgnx::wireguard::InnerPacketRecord record{};
-        static_cast<void>(g_inner_packet_tx_queue.Pop(std::addressof(record)));
+        static_cast<void>(queue.Pop(std::addressof(record)));
         const wgnx::PeerErrorCode send_error = SendInnerIpv4PacketLocked(
             record.peer_index,
             std::span<const std::uint8_t>(record.bytes.data(), record.size),
@@ -1951,7 +2043,7 @@ void ReceiveWorkMain(wgnx::platform::work_struct *) {
             record.peer_index,
             record.activation_generation,
             static_cast<unsigned int>(record.size),
-            g_inner_packet_tx_queue.Size());
+            queue.Size());
     }
 }
 
@@ -2035,7 +2127,22 @@ void RunTimerAction(wgnx::wireguard::TimerHook hook) {
             return;
         }
         case wgnx::wireguard::TimerHook::SendKeepalive: {
-            if (runtime.state != wgnx::PeerRuntimeState::Active || !peer->current_keypair.valid) {
+            if (runtime.state != wgnx::PeerRuntimeState::Active) {
+                return;
+            }
+
+            if (!peer->current_keypair.CanSendAt(wgnx::wireguard::GetMonotonicTime())) {
+                const wgnx::PeerErrorCode handshake_error = EnsureHandshakeForOutboundTraffic(
+                    peer_index,
+                    "persistent keepalive");
+                if (handshake_error != wgnx::PeerErrorCode::None) {
+                    SetPeerError(
+                        peer_index,
+                        handshake_error == wgnx::PeerErrorCode::HandshakeInitFailed
+                            ? wgnx::PeerErrorStage::Handshake
+                            : wgnx::PeerErrorStage::Transport,
+                        handshake_error);
+                }
                 return;
             }
 
@@ -2052,9 +2159,8 @@ void RunTimerAction(wgnx::wireguard::TimerHook hook) {
                 ScheduleProtocolTimer(
                     peer_index,
                     hook,
-                    wgnx::platform::get_jiffies_64() +
-                        static_cast<wgnx::platform::jiffies_t>(peer->persistent_keepalive_interval) *
-                            wgnx::platform::HZ);
+                    wgnx::wireguard::TimerDeadlineFromJiffies(wgnx::platform::get_jiffies_64()) +
+                        std::chrono::seconds{peer->persistent_keepalive_interval});
             }
             return;
         }
@@ -2082,7 +2188,8 @@ void RunTimerAction(wgnx::wireguard::TimerHook hook) {
             ScheduleProtocolTimer(
                 peer_index,
                 wgnx::wireguard::TimerHook::RetransmitHandshake,
-                wgnx::platform::get_jiffies_64() + SimulatedHandshakeRetransmitJiffies);
+                wgnx::wireguard::TimerDeadlineFromJiffies(wgnx::platform::get_jiffies_64()) +
+                    SimulatedHandshakeRetransmitDelay);
             return;
         }
         case wgnx::wireguard::TimerHook::ZeroKeyMaterial:
@@ -2461,9 +2568,15 @@ ams::Result ControlService::SubmitInnerIpv4Packet(
 
         const std::uint64_t process_id = client_pid.GetValue().value;
         if (g_inner_packet_owner_process_id != process_id) {
-            const std::size_t old_tx_count = g_inner_packet_tx_queue.Size();
+            wgnx::wireguard::wg_peer *peer = GetProtocolPeer(peer_index);
+            if (peer == nullptr) {
+                result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::InternalError);
+                out.SetValue(result);
+                R_SUCCEED();
+            }
+            const std::size_t old_tx_count =
+                wgnx::wireguard::wg_peer_clear_staged_outbound_packets(peer);
             const std::size_t old_rx_count = g_inner_packet_rx_queue.Size();
-            g_inner_packet_tx_queue.Clear();
             g_inner_packet_rx_queue.Clear();
             g_inner_packet_owner_process_id = process_id;
             logger::Log(
@@ -2473,6 +2586,13 @@ ams::Result ControlService::SubmitInnerIpv4Packet(
                 old_rx_count);
         }
 
+        wgnx::wireguard::wg_peer *peer = GetProtocolPeer(peer_index);
+        if (peer == nullptr) {
+            result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::InternalError);
+            out.SetValue(result);
+            R_SUCCEED();
+        }
+
         wgnx::wireguard::InnerPacketRecord record{};
         record.packet_id = AllocateInnerPacketIdLocked();
         record.owner_process_id = process_id;
@@ -2480,12 +2600,12 @@ ams::Result ControlService::SubmitInnerIpv4Packet(
         record.peer_index = static_cast<std::uint32_t>(peer_index);
         record.size = static_cast<std::uint16_t>(packet_bytes.size());
         std::memcpy(record.bytes.data(), packet_bytes.data(), packet_bytes.size());
-        if (!g_inner_packet_tx_queue.Push(record)) {
+        if (peer->staged_outbound_packets.Push(record) == wgnx::wireguard::QueuePushResult::Full) {
             result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::QueueFull);
             logger::Log(
                 "Rejected packet API submission pid=%llu reason=tx_queue_full capacity=%zu",
                 static_cast<unsigned long long>(process_id),
-                g_inner_packet_tx_queue.CapacityValue());
+                peer->staged_outbound_packets.CapacityValue());
             out.SetValue(result);
             R_SUCCEED();
         }
@@ -2500,7 +2620,7 @@ ams::Result ControlService::SubmitInnerIpv4Packet(
             peer_index,
             runtime.activation_generation,
             packet_bytes.size(),
-            g_inner_packet_tx_queue.Size(),
+            peer->staged_outbound_packets.Size(),
             wgnx::GetPeerRuntimeStateName(runtime.state));
     }
 

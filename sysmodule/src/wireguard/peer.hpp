@@ -5,6 +5,7 @@
 #include "wgnx/platform/udp.hpp"
 
 #include "wireguard/handshake.hpp"
+#include "wireguard/inner_packet.hpp"
 #include "wireguard/messages.hpp"
 #include "wireguard/session.hpp"
 #include "wireguard/timers.hpp"
@@ -13,13 +14,18 @@
 
 namespace wgnx::wireguard {
 
+constexpr inline std::size_t PeerStagedPacketCapacity = 8;
+
+enum class OutboundStagingAction : std::uint8_t {
+    Idle = 0,
+    Send,
+    InitiateHandshake,
+};
+
 /*
- * Deviation from Linux:
- * This peer skeleton keeps only the ownership and state fields Milestone 4
- * needs and does not yet model queues, cryptographic key material, or packet
- * processing internals. The implication is that Milestone 5/6 can extend this
- * object in-place, but it is not yet a drop-in equivalent of upstream
- * `wg_peer`.
+ * The peer owns protocol identity, handshake and keypair state, timer intent,
+ * and staged outbound packets. Horizon UDP transport and asynchronous work
+ * dispatch remain runtime concerns outside this protocol object.
  */
 struct wg_peer {
     char name[sizeof(wgnx::PeerInfo::name)]{};
@@ -40,11 +46,11 @@ struct wg_peer {
     noise_keypair current_keypair{};
     noise_keypair next_keypair{};
     noise_keypair previous_keypair{};
+    InnerPacketQueue<PeerStagedPacketCapacity> staged_outbound_packets{};
     /*
      * Deviation from Linux:
-     * We keep the last serialized initiation on the peer so Milestone 5 can
-     * build a real packet now and Milestone 6 can resend or transmit it
-     * without reopening the control-plane boundary.
+     * The current runtime retains one serialized initiation for its retry
+     * dispatcher. Milestone 4 will replace the provisional retry lifecycle.
      */
     message_handshake_initiation last_initiation{};
     bool has_last_initiation{false};
@@ -58,6 +64,10 @@ void wg_peer_set_resolved_endpoint(
     const char *endpoint_text);
 void wg_peer_clear_resolved_endpoint(wg_peer *peer);
 void wg_peer_reset_keypairs(wg_peer *peer);
+OutboundStagingAction wg_peer_get_outbound_staging_action(
+    const wg_peer &peer,
+    MonotonicTime now);
+std::size_t wg_peer_clear_staged_outbound_packets(wg_peer *peer);
 void wg_peer_clear_last_initiation(wg_peer *peer);
 void wg_peer_scrub_transient_state(wg_peer *peer);
 

@@ -88,9 +88,30 @@ void wg_peer_reset_keypairs(wg_peer *peer) {
         return;
     }
 
-    noise_keypair_reset(&peer->current_keypair);
-    noise_keypair_reset(&peer->next_keypair);
-    noise_keypair_reset(&peer->previous_keypair);
+    peer->current_keypair.Reset();
+    peer->next_keypair.Reset();
+    peer->previous_keypair.Reset();
+}
+
+OutboundStagingAction wg_peer_get_outbound_staging_action(
+    const wg_peer &peer,
+    MonotonicTime now) {
+    if (peer.staged_outbound_packets.Size() == 0) {
+        return OutboundStagingAction::Idle;
+    }
+    return peer.current_keypair.CanSendAt(now)
+        ? OutboundStagingAction::Send
+        : OutboundStagingAction::InitiateHandshake;
+}
+
+std::size_t wg_peer_clear_staged_outbound_packets(wg_peer *peer) {
+    if (peer == nullptr) {
+        return 0;
+    }
+
+    const std::size_t count = peer->staged_outbound_packets.Size();
+    peer->staged_outbound_packets.Clear();
+    return count;
 }
 
 void wg_peer_clear_last_initiation(wg_peer *peer) {
@@ -108,24 +129,25 @@ void wg_peer_scrub_transient_state(wg_peer *peer) {
     }
 
     crypto::secure_clear(
-        peer->handshake_material.ephemeral_private.bytes,
-        sizeof(peer->handshake_material.ephemeral_private.bytes));
+        peer->handshake_material.ephemeral_private.bytes.data(),
+        peer->handshake_material.ephemeral_private.bytes.size());
     peer->handshake_material.ephemeral_private.valid = false;
     crypto::secure_clear(
-        peer->handshake_material.ephemeral_public.bytes,
-        sizeof(peer->handshake_material.ephemeral_public.bytes));
+        peer->handshake_material.ephemeral_public.bytes.data(),
+        peer->handshake_material.ephemeral_public.bytes.size());
     peer->handshake_material.ephemeral_public.valid = false;
     crypto::secure_clear(
-        peer->handshake_material.remote_ephemeral.bytes,
-        sizeof(peer->handshake_material.remote_ephemeral.bytes));
+        peer->handshake_material.remote_ephemeral.bytes.data(),
+        peer->handshake_material.remote_ephemeral.bytes.size());
     peer->handshake_material.remote_ephemeral.valid = false;
-    crypto::secure_clear(peer->handshake_material.chaining_key.bytes, sizeof(peer->handshake_material.chaining_key.bytes));
+    crypto::secure_clear(peer->handshake_material.chaining_key.bytes.data(), peer->handshake_material.chaining_key.bytes.size());
     peer->handshake_material.chaining_key.valid = false;
-    crypto::secure_clear(peer->handshake_material.hash.bytes, sizeof(peer->handshake_material.hash.bytes));
+    crypto::secure_clear(peer->handshake_material.hash.bytes.data(), peer->handshake_material.hash.bytes.size());
     peer->handshake_material.hash.valid = false;
     noise_cookie_reset(&peer->cookie);
     wg_peer_clear_last_initiation(peer);
     wg_peer_reset_keypairs(peer);
+    static_cast<void>(wg_peer_clear_staged_outbound_packets(peer));
 }
 
 } // namespace wgnx::wireguard

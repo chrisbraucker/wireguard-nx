@@ -12,6 +12,7 @@
 #include "wireguard/messages.hpp"
 #include "wireguard/session.hpp"
 #include "wireguard/timers.hpp"
+#include "wgnx/platform/packet.hpp"
 
 #include <cstdio>
 #include <algorithm>
@@ -88,6 +89,196 @@ struct CoreSelfTestStorage {
 
 CoreSelfTestStorage g_core_self_test_storage{};
 
+void SetMessageType(std::uint32_t *field, MessageType type) {
+    if (field != nullptr) {
+        ::wgnx::wireguard::SetMessageType(*field, type);
+    }
+}
+
+template<std::size_t PacketSize, typename Message>
+ParseError SerializeLegacyPacket(
+    wgnx::platform::packet_buffer *packet,
+    const Message &message,
+    ParseError (*serialize)(std::span<std::uint8_t>, const Message &)) {
+    if (packet == nullptr || packet->capacity < PacketSize) {
+        return ParseError::InsufficientCapacity;
+    }
+    const ParseError error = serialize(packet->storage().first(PacketSize), message);
+    if (error == ParseError::None) {
+        packet->len = PacketSize;
+    }
+    return error;
+}
+
+ParseError SerializeHandshakeInitiation(
+    wgnx::platform::packet_buffer *packet,
+    const message_handshake_initiation &message) {
+    return SerializeLegacyPacket<HandshakeInitiationSize>(
+        packet,
+        message,
+        ::wgnx::wireguard::SerializeHandshakeInitiation);
+}
+
+ParseError SerializeHandshakeResponse(
+    wgnx::platform::packet_buffer *packet,
+    const message_handshake_response &message) {
+    return SerializeLegacyPacket<HandshakeResponseSize>(
+        packet,
+        message,
+        ::wgnx::wireguard::SerializeHandshakeResponse);
+}
+
+ParseError SerializeHandshakeCookie(
+    wgnx::platform::packet_buffer *packet,
+    const message_handshake_cookie &message) {
+    return SerializeLegacyPacket<HandshakeCookieSize>(
+        packet,
+        message,
+        ::wgnx::wireguard::SerializeHandshakeCookie);
+}
+
+ParseError SerializeTransportDataHeader(
+    wgnx::platform::packet_buffer *packet,
+    const message_transport_data &message) {
+    return SerializeLegacyPacket<TransportDataHeaderSize>(
+        packet,
+        message,
+        ::wgnx::wireguard::SerializeTransportDataHeader);
+}
+
+template<typename Message>
+ParseResult ParseLegacyPacket(
+    const wgnx::platform::packet_buffer *packet,
+    Message *message,
+    ParseResult (*parse)(std::span<const std::uint8_t>, Message &)) {
+    if (packet == nullptr || message == nullptr) {
+        return {.success = false, .error = ParseError::InvalidArgument};
+    }
+    return parse(packet->bytes(), *message);
+}
+
+ParseResult ParseHandshakeInitiation(
+    const wgnx::platform::packet_buffer *packet,
+    message_handshake_initiation *message) {
+    return ParseLegacyPacket(packet, message, ::wgnx::wireguard::ParseHandshakeInitiation);
+}
+
+ParseResult ParseHandshakeResponse(
+    const wgnx::platform::packet_buffer *packet,
+    message_handshake_response *message) {
+    return ParseLegacyPacket(packet, message, ::wgnx::wireguard::ParseHandshakeResponse);
+}
+
+ParseResult ParseHandshakeCookie(
+    const wgnx::platform::packet_buffer *packet,
+    message_handshake_cookie *message) {
+    return ParseLegacyPacket(packet, message, ::wgnx::wireguard::ParseHandshakeCookie);
+}
+
+ParseResult ParseTransportDataHeader(
+    const wgnx::platform::packet_buffer *packet,
+    message_transport_data *message) {
+    return ParseLegacyPacket(packet, message, ::wgnx::wireguard::ParseTransportDataHeader);
+}
+
+ParseResult InspectMessageType(
+    const wgnx::platform::packet_buffer *packet,
+    MessageType *type) {
+    if (packet == nullptr || type == nullptr) {
+        return {.success = false, .error = ParseError::InvalidArgument};
+    }
+    const ParseResult result = ::wgnx::wireguard::InspectMessageType(packet->bytes());
+    *type = result.type;
+    return result;
+}
+
+ParseResult DispatchPacket(
+    const wgnx::platform::packet_buffer *packet,
+    const PacketDispatchHandlers &handlers) {
+    return packet == nullptr
+        ? ParseResult{.success = false, .error = ParseError::InvalidArgument}
+        : ::wgnx::wireguard::DispatchPacket(packet->bytes(), handlers);
+}
+
+TransportDataError noise_create_transport_data_packet(
+    wgnx::platform::packet_buffer *packet,
+    noise_keypair &keypair,
+    std::span<const std::uint8_t> payload) {
+    if (packet == nullptr) {
+        return TransportDataError::InvalidArgument;
+    }
+    const TransportDataCreateResult result =
+        ::wgnx::wireguard::noise_create_transport_data_packet(
+            packet->storage(),
+            keypair,
+            payload);
+    if (result.error == TransportDataError::None) {
+        packet->len = result.packet_size;
+    }
+    return result.error;
+}
+
+bool noise_create_keepalive_packet(
+    wgnx::platform::packet_buffer *packet,
+    noise_keypair &keypair) {
+    if (packet == nullptr) {
+        return false;
+    }
+    const TransportDataCreateResult result =
+        ::wgnx::wireguard::noise_create_keepalive_packet(packet->storage(), keypair);
+    if (result.error == TransportDataError::None) {
+        packet->len = result.packet_size;
+    }
+    return result.error == TransportDataError::None;
+}
+
+TransportDataError noise_consume_transport_data_packet(
+    const wgnx::platform::packet_buffer *packet,
+    noise_keypair *keypair,
+    std::span<std::uint8_t> output,
+    TransportDataDecryptResult *result) {
+    if (packet == nullptr || keypair == nullptr) {
+        return TransportDataError::InvalidArgument;
+    }
+    TransportDataDecryptResult ignored{};
+    return ::wgnx::wireguard::noise_consume_transport_data_packet(
+        packet->bytes(),
+        *keypair,
+        output,
+        result != nullptr ? *result : ignored);
+}
+
+TransportDataError noise_consume_incoming_transport_data_packet(
+    const wgnx::platform::packet_buffer *packet,
+    const wg_device *device,
+    wg_peer *peer,
+    std::span<std::uint8_t> output,
+    IncomingTransportDataResult *result) {
+    if (packet == nullptr || device == nullptr || peer == nullptr) {
+        return TransportDataError::InvalidArgument;
+    }
+    IncomingTransportDataResult ignored{};
+    return ::wgnx::wireguard::noise_consume_incoming_transport_data_packet(
+        packet->bytes(),
+        *device,
+        *peer,
+        output,
+        result != nullptr ? *result : ignored);
+}
+
+HandshakePacketOutcome noise_handshake_consume_incoming_packet(
+    const wgnx::platform::packet_buffer *packet,
+    const wg_device *device,
+    wg_peer *peer) {
+    if (packet == nullptr) {
+        return HandshakePacketOutcome::Invalid;
+    }
+    return ::wgnx::wireguard::noise_handshake_consume_incoming_packet(
+        packet->bytes(),
+        device,
+        peer);
+}
+
 void ResetCoreSelfTestStorage() {
     g_core_self_test_storage = {};
     wgnx::platform::packet_init(
@@ -133,7 +324,7 @@ bool ComputeHarnessCookieKey(
         return false;
     }
     crypto::blake2s_update(&state, CookieKeyLabel, sizeof(CookieKeyLabel) - 1);
-    crypto::blake2s_update(&state, remote_static.bytes, sizeof(remote_static.bytes));
+    crypto::blake2s_update(&state, remote_static.bytes.data(), remote_static.bytes.size());
     return crypto::blake2s_final(&state, out_key, 32);
 }
 
@@ -163,20 +354,20 @@ bool BuildHarnessCookieReply(
         out_cookie->nonce[i] = static_cast<std::uint8_t>(0x90U + i);
     }
     if (!crypto::xchacha20poly1305_encrypt(
-            out_cookie->encrypted_cookie,
+            out_cookie->encrypted_cookie.data(),
             tag,
             CookieValue,
             sizeof(CookieValue),
-            initiator.cookie.last_mac1,
-            sizeof(initiator.cookie.last_mac1),
+            initiator.cookie.last_mac1.data(),
+            initiator.cookie.last_mac1.size(),
             cookie_key,
-            out_cookie->nonce)) {
+            out_cookie->nonce.data())) {
         crypto::secure_clear(cookie_key, sizeof(cookie_key));
         crypto::secure_clear(tag, sizeof(tag));
         return false;
     }
 
-    std::memcpy(out_cookie->encrypted_cookie + CookieValueSize, tag, sizeof(tag));
+    std::memcpy(out_cookie->encrypted_cookie.data() + CookieValueSize, tag, sizeof(tag));
     crypto::secure_clear(cookie_key, sizeof(cookie_key));
     crypto::secure_clear(tag, sizeof(tag));
     return true;
@@ -473,7 +664,10 @@ bool TestInnerIpv4PacketBoundary() {
     second.packet_id = 2;
     InnerPacketRecord overflow{};
     overflow.packet_id = 3;
-    if (!queue.Push(first) || !queue.Push(second) || queue.Push(overflow) || queue.Size() != 2) {
+    if (queue.Push(first) != QueuePushResult::Pushed ||
+        queue.Push(second) != QueuePushResult::Pushed ||
+        queue.Push(overflow) != QueuePushResult::Full ||
+        queue.Size() != 2) {
         return false;
     }
     InnerPacketRecord popped{};
@@ -570,7 +764,7 @@ bool TestDeviceAndPeerSkeleton() {
     if (!wg_device_init_from_config_entry(&device, config)) {
         return false;
     }
-    if (device.peer_count != 1 || !device.has_private_key || !device.has_dns) {
+    if (!device.has_peer || !device.has_private_key || !device.has_dns) {
         return false;
     }
     const std::uint32_t first_index = wg_device_allocate_index(&device);
@@ -618,8 +812,8 @@ bool TestDeviceAndPeerSkeleton() {
         peer->name,
         "self-test derive session"));
 
-    wg_timers_schedule(&peer->timers, TimerHook::RetransmitHandshake, 2000, peer->name);
-    wg_timers_schedule(&peer->timers, TimerHook::Rekey, 4000, peer->name);
+    wg_timers_schedule(&peer->timers, TimerHook::RetransmitHandshake, TimerDeadline{2000}, peer->name);
+    wg_timers_schedule(&peer->timers, TimerHook::Rekey, TimerDeadline{4000}, peer->name);
     if (!wg_timers_any_pending(peer->timers)) {
         return false;
     }
@@ -653,9 +847,9 @@ bool TestStaticIdentityParsing() {
                     identity.remote_static.valid &&
                     identity.preshared_key.valid &&
                     std::memcmp(
-                        identity.static_public.bytes,
-                        expected_local_public.bytes,
-                        sizeof(identity.static_public.bytes)) == 0;
+                        identity.static_public.bytes.data(),
+                        expected_local_public.bytes.data(),
+                        identity.static_public.bytes.size()) == 0;
     noise_static_identity_reset(&identity);
     return ok;
 }
@@ -703,10 +897,10 @@ bool TestHandshakeInitiationCreation() {
            peer->handshake.state == HandshakeState::InitiationCreated &&
            GetMessageType(parsed.type) == MessageType::HandshakeInitiation &&
            parsed.sender_index == 0x01020304U &&
-           std::memcmp(parsed.unencrypted_ephemeral, zero_block, sizeof(parsed.unencrypted_ephemeral)) != 0 &&
-           std::memcmp(parsed.encrypted_static, zero_block, sizeof(parsed.unencrypted_ephemeral)) != 0 &&
-           std::memcmp(parsed.macs.mac1, zero_mac, sizeof(parsed.macs.mac1)) != 0 &&
-           std::memcmp(parsed.macs.mac2, zero_mac, sizeof(parsed.macs.mac2)) == 0;
+           std::memcmp(parsed.unencrypted_ephemeral.data(), zero_block, parsed.unencrypted_ephemeral.size()) != 0 &&
+           std::memcmp(parsed.encrypted_static.data(), zero_block, parsed.unencrypted_ephemeral.size()) != 0 &&
+           std::memcmp(parsed.macs.mac1.data(), zero_mac, parsed.macs.mac1.size()) != 0 &&
+           std::memcmp(parsed.macs.mac2.data(), zero_mac, parsed.macs.mac2.size()) == 0;
 }
 
 bool TestHandshakeResponseAndSessionDerivation() {
@@ -824,12 +1018,11 @@ bool TestHandshakeResponseAndSessionDerivation() {
         return false;
     }
     if (keepalive_buffer.packet.len != (TransportDataHeaderSize + NoiseMacSize) ||
-        keepalive_result.header.receiver_index != initiator->current_keypair.remote_index ||
-        keepalive_result.header.counter != initiator->current_keypair.send_counter ||
+        keepalive_result.header.receiver_index != initiator->current_keypair.RemoteIndex() ||
+        keepalive_result.header.counter + 1 != initiator->current_keypair.SendCounter() ||
         keepalive_result.payload_size != 0) {
         return false;
     }
-    ++initiator->current_keypair.send_counter;
 
     for (std::size_t i = 0; i < sizeof(g_core_self_test_storage.payload_plaintext); ++i) {
         g_core_self_test_storage.payload_plaintext[i] = static_cast<std::uint8_t>(0x30U + i);
@@ -854,8 +1047,8 @@ bool TestHandshakeResponseAndSessionDerivation() {
     if (payload_error != TransportDataError::None) {
         return false;
     }
-    if (payload_result.header.receiver_index != initiator->current_keypair.remote_index ||
-        payload_result.header.counter != initiator->current_keypair.send_counter ||
+    if (payload_result.header.receiver_index != initiator->current_keypair.RemoteIndex() ||
+        payload_result.header.counter + 1 != initiator->current_keypair.SendCounter() ||
         payload_result.payload_size != sizeof(g_core_self_test_storage.payload_plaintext) ||
         std::memcmp(
             g_core_self_test_storage.payload_plaintext,
@@ -863,7 +1056,6 @@ bool TestHandshakeResponseAndSessionDerivation() {
             sizeof(g_core_self_test_storage.payload_plaintext)) != 0) {
         return false;
     }
-    ++initiator->current_keypair.send_counter;
 
     const TransportDataError replay_error = noise_consume_transport_data_packet(
         &payload_buffer.packet,
@@ -882,7 +1074,7 @@ bool TestHandshakeResponseAndSessionDerivation() {
     mismatch_buffer.packet.len = payload_buffer.packet.len;
     StoreLe32(
         mismatch_buffer.packet.data + sizeof(std::uint32_t),
-        g_core_self_test_storage.responder_copy.current_keypair.local_index ^ 0x00FF00FFU);
+        g_core_self_test_storage.responder_copy.current_keypair.LocalIndex() ^ 0x00FF00FFU);
     const TransportDataError mismatch_error = noise_consume_transport_data_packet(
         &mismatch_buffer.packet,
         &g_core_self_test_storage.responder_copy.current_keypair,
@@ -926,8 +1118,8 @@ bool TestHandshakeResponseAndSessionDerivation() {
         return false;
     }
     if (incoming_result.slot != wg_index_slot::CurrentKeypair ||
-        incoming_result.decrypt.header.receiver_index != initiator->current_keypair.remote_index ||
-        incoming_result.decrypt.header.counter != initiator->current_keypair.send_counter ||
+        incoming_result.decrypt.header.receiver_index != initiator->current_keypair.RemoteIndex() ||
+        incoming_result.decrypt.header.counter + 1 != initiator->current_keypair.SendCounter() ||
         incoming_result.decrypt.payload_size != TransportDataPaddingBlockSize ||
         std::memcmp(
             g_core_self_test_storage.payload_plaintext,
@@ -946,32 +1138,32 @@ bool TestHandshakeResponseAndSessionDerivation() {
         return false;
     }
 
-    return initiator->current_keypair.valid &&
-           responder->current_keypair.valid &&
+    return initiator->current_keypair.IsValid() &&
+           responder->current_keypair.IsValid() &&
            initiator->handshake.state == HandshakeState::SessionDerived &&
            responder->handshake.state == HandshakeState::SessionDerived &&
-           initiator->current_keypair.local_index == 0x01020304U &&
-           initiator->current_keypair.remote_index == 0xA1A2A3A4U &&
-           responder->current_keypair.local_index == 0xA1A2A3A4U &&
-           responder->current_keypair.remote_index == 0x01020304U &&
-           initiator->current_keypair.sending_key.valid &&
-           initiator->current_keypair.receiving_key.valid &&
-           responder->current_keypair.sending_key.valid &&
-           responder->current_keypair.receiving_key.valid &&
+           initiator->current_keypair.LocalIndex() == 0x01020304U &&
+           initiator->current_keypair.RemoteIndex() == 0xA1A2A3A4U &&
+           responder->current_keypair.LocalIndex() == 0xA1A2A3A4U &&
+           responder->current_keypair.RemoteIndex() == 0x01020304U &&
+           initiator->current_keypair.SendingKey().valid &&
+           initiator->current_keypair.ReceivingKey().valid &&
+           responder->current_keypair.SendingKey().valid &&
+           responder->current_keypair.ReceivingKey().valid &&
            initiator->cookie.valid &&
            initiator->has_last_initiation &&
-           responder->current_keypair.has_receive_counter &&
-           responder->current_keypair.receive_counter == payload_result.header.counter &&
+           responder->current_keypair.ReceiveReplayWindow().HasReceivedPacket() &&
+           responder->current_keypair.ReceiveReplayWindow().HighestCounter() == payload_result.header.counter &&
            std::memcmp(
-               initiator->current_keypair.sending_key.bytes,
-               responder->current_keypair.receiving_key.bytes,
-               sizeof(initiator->current_keypair.sending_key.bytes)) == 0 &&
+               initiator->current_keypair.SendingKey().bytes.data(),
+               responder->current_keypair.ReceivingKey().bytes.data(),
+               initiator->current_keypair.SendingKey().bytes.size()) == 0 &&
            std::memcmp(
-               initiator->current_keypair.receiving_key.bytes,
-               responder->current_keypair.sending_key.bytes,
-               sizeof(initiator->current_keypair.receiving_key.bytes)) == 0 &&
+               initiator->current_keypair.ReceivingKey().bytes.data(),
+               responder->current_keypair.SendingKey().bytes.data(),
+               initiator->current_keypair.ReceivingKey().bytes.size()) == 0 &&
            std::memcmp(
-               initiator->last_initiation.macs.mac2,
+               initiator->last_initiation.macs.mac2.data(),
                ZeroMac,
                NoiseMacSize) != 0;
 }

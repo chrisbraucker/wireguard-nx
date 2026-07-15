@@ -57,7 +57,7 @@ void wg_timers_init(wg_timers *timers) {
 void wg_timers_schedule(
     wg_timers *timers,
     TimerHook hook,
-    wgnx::platform::jiffies_t expires,
+    TimerDeadline deadline,
     const char *peer_name) {
     wg_timer_hook_state *state = GetHookState(timers, hook);
     if (state == nullptr) {
@@ -65,12 +65,12 @@ void wg_timers_schedule(
     }
 
     state->pending = true;
-    state->expires = expires;
+    state->deadline = deadline;
     wgnx::sysmodule::logger::Log(
-        "WG timer peer='%s' schedule hook=%s expires=%llu",
+        "WG timer peer='%s' schedule hook=%s deadline_ms=%llu",
         peer_name != nullptr ? peer_name : "<unnamed>",
         GetTimerHookName(hook),
-        static_cast<unsigned long long>(expires));
+        static_cast<unsigned long long>(deadline.count()));
 }
 
 void wg_timers_cancel(wg_timers *timers, TimerHook hook, const char *peer_name) {
@@ -84,7 +84,7 @@ void wg_timers_cancel(wg_timers *timers, TimerHook hook, const char *peer_name) 
     }
 
     state->pending = false;
-    state->expires = 0;
+    state->deadline = TimerDeadline::zero();
     wgnx::sysmodule::logger::Log(
         "WG timer peer='%s' cancel hook=%s",
         peer_name != nullptr ? peer_name : "<unnamed>",

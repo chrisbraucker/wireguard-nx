@@ -1,11 +1,10 @@
 #pragma once
 
 #include "wgnx/platform/clock.hpp"
-#include "wgnx/platform/packet.hpp"
-
 #include "wireguard/messages.hpp"
 
 #include <cstdint>
+#include <span>
 
 namespace wgnx::wireguard {
 
@@ -55,7 +54,7 @@ bool noise_handshake_consume_response(const message_handshake_response *src, con
 bool noise_handshake_consume_cookie_reply(const message_handshake_cookie *src, const wg_device *device, wg_peer *peer);
 bool noise_handshake_begin_session(wg_device *device, wg_peer *peer);
 HandshakePacketOutcome noise_handshake_consume_incoming_packet(
-    const wgnx::platform::packet_buffer *packet,
+    std::span<const std::uint8_t> packet,
     const wg_device *device,
     wg_peer *peer);
 
