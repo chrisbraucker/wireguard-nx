@@ -47,6 +47,9 @@ HOST_TEST_TARGET := $(HOST_TEST_DIR)/wireguard-host-test
 HOST_SANITIZE_DIR := $(OUTDIR)/host-test-sanitize
 HOST_SANITIZE_TARGET := $(HOST_SANITIZE_DIR)/wireguard-host-test
 HOST_TEST_CPP_SOURCES := \
+	src/runtime/peer_runtime.cpp \
+	src/runtime/runtime_coordinator.cpp \
+	src/runtime/udp_binding.cpp \
 	src/wireguard/messages.cpp \
 	src/wireguard/dispatch.cpp \
 	src/wireguard/index_allocator.cpp \
@@ -89,7 +92,7 @@ DEFINES	+=	-DDISABLE_IPC -D__SWITCH__ \
 
 CFLAGS	+= $(INCLUDE) -Wno-unused-result
 
-CXXFLAGS	+= $(CFLAGS) -std=c++23
+CXXFLAGS	+= $(CFLAGS) -std=c++23 -Werror=frame-larger-than=8192
 
 #---------------------------------------------------------------------------------
 # list of directories containing libraries, this must be the top level containing

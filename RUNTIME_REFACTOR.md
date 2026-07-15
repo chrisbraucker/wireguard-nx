@@ -120,9 +120,75 @@ packet delivery.
 - There is one source of truth during every migration chunk; temporary adapters
   may delegate but must not duplicate mutable state.
 
+## Frozen Runtime Contracts
+
+These contracts describe the observable behavior at the start of the refactor.
+They remain review gates for later chunks unless an intentional behavior or IPC
+change is documented separately.
+
+### Command And Status Behavior
+
+- Peer selection accepts `-1` to disable selection or an index in
+  `[0, peer_count)`. Every other value is rejected.
+- Selecting the already-active peer is idempotent. Selecting another peer first
+  tears down the old active peer; selecting `-1` leaves no active tunnel.
+- Autostart selection follows the same index rules and changes in-memory state
+  only after persistence succeeds.
+- Daemon status is always ready after initialization. Tunnel-active depends
+  only on having an active selection; the error flag is set when any configured
+  peer is in the error state.
+- Peer status flags independently project active selection, autostart
+  selection, established state, error state, and resolved-endpoint presence.
+- Status queries are observational and do not advance protocol or timer state.
+
+### Event And Effect Vocabulary
+
+The current daemon procedures are classified using the vocabulary that later
+chunks will make explicit:
+
+- **Events** are completed facts delivered under the runtime lock: activation
+  requested, deactivation requested, endpoint resolved or failed, datagram
+  received, datagram send completed or failed, timer expired, inner packet
+  submitted, packet consumer changed, and network path observed.
+- **Effects** request work outside peer policy: resolve endpoint, open/close or
+  rebind UDP, send or receive a datagram, arm/cancel a timer, queue or deliver an
+  inner packet, persist autostart selection, and schedule Horizon work.
+- A request being queued is not a completed event. Horizon I/O results return as
+  events and must pass identity and generation checks before mutation.
+
+### Generation Rules
+
+- Generation zero is never allocated and never identifies current work.
+- Activation generation changes whenever a peer activation starts. Work from a
+  previous activation cannot affect the current activation.
+- Socket generation changes whenever a UDP socket is opened or rebound. A
+  receive completion is current only when peer, activation generation, socket
+  generation, and socket handle all match.
+- Handshake retry sequence identifies one unanswered initiation sequence.
+  Retry timer delivery must match that sequence as well as peer and activation.
+- Timer arm generation changes on each arm. Cancellation or replacement makes
+  already-queued expiration work stale.
+- Counters wrap past zero to one. Equality of every applicable identity is
+  required; partial matches are rejected without side effects.
+
+### Locking And Ownership Policy
+
+- The daemon mutex serializes all mutable peer, selection, packet-channel, and
+  pending-request state during this migration.
+- Endpoint resolution and blocking UDP receive use snapshot, unlock, perform
+  I/O, relock, validate, commit. No blocking Horizon I/O is permitted while the
+  daemon mutex is held.
+- Timer callbacks enqueue tokenized work; protocol transitions occur only after
+  the token is validated under the daemon mutex.
+- Queue insertion, removal, clearing, and ownership transfer occur under the
+  daemon mutex, and every removal records a disposition.
+
 ## Incremental Refactor
 
 ### Chunk 0: Freeze Contracts And Invariants
+
+**Status:** Complete. The frozen contracts are documented above and covered by
+the `runtime.frozen-contracts` host characterization test.
 
 Document the component interfaces, event/effect vocabulary, generation rules,
 locking policy, and current observable behavior. Add characterization tests for
@@ -134,6 +200,12 @@ invariants against which they can be reviewed.
 
 ### Chunk 1: Consolidate Peer State
 
+**Status:** Complete. `PeerRegistry` now owns the fixed-capacity collection,
+peer count, active selection, and autostart selection. Each `PeerRuntime` slot
+owns its configuration, derived secrets, lifecycle/metrics state, UDP binding,
+protocol device, and peer controller. Subsequent chunks now encapsulate that
+lifecycle state and route session establishment through the coordinator.
+
 Replace the parallel per-peer arrays in daemon state with fixed-capacity
 `PeerRuntime` slots. Introduce `PeerRegistry` for peer count, active-peer
 selection, and autostart selection. Existing procedural helpers may initially
@@ -144,6 +216,11 @@ index-correlated state arrays remain, and behavior and scheduling are unchanged.
 
 ### Chunk 2: Encapsulate Lifecycle State
 
+**Status:** Complete. `PeerRuntime` privately owns activation allocation and
+validation, lifecycle transitions, metrics, debug-probe state, errors, and
+`PeerInfo` projection. Deterministic coverage exercises valid and stale
+transitions, deactivation, metrics, and active/error snapshots.
+
 Move inactive, resolving, handshaking, active, and error transitions into
 `PeerRuntime`. Move generation allocation and validation, metrics updates,
 runtime error handling, and peer-status projection behind that boundary.
@@ -153,6 +230,21 @@ lifecycle state. Deterministic tests cover valid transitions, stale generations,
 deactivation, and status snapshots.
 
 ### Chunk 3: Introduce Events And Effects
+
+**Status:** Complete. Closed variant-based `PeerEvent` and `RuntimeEffect`
+vocabularies, a fixed-capacity `EffectBatch`, and `RuntimeCoordinator` are in
+production. Authenticated session completion now dispatches a
+`SessionEstablishedEvent`; the resulting packet-submission effect executes
+after the daemon lock is released and its peer identity is revalidated.
+
+The first on-device load regression exposed a pre-existing aggregate-reset
+hazard in this build during peer initialization: assigning `{}` to the roughly
+16 KiB `wg_device` and `wg_peer` objects caused GCC to materialize full
+temporaries on the 16 KiB main-thread stack. These resets now destroy and
+reconstruct the objects in place, preserving secret scrubbing while keeping
+their target stack frames bounded. Target C++ builds reject frames larger than
+8 KiB so this failure mode cannot silently return. The corrected binary remains
+pending an on-device load and real-peer regression pass.
 
 Define closed `PeerEvent` and `RuntimeEffect` types and a fixed-capacity
 `EffectBatch`. Introduce `RuntimeCoordinator::Dispatch()` and route a small,
@@ -248,6 +340,11 @@ routing, effect execution coordination, and status aggregation only. It contains
 no protocol, socket, timer, packet, resolver, probe, or NIFM algorithms.
 
 ## Verification Gates
+
+Target builds enforce an 8 KiB maximum C++ stack frame. The sysmodule main
+thread has a 16 KiB stack, so large owned protocol and packet-storage objects
+must be reset or initialized in place rather than copied through aggregate
+temporaries.
 
 Every chunk must pass:
 

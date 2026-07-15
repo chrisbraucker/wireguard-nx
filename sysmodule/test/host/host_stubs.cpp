@@ -2,6 +2,7 @@
 
 #include "wgnx/platform/clock.hpp"
 #include "wgnx/platform/random.hpp"
+#include "wgnx/platform/udp.hpp"
 
 #include "test_runtime.hpp"
 
@@ -87,6 +88,31 @@ std::uint32_t get_random_u32_below(std::uint32_t ceil) {
     }
 
     return get_random_u32() % ceil;
+}
+
+socket_error udp_open(socket_handle *out_socket, address_family family) {
+    if (out_socket == nullptr || family == address_family::unspecified) {
+        return socket_error::invalid_endpoint;
+    }
+    *out_socket = 1;
+    return socket_error::none;
+}
+
+void udp_close(socket_handle socket) {
+    static_cast<void>(socket);
+}
+
+socket_error udp_send(
+    socket_handle socket,
+    const endpoint &destination,
+    std::span<const std::uint8_t> data,
+    std::size_t *out_sent) {
+    if (socket == InvalidSocket || destination.family == address_family::unspecified ||
+        out_sent == nullptr) {
+        return socket_error::send_failed;
+    }
+    *out_sent = data.size();
+    return socket_error::none;
 }
 
 } // namespace wgnx::platform

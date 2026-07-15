@@ -4,6 +4,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <memory>
 
 namespace wgnx::wireguard {
 
@@ -12,7 +13,8 @@ bool wg_peer_initialize(wg_peer *peer, const PeerInitializationView &config) {
         return false;
     }
 
-    *peer = {};
+    std::destroy_at(peer);
+    std::construct_at(peer);
     std::snprintf(peer->name, sizeof(peer->name), "%s", config.name != nullptr ? config.name : "");
     peer->persistent_keepalive_interval = config.persistent_keepalive_interval;
     peer->has_preshared_key = config.preshared_key != nullptr && config.preshared_key->valid;

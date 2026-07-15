@@ -104,7 +104,8 @@ void wg_device_reset(wg_device *device) {
         return;
     }
 
-    *device = {};
+    std::destroy_at(device);
+    std::construct_at(device);
 }
 
 std::uint32_t wg_device_allocate_index(wg_device *device) {
