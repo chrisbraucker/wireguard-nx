@@ -84,4 +84,12 @@ bool PeerController::CompleteSession(wg_device &device, wg_peer &peer) const {
     return true;
 }
 
+bool PeerController::DeriveResponderSession(wg_device &device, wg_peer &peer) const {
+    return noise_handshake_begin_session(&device, &peer);
+}
+
+void PeerController::ConfirmResponderSession(wg_peer &peer) const {
+    wg_peer_complete_handshake_retry_sequence(&peer);
+}
+
 } // namespace wgnx::wireguard

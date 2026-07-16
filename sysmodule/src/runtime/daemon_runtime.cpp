@@ -76,11 +76,15 @@ constexpr inline std::size_t MaxPaddedTransportPayloadSize =
     wgnx::wireguard::GetPaddedTransportPayloadSize(MaxTransportPayloadSize);
 static_assert(MaxTransportPayloadSize == wgnx::MaxInnerIpv4PacketSize);
 static_assert(MaxTransportPayloadSize == wgnx::wireguard::MaxInnerIpv4PacketSize);
-constinit std::array<std::uint8_t, MaxPaddedTransportPayloadSize> g_receive_payload_buffer = {};
 constinit std::array<std::uint8_t, ReceivePacketCapacity> g_receive_packet_storage = {};
+constinit runtime::EffectBatch g_receive_effects{};
 
 void QueueInnerPacketSubmissionWork();
 void ExecuteRuntimeEffects(const runtime::EffectBatch &effects);
+void PublishDecryptedPacketLocked(
+    std::size_t peer_index,
+    std::uint32_t activation_generation,
+    std::span<const std::uint8_t> inner_packet);
 
 runtime::PeerRuntime &PeerAt(std::size_t peer_index) {
     return g_state.peers[peer_index];
@@ -93,45 +97,6 @@ const char *CStr(const std::array<char, Size> &value) {
 
 [[maybe_unused]] bool IsSupportedDebugTriggerAction(wgnx::DebugTriggerAction action) {
     return wgnx::wireguard::IsSupportedDebugTriggerAction(action);
-}
-
-const char *GetIndexSlotName(wgnx::wireguard::wg_index_slot slot) {
-    switch (slot) {
-        case wgnx::wireguard::wg_index_slot::None:
-            return "none";
-        case wgnx::wireguard::wg_index_slot::Handshake:
-            return "handshake";
-        case wgnx::wireguard::wg_index_slot::CurrentKeypair:
-            return "current";
-        case wgnx::wireguard::wg_index_slot::NextKeypair:
-            return "next";
-        case wgnx::wireguard::wg_index_slot::PreviousKeypair:
-            return "previous";
-    }
-
-    return "unknown";
-}
-
-std::size_t GetEndpointAddressSize(wgnx::platform::address_family family) {
-    switch (family) {
-        case wgnx::platform::address_family::inet:
-            return 4;
-        case wgnx::platform::address_family::inet6:
-            return 16;
-        case wgnx::platform::address_family::unspecified:
-            break;
-    }
-
-    return 0;
-}
-
-bool EndpointsEqual(const wgnx::platform::endpoint &lhs, const wgnx::platform::endpoint &rhs) {
-    if (lhs.family != rhs.family || lhs.port != rhs.port) {
-        return false;
-    }
-
-    const std::size_t address_size = GetEndpointAddressSize(lhs.family);
-    return address_size != 0 && std::memcmp(lhs.address.data(), rhs.address.data(), address_size) == 0;
 }
 
 void FormatEndpointText(
@@ -920,6 +885,27 @@ NOINLINE void ExecutePendingDatagramSendEffect(
     AMS_ABORT_UNLESS(generated.Append(completion));
 }
 
+NOINLINE void ExecutePublishDecryptedPacketEffect(
+    const runtime::PublishDecryptedPacketEffect &effect) {
+    std::scoped_lock lock(g_state_mutex);
+    if (effect.peer.peer_index >= g_state.peers.Count() ||
+        g_state.peers.ActivePeerIndex() !=
+            static_cast<std::int32_t>(effect.peer.peer_index)) {
+        return;
+    }
+
+    runtime::DecryptedPacketView view{};
+    if (PeerAt(effect.peer.peer_index).ViewDecryptedPacket(
+            effect.peer.activation_generation,
+            effect.packet_generation,
+            view)) {
+        PublishDecryptedPacketLocked(
+            effect.peer.peer_index,
+            effect.peer.activation_generation,
+            view.packet);
+    }
+}
+
 void ExecuteRuntimeEffects(const runtime::EffectBatch &effects) {
     runtime::EffectBatch current = effects;
     while (!current.Empty()) {
@@ -1020,6 +1006,8 @@ void ExecuteRuntimeEffects(const runtime::EffectBatch &effects) {
                         if (current) {
                             QueueInnerPacketSubmissionWork();
                         }
+                    } else if constexpr (std::is_same_v<Effect, runtime::PublishDecryptedPacketEffect>) {
+                        ExecutePublishDecryptedPacketEffect(value);
                     }
                 },
                 effect);
@@ -1028,219 +1016,115 @@ void ExecuteRuntimeEffects(const runtime::EffectBatch &effects) {
     }
 }
 
-void CommitReceivedPacket(
+void PublishDecryptedPacketLocked(
+    std::size_t peer_index,
+    std::uint32_t activation_generation,
+    std::span<const std::uint8_t> inner_packet) {
+    const auto &lifecycle = PeerAt(peer_index).Lifecycle();
+    wgnx::wireguard::DebugProbeReplyInfo reply_info{};
+    const auto reply_validation = wgnx::wireguard::ValidateDebugIcmpEchoReply(
+        inner_packet,
+        PeerAt(peer_index).config.address.data(),
+        peer_index,
+        activation_generation,
+        std::addressof(reply_info));
+    if (reply_validation == wgnx::wireguard::DebugProbeReplyValidation::Valid) {
+        char inner_source[16] = {};
+        char inner_destination[16] = {};
+        wgnx::wireguard::FormatIpv4Text(
+            reply_info.source_ipv4,
+            inner_source,
+            sizeof(inner_source));
+        wgnx::wireguard::FormatIpv4Text(
+            reply_info.destination_ipv4,
+            inner_destination,
+            sizeof(inner_destination));
+        CancelPayloadProbeTimeout();
+        SetDebugProbeState(
+            PeerAt(peer_index),
+            reply_info.action,
+            wgnx::DebugProbeStatus::ReplyValidated);
+        logger::Log(
+            "Validated debug ICMP reply for peer %zu action=%s source=%s destination=%s seq=%u activation=%u",
+            peer_index,
+            wgnx::GetDebugTriggerActionName(reply_info.action),
+            inner_source,
+            inner_destination,
+            static_cast<unsigned int>(reply_info.sequence),
+            reply_info.activation_generation);
+        return;
+    }
+
+    if (reply_validation !=
+        wgnx::wireguard::DebugProbeReplyValidation::NotDebugReply) {
+        CancelPayloadProbeTimeout();
+        SetDebugProbeState(
+            PeerAt(peer_index),
+            lifecycle.debug_probe_action,
+            wgnx::DebugProbeStatus::ReplyRejected);
+        logger::Log(
+            "Rejected debug ICMP reply metadata for peer %zu validation=%s payload=%zu",
+            peer_index,
+            wgnx::wireguard::GetDebugProbeReplyValidationName(reply_validation),
+            inner_packet.size());
+        return;
+    }
+
+    EnqueueReceivedInnerIpv4PacketLocked(
+        peer_index,
+        activation_generation,
+        inner_packet);
+}
+
+NOINLINE void CommitReceivedPacket(
     std::size_t peer_index,
     std::uint32_t activation_generation,
     std::uint32_t socket_generation,
     wgnx::platform::socket_handle socket,
     std::span<const std::uint8_t> packet,
-    const wgnx::platform::endpoint &source) {
-    std::unique_lock lock(g_state_mutex);
-    if (peer_index >= g_state.peers.Count() || g_state.peers.ActivePeerIndex() != static_cast<std::int32_t>(peer_index)) {
+    const wgnx::platform::endpoint &source,
+    runtime::EffectBatch &out_effects) {
+    out_effects.Clear();
+    std::scoped_lock lock(g_state_mutex);
+    if (peer_index >= g_state.peers.Count() ||
+        g_state.peers.ActivePeerIndex() !=
+            static_cast<std::int32_t>(peer_index)) {
         return;
     }
 
-    const auto &runtime = PeerAt(peer_index).Lifecycle();
-    auto &binding = PeerAt(peer_index).binding;
-    if (runtime.activation_generation != activation_generation ||
+    const auto &lifecycle = PeerAt(peer_index).Lifecycle();
+    const auto &binding = PeerAt(peer_index).binding;
+    if (lifecycle.activation_generation != activation_generation ||
         !binding.Matches(socket_generation, socket) ||
-        (runtime.state != wgnx::PeerRuntimeState::Handshaking &&
-         runtime.state != wgnx::PeerRuntimeState::Active)) {
+        !PeerAt(peer_index).IsInTransportState()) {
         return;
     }
 
-    PeerAt(peer_index).RecordReceivedBytes(packet.size(), GetRuntimeNowNs());
-
-    wgnx::wireguard::wg_peer *peer = GetProtocolPeer(peer_index);
-    if (peer == nullptr) {
-        SetPeerError(peer_index, wgnx::PeerErrorStage::Internal, wgnx::PeerErrorCode::InternalFailure);
-        return;
-    }
-
-    const wgnx::wireguard::ParseResult type_result = wgnx::wireguard::InspectMessageType(packet);
-    if (!type_result.success) {
-        logger::Log(
-            "Rejected UDP packet for peer %zu bytes=%zu source_family=%s inspect_err=%s",
-            peer_index,
-            packet.size(),
-            wgnx::GetPeerResolvedFamilyName(static_cast<wgnx::PeerResolvedFamily>(source.family)),
-            wgnx::wireguard::GetParseErrorName(type_result.error));
-        return;
-    }
-
-    if (type_result.type == wgnx::wireguard::MessageType::TransportData) {
-        char source_text[sizeof(wgnx::PeerInfo::resolved_endpoint)] = {};
-        char expected_text[sizeof(wgnx::PeerInfo::resolved_endpoint)] = {};
-        FormatEndpointText(source, source_text, sizeof(source_text));
-        FormatEndpointText(binding.Endpoint(), expected_text, sizeof(expected_text));
-
-        if (!binding.HasEndpoint() || !EndpointsEqual(source, binding.Endpoint())) {
-            logger::Log(
-                "Rejected WG transport data for peer %zu bytes=%zu source=%s expected=%s reason=source_mismatch",
-                peer_index,
-                packet.size(),
-                source_text,
-                expected_text);
-            return;
-        }
-
-        wgnx::wireguard::IncomingTransportDataResult decrypt_result{};
-        const wgnx::wireguard::TransportDataError decrypt_error =
-            wgnx::wireguard::noise_consume_incoming_transport_data_packet(
-                packet,
-                PeerAt(peer_index).protocol.device,
-                *peer,
-                g_receive_payload_buffer,
-                decrypt_result);
-        if (decrypt_error != wgnx::wireguard::TransportDataError::None) {
-            logger::Log(
-                "Rejected WG transport data for peer %zu bytes=%zu source=%s slot=%s err=%s",
-                peer_index,
-                packet.size(),
-                source_text,
-                GetIndexSlotName(decrypt_result.slot),
-                wgnx::wireguard::GetTransportDataErrorName(decrypt_error));
-            return;
-        }
-
-        logger::Log(
-            "Accepted WG transport data for peer %zu bytes=%zu payload=%zu source=%s slot=%s counter=%llu",
-            peer_index,
-            packet.size(),
-            decrypt_result.decrypt.payload_size,
-            source_text,
-            GetIndexSlotName(decrypt_result.slot),
-            static_cast<unsigned long long>(decrypt_result.decrypt.header.counter));
-
-        if (decrypt_result.decrypt.payload_size == 0) {
-            logger::Log("Accepted WG keepalive payload for peer %zu", peer_index);
-            return;
-        }
-
-        const auto padded_payload = std::span<const std::uint8_t>(
-            g_receive_payload_buffer.data(),
-            decrypt_result.decrypt.payload_size);
-        std::size_t inner_packet_size = 0;
-        const auto inner_validation = wgnx::wireguard::ValidatePaddedInnerIpv4Packet(
-            padded_payload,
-            std::addressof(inner_packet_size));
-        if (inner_validation != wgnx::wireguard::InnerIpv4ValidationError::None) {
-            logger::Log(
-                "Dropped decrypted inner packet peer=%zu activation=%u bytes=%zu validation=%s",
-                peer_index,
-                activation_generation,
-                padded_payload.size(),
-                wgnx::wireguard::GetInnerIpv4ValidationErrorName(inner_validation));
-            return;
-        }
-        const auto inner_packet = padded_payload.first(inner_packet_size);
-        if (inner_packet.size() != padded_payload.size()) {
-            logger::Log(
-                "Removed WG transport padding for peer %zu payload=%zu inner=%zu padding=%zu",
-                peer_index,
-                padded_payload.size(),
-                inner_packet.size(),
-                padded_payload.size() - inner_packet.size());
-        }
-
-        wgnx::wireguard::DebugProbeReplyInfo reply_info{};
-        const wgnx::wireguard::DebugProbeReplyValidation reply_validation =
-            wgnx::wireguard::ValidateDebugIcmpEchoReply(
-                inner_packet,
-                PeerAt(peer_index).config.address.data(),
-                peer_index,
-                activation_generation,
-                std::addressof(reply_info));
-        if (reply_validation == wgnx::wireguard::DebugProbeReplyValidation::Valid) {
-            char inner_source[16] = {};
-            char inner_destination[16] = {};
-            wgnx::wireguard::FormatIpv4Text(reply_info.source_ipv4, inner_source, sizeof(inner_source));
-            wgnx::wireguard::FormatIpv4Text(reply_info.destination_ipv4, inner_destination, sizeof(inner_destination));
-            CancelPayloadProbeTimeout();
-            SetDebugProbeState(
-                PeerAt(peer_index),
-                reply_info.action,
-                wgnx::DebugProbeStatus::ReplyValidated);
-            logger::Log(
-                "Validated debug ICMP reply for peer %zu action=%s source=%s destination=%s seq=%u activation=%u",
-                peer_index,
-                wgnx::GetDebugTriggerActionName(reply_info.action),
-                inner_source,
-                inner_destination,
-                static_cast<unsigned int>(reply_info.sequence),
-                reply_info.activation_generation);
-            return;
-        }
-
-        if (reply_validation != wgnx::wireguard::DebugProbeReplyValidation::NotDebugReply) {
-            CancelPayloadProbeTimeout();
-            SetDebugProbeState(
-                PeerAt(peer_index),
-                runtime.debug_probe_action,
-                wgnx::DebugProbeStatus::ReplyRejected);
-            logger::Log(
-                "Rejected debug ICMP reply metadata for peer %zu validation=%s payload=%zu",
-                peer_index,
-                wgnx::wireguard::GetDebugProbeReplyValidationName(reply_validation),
-                decrypt_result.decrypt.payload_size);
-            return;
-        }
-
-        EnqueueReceivedInnerIpv4PacketLocked(
-            peer_index,
-            activation_generation,
-            inner_packet);
-        return;
-    }
-
-    const auto outcome = wgnx::wireguard::noise_handshake_consume_incoming_packet(
-        packet,
-        std::addressof(PeerAt(peer_index).protocol.device),
-        peer);
-    logger::Log(
-        "Received UDP packet for peer %zu bytes=%zu source_family=%s outcome=%s",
-        peer_index,
-        packet.size(),
-        wgnx::GetPeerResolvedFamilyName(static_cast<wgnx::PeerResolvedFamily>(source.family)),
-        wgnx::wireguard::GetHandshakePacketOutcomeName(outcome));
-
-    switch (outcome) {
-        case wgnx::wireguard::HandshakePacketOutcome::Invalid:
-            return;
-        case wgnx::wireguard::HandshakePacketOutcome::CookieReplyConsumed: {
-            logger::Log(
-                "Stored WG cookie reply peer=%zu sequence=%u attempt=%u; applying it to the next fresh retry",
-                peer_index,
-                peer->handshake_retry.sequence_count,
-                peer->handshake_retry.send_attempts);
-            return;
-        }
-        case wgnx::wireguard::HandshakePacketOutcome::ResponseConsumed: {
-            const auto now_jiffies = wgnx::platform::get_jiffies_64();
-            const runtime::EffectBatch effects = g_runtime_coordinator.Dispatch(
-                runtime::SessionEstablishedEvent{
-                    .peer = {
-                        .peer_index = static_cast<std::uint32_t>(peer_index),
-                        .activation_generation = activation_generation,
-                    },
-                    .keepalive_deadline =
-                        wgnx::wireguard::TimerDeadlineFromJiffies(now_jiffies) +
-                        std::chrono::seconds{peer->persistent_keepalive_interval},
-                    .rekey_deadline =
-                        wgnx::wireguard::TimerDeadlineFromJiffies(now_jiffies) +
-                        wgnx::wireguard::RekeyAfterTime,
-                    .zero_key_material_deadline =
-                        wgnx::wireguard::TimerDeadlineFromJiffies(now_jiffies) +
-                        wgnx::wireguard::ZeroKeyMaterialAfterTime,
-                    .occurred_at = GetRuntimeNowNs(),
-                });
-            lock.unlock();
-            ExecuteRuntimeEffects(effects);
-            return;
-        }
-    }
+    std::array<char, sizeof(wgnx::PeerInfo::resolved_endpoint)> source_text{};
+    FormatEndpointText(source, source_text.data(), source_text.size());
+    const auto now_jiffies = wgnx::platform::get_jiffies_64();
+    out_effects = g_runtime_coordinator.Dispatch(
+        runtime::EncryptedDatagramReceivedEvent{
+            .peer = {
+                .peer_index = static_cast<std::uint32_t>(peer_index),
+                .activation_generation = activation_generation,
+            },
+            .packet = packet,
+            .source = source,
+            .source_text = source_text,
+            .keepalive_deadline =
+                wgnx::wireguard::TimerDeadlineFromJiffies(now_jiffies) +
+                std::chrono::seconds{
+                    PeerAt(peer_index).Lifecycle().persistent_keepalive_interval},
+            .rekey_deadline =
+                wgnx::wireguard::TimerDeadlineFromJiffies(now_jiffies) +
+                wgnx::wireguard::RekeyAfterTime,
+            .zero_key_material_deadline =
+                wgnx::wireguard::TimerDeadlineFromJiffies(now_jiffies) +
+                wgnx::wireguard::ZeroKeyMaterialAfterTime,
+            .occurred_at = GetRuntimeNowNs(),
+        });
 }
-
 void CommitReceiveFailure(
     std::size_t peer_index,
     std::uint32_t activation_generation,
@@ -1544,7 +1428,10 @@ void ReceiveWorkMain(wgnx::platform::work_struct *) {
             socket_generation,
             socket,
             packet.bytes(),
-            source);
+            source,
+            g_receive_effects);
+        ExecuteRuntimeEffects(g_receive_effects);
+        g_receive_effects.Clear();
         wgnx::platform::packet_clear(std::addressof(packet));
     }
 }

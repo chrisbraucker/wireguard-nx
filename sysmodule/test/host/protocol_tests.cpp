@@ -421,6 +421,61 @@ void TestDeterministicHandshake(TestContext &context) {
         "initiation consumed an unexpected amount of random input");
 }
 
+void TestHandshakeInitiationAdmission(TestContext &context) {
+    using namespace wgnx::wireguard;
+
+    runtime::Reset(InitialRuntimeState);
+    ProtocolPair pair{};
+    WGNX_TEST_REQUIRE(context, pair.Initialize(), "protocol pair initialization failed");
+
+    std::array<std::uint8_t, HandshakeInitiationSize> first_packet{};
+    message_handshake_initiation first{};
+    WGNX_TEST_REQUIRE(
+        context,
+        pair.CreateAndSendInitiation(&first_packet) &&
+            ParseHandshakeInitiation(first_packet, first).success &&
+            noise_handshake_consume_initiation(&first, pair.responder),
+        "first authenticated initiation was not admitted");
+    WGNX_TEST_REQUIRE(
+        context,
+        !noise_handshake_consume_initiation(&first, pair.responder),
+        "identical initiation timestamp bypassed replay admission");
+
+    runtime::SetRealtime({
+        .tv_sec = InitialRuntimeState.realtime.tv_sec + 1,
+        .tv_nsec = InitialRuntimeState.realtime.tv_nsec,
+    });
+    runtime::SetMonotonicTime(
+        InitialMonotonicTime + std::chrono::milliseconds{1}.count() * 1'000'000);
+    message_handshake_initiation second{};
+    std::array<std::uint8_t, HandshakeInitiationSize> second_packet{};
+    WGNX_TEST_REQUIRE(
+        context,
+        wg_device_create_handshake_initiation(&pair.initiator_device, &second) &&
+            SerializeHandshakeInitiation(second_packet, second) == ParseError::None &&
+            !noise_handshake_consume_initiation(&second, pair.responder),
+        "new initiation bypassed the upstream 20 ms flood interval");
+
+    runtime::SetMonotonicTime(
+        InitialMonotonicTime + std::chrono::milliseconds{21}.count() * 1'000'000);
+    WGNX_TEST_REQUIRE(
+        context,
+        noise_handshake_consume_initiation(&second, pair.responder),
+        "new initiation was not admitted after the flood interval elapsed");
+
+    second.macs.mac1[0] ^= 0x80U;
+    runtime::SetRealtime({
+        .tv_sec = InitialRuntimeState.realtime.tv_sec + 2,
+        .tv_nsec = InitialRuntimeState.realtime.tv_nsec,
+    });
+    runtime::SetMonotonicTime(
+        InitialMonotonicTime + std::chrono::milliseconds{42}.count() * 1'000'000);
+    WGNX_TEST_REQUIRE(
+        context,
+        !noise_handshake_consume_initiation(&second, pair.responder),
+        "tampered initiation mac1 was admitted");
+}
+
 void TestBidirectionalTransport(TestContext &context) {
     runtime::Reset(InitialRuntimeState);
     ProtocolPair pair{};
@@ -1043,11 +1098,11 @@ void TestRuntimeCoordinatorDispatch(TestContext &context) {
         "coordinator test could not establish handshaking state");
 
     RuntimeCoordinator coordinator{registry};
-    const auto out_of_range = coordinator.Dispatch(SessionEstablishedEvent{
+    const auto out_of_range = coordinator.Dispatch(EncryptedDatagramReceivedEvent{
         .peer = {.peer_index = 1, .activation_generation = 1},
         .occurred_at = 3'000,
     });
-    const auto stale = coordinator.Dispatch(SessionEstablishedEvent{
+    const auto stale = coordinator.Dispatch(EncryptedDatagramReceivedEvent{
         .peer = {.peer_index = 0, .activation_generation = 2},
         .occurred_at = 3'000,
     });
@@ -1058,7 +1113,7 @@ void TestRuntimeCoordinatorDispatch(TestContext &context) {
             registry[0].Lifecycle().activation_generation == 1,
         "coordinator accepted an out-of-range or stale event");
 
-    const auto effects = coordinator.Dispatch(SessionEstablishedEvent{
+    const auto effects = coordinator.Dispatch(EncryptedDatagramReceivedEvent{
         .peer = {.peer_index = 0, .activation_generation = 1},
         .occurred_at = 4'000,
     });
@@ -1097,6 +1152,11 @@ void TestRuntimeCoordinatorDispatch(TestContext &context) {
             std::holds_alternative<SendPendingDatagramEffect>(*(first.begin() + 1)) &&
             !bounded.Append(second) && bounded.Size() == EffectBatch::Capacity,
         "runtime effect batch append lost ordering or violated bounded capacity");
+    bounded.Clear();
+    WGNX_TEST_REQUIRE(
+        context,
+        bounded.Empty() && bounded.Push(effect) && bounded.Size() == 1,
+        "runtime effect batch could not be reused by the ordered receive worker");
 }
 
 void TestRuntimePeerActivation(TestContext &context) {
@@ -1410,15 +1470,10 @@ void TestRuntimeOutboundLifecycle(TestContext &context) {
             responder.ReceiveInitiationAndSendResponse(),
         "runtime initiation did not produce a responder handshake");
     std::span<const std::uint8_t> response{};
-    auto *protocol_peer = wg_device_first_peer(&runtime_peer.protocol.device);
     WGNX_TEST_REQUIRE(
         context,
-        protocol_peer != nullptr && responder.responder_to_initiator.Receive(response) &&
-            noise_handshake_consume_incoming_packet(
-                response,
-                &runtime_peer.protocol.device,
-                protocol_peer) == HandshakePacketOutcome::ResponseConsumed,
-        "runtime peer did not authenticate the recovery response");
+        responder.responder_to_initiator.Receive(response),
+        "runtime peer did not receive the recovery response");
     effects = coordinator.Dispatch(PendingDatagramSentEvent{
         .peer = identity,
         .datagram_generation = send->datagram_generation,
@@ -1433,8 +1488,15 @@ void TestRuntimeOutboundLifecycle(TestContext &context) {
             &responder.responder_device,
             responder.responder),
         "responder session derivation failed");
-    effects = coordinator.Dispatch(SessionEstablishedEvent{
+    effects = coordinator.Dispatch(EncryptedDatagramReceivedEvent{
         .peer = identity,
+        .packet = response,
+        .source = {
+            .family = wgnx::platform::address_family::inet,
+            .port = 51820,
+            .address = {192, 0, 2, 1},
+        },
+        .source_text = {"192.0.2.1:51820"},
         .keepalive_deadline = TimerDeadlineFromJiffies(600),
         .rekey_deadline = TimerDeadlineFromJiffies(700),
         .zero_key_material_deadline = TimerDeadlineFromJiffies(800),
@@ -1456,6 +1518,22 @@ void TestRuntimeOutboundLifecycle(TestContext &context) {
         context,
         runtime_peer.SnapshotPendingDatagram(1, send->datagram_generation, snapshot),
         "session confirmation keepalive was not staged");
+    std::array<
+        std::uint8_t,
+        GetPaddedTransportPayloadSize(wgnx::wireguard::MaxInnerIpv4PacketSize)>
+        responder_plaintext{};
+    IncomingTransportDataResult responder_confirmation{};
+    WGNX_TEST_REQUIRE(
+        context,
+        noise_consume_incoming_transport_data_packet(
+            std::span<const std::uint8_t>(snapshot.bytes).first(snapshot.size),
+            responder.responder_device,
+            *responder.responder,
+            responder_plaintext,
+            responder_confirmation) == TransportDataError::None &&
+            responder_confirmation.promoted_next_keypair &&
+            responder.responder->current_keypair.IsValid(),
+        "responder did not confirm the initial runtime session");
     effects = coordinator.Dispatch(PendingDatagramSentEvent{
         .peer = identity,
         .datagram_generation = send->datagram_generation,
@@ -1493,6 +1571,193 @@ void TestRuntimeOutboundLifecycle(TestContext &context) {
             std::get_if<QueueInnerPacketSubmissionEffect>(effects.begin()) != nullptr &&
             runtime_peer.StagedInnerPacketCount() == 0,
         "successful transport completion did not retire and continue the queue");
+
+    const std::uint32_t previous_runtime_index =
+        runtime_peer.protocol.device.peer.current_keypair.LocalIndex();
+    runtime::SetMonotonicTime(SessionBirthTime + wgnx::platform::NSEC_PER_SEC);
+    runtime::SetRealtime({
+        .tv_sec = InitialRuntimeState.realtime.tv_sec + 1,
+        .tv_nsec = InitialRuntimeState.realtime.tv_nsec,
+    });
+    message_handshake_initiation peer_initiation{};
+    std::array<std::uint8_t, HandshakeInitiationSize> peer_initiation_packet{};
+    WGNX_TEST_REQUIRE(
+        context,
+        wg_device_create_handshake_initiation(
+            &responder.responder_device,
+            &peer_initiation) &&
+            SerializeHandshakeInitiation(
+                peer_initiation_packet,
+                peer_initiation) == ParseError::None,
+        "remote peer did not create a rotation initiation");
+
+    const wgnx::platform::endpoint roamed_endpoint{
+        .family = wgnx::platform::address_family::inet,
+        .port = 51999,
+        .address = {198, 51, 100, 44},
+    };
+    effects = coordinator.Dispatch(EncryptedDatagramReceivedEvent{
+        .peer = identity,
+        .packet = peer_initiation_packet,
+        .source = roamed_endpoint,
+        .source_text = {"198.51.100.44:51999"},
+        .keepalive_deadline = TimerDeadlineFromJiffies(900),
+        .zero_key_material_deadline = TimerDeadlineFromJiffies(1'000),
+        .occurred_at = SessionBirthTime + wgnx::platform::NSEC_PER_SEC,
+    });
+    send = effects.Size() == 3
+        ? std::get_if<SendPendingDatagramEffect>(effects.begin() + 2)
+        : nullptr;
+    WGNX_TEST_REQUIRE(
+        context,
+        send != nullptr &&
+            runtime_peer.protocol.device.peer.current_keypair.LocalIndex() ==
+                previous_runtime_index &&
+            runtime_peer.protocol.device.peer.next_keypair.IsValid() &&
+            runtime_peer.binding.Endpoint().port == roamed_endpoint.port &&
+            runtime_peer.binding.Endpoint().address == roamed_endpoint.address,
+        "authenticated initiation did not preserve the current session and roam the endpoint");
+
+    WGNX_TEST_REQUIRE(
+        context,
+        runtime_peer.SnapshotPendingDatagram(
+            identity.activation_generation,
+            send->datagram_generation,
+            snapshot) &&
+            snapshot.kind == PendingDatagramKind::HandshakeResponse &&
+            snapshot.size == HandshakeResponseSize,
+        "runtime did not stage the responder handshake response");
+    const auto response_packet =
+        std::span<const std::uint8_t>(snapshot.bytes).first(snapshot.size);
+    WGNX_TEST_REQUIRE(
+        context,
+        noise_handshake_consume_incoming_packet(
+            response_packet,
+            &responder.responder_device,
+            responder.responder) == HandshakePacketOutcome::ResponseConsumed &&
+            noise_handshake_begin_session(
+                &responder.responder_device,
+                responder.responder),
+        "remote peer did not derive the responder-created session");
+    effects = coordinator.Dispatch(PendingDatagramSentEvent{
+        .peer = identity,
+        .datagram_generation = send->datagram_generation,
+        .bytes_sent = snapshot.size,
+        .error = wgnx::platform::socket_error::none,
+        .occurred_at = SessionBirthTime + wgnx::platform::NSEC_PER_SEC + 1,
+    });
+    WGNX_TEST_REQUIRE(
+        context,
+        effects.Empty(),
+        "handshake response completion produced an unexpected follow-up");
+
+    constexpr std::array<std::uint8_t, 20> InboundPacket = {
+        0x45, 0x00, 0x00, 0x14, 0x00, 0x02, 0x00, 0x00, 0x40, 0x11,
+        0xE2, 0x50, 0x0A, 0x42, 0x42, 0x01, 0x0A, 0x42, 0x42, 0x02,
+    };
+    std::array<std::uint8_t, MaxEncryptedDatagramSize> inbound_datagram{};
+    const auto inbound_create = noise_create_transport_data_packet(
+        inbound_datagram,
+        responder.responder->current_keypair,
+        InboundPacket);
+    WGNX_TEST_REQUIRE(
+        context,
+        inbound_create.error == TransportDataError::None,
+        "remote peer did not create responder-session transport data");
+    const auto inbound_packet = std::span<const std::uint8_t>(inbound_datagram).first(
+        inbound_create.packet_size);
+    effects = coordinator.Dispatch(EncryptedDatagramReceivedEvent{
+        .peer = identity,
+        .packet = inbound_packet,
+        .source = roamed_endpoint,
+        .source_text = {"198.51.100.44:51999"},
+        .keepalive_deadline = TimerDeadlineFromJiffies(1'100),
+        .rekey_deadline = TimerDeadlineFromJiffies(1'200),
+        .zero_key_material_deadline = TimerDeadlineFromJiffies(1'300),
+        .occurred_at = SessionBirthTime + wgnx::platform::NSEC_PER_SEC + 2,
+    });
+    const PublishDecryptedPacketEffect *publish = nullptr;
+    for (const auto &effect : effects) {
+        if (const auto *candidate = std::get_if<PublishDecryptedPacketEffect>(&effect)) {
+            publish = candidate;
+        }
+    }
+    DecryptedPacketView decrypted{};
+    WGNX_TEST_REQUIRE(
+        context,
+        publish != nullptr && runtime_peer.ViewDecryptedPacket(
+            identity.activation_generation,
+            publish->packet_generation,
+            decrypted) &&
+            std::ranges::equal(decrypted.packet, InboundPacket) &&
+            runtime_peer.protocol.device.peer.current_keypair.LocalIndex() !=
+                previous_runtime_index &&
+            runtime_peer.protocol.device.peer.previous_keypair.LocalIndex() ==
+                previous_runtime_index &&
+            !runtime_peer.protocol.device.peer.next_keypair.IsValid(),
+        "first responder-session transport packet did not promote and publish atomically");
+
+    const auto received_bytes = runtime_peer.Lifecycle().rx_bytes;
+    effects = coordinator.Dispatch(EncryptedDatagramReceivedEvent{
+        .peer = identity,
+        .packet = inbound_packet,
+        .source = roamed_endpoint,
+        .source_text = {"198.51.100.44:51999"},
+        .occurred_at = SessionBirthTime + wgnx::platform::NSEC_PER_SEC + 3,
+    });
+    WGNX_TEST_REQUIRE(
+        context,
+        effects.Empty() && runtime_peer.Lifecycle().rx_bytes == received_bytes,
+        "replayed transport data changed peer state or authenticated counters");
+
+    auto stale_datagram = inbound_datagram;
+    stale_datagram[4] ^= 0x80U;
+    effects = coordinator.Dispatch(EncryptedDatagramReceivedEvent{
+        .peer = identity,
+        .packet = std::span<const std::uint8_t>(stale_datagram).first(
+            inbound_create.packet_size),
+        .source = roamed_endpoint,
+        .source_text = {"198.51.100.44:51999"},
+        .occurred_at = SessionBirthTime + wgnx::platform::NSEC_PER_SEC + 4,
+    });
+    WGNX_TEST_REQUIRE(
+        context,
+        effects.Empty() && runtime_peer.Lifecycle().rx_bytes == received_bytes,
+        "stale receiver index changed peer state or authenticated counters");
+
+    const wgnx::platform::endpoint unauthenticated_endpoint{
+        .family = wgnx::platform::address_family::inet,
+        .port = 60000,
+        .address = {203, 0, 113, 7},
+    };
+    constexpr std::array<std::uint8_t, 3> Malformed = {1, 2, 3};
+    effects = coordinator.Dispatch(EncryptedDatagramReceivedEvent{
+        .peer = identity,
+        .packet = Malformed,
+        .source = unauthenticated_endpoint,
+        .source_text = {"203.0.113.7:60000"},
+        .occurred_at = SessionBirthTime + wgnx::platform::NSEC_PER_SEC + 5,
+    });
+    WGNX_TEST_REQUIRE(
+        context,
+        effects.Empty() &&
+            runtime_peer.binding.Endpoint().port == roamed_endpoint.port &&
+            runtime_peer.binding.Endpoint().address == roamed_endpoint.address,
+        "unauthenticated malformed datagram changed the roaming endpoint");
+
+    effects = coordinator.Dispatch(EncryptedDatagramReceivedEvent{
+        .peer = identity,
+        .packet = peer_initiation_packet,
+        .source = unauthenticated_endpoint,
+        .source_text = {"203.0.113.7:60000"},
+        .occurred_at = SessionBirthTime + wgnx::platform::NSEC_PER_SEC + 6,
+    });
+    WGNX_TEST_REQUIRE(
+        context,
+        effects.Empty() && runtime_peer.Lifecycle().rx_bytes == received_bytes &&
+            runtime_peer.binding.Endpoint().port == roamed_endpoint.port &&
+            runtime_peer.binding.Endpoint().address == roamed_endpoint.address,
+        "replayed handshake initiation changed session or endpoint state");
 }
 
 void TestReplayWindowParity(TestContext &context) {
@@ -1935,6 +2200,10 @@ void TestOutboundStagingLifecycle(TestContext &context) {
     const MonotonicTimePoint replacement_birth = expired_time + std::chrono::seconds{1};
     runtime::SetMonotonicTime(static_cast<wgnx::platform::ktime_t>(
         replacement_birth.time_since_epoch().count()));
+    runtime::SetRealtime({
+        .tv_sec = InitialRuntimeState.realtime.tv_sec + 1,
+        .tv_nsec = InitialRuntimeState.realtime.tv_nsec,
+    });
     WGNX_TEST_REQUIRE(
         context,
         pair.CreateAndSendInitiation() &&

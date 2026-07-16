@@ -82,14 +82,14 @@ HOST_TEST_INCLUDES := \
 #---------------------------------------------------------------------------------
 APP_VERSION		:= 0.0.1-dev
 BUILD_ID		:= $(shell git describe --always --dirty 2>/dev/null || echo "unknown")
+BUILD_ID_HEADER		:= $(TOPDIR)/$(BUILD)/build_id.hpp
 
 #---------------------------------------------------------------------------------
 # options for code generation
 #---------------------------------------------------------------------------------
 DEFINES	+=	-DDISABLE_IPC -D__SWITCH__ \
 	-DTARGET="\"$(TARGET)\"" \
-	-DVERSION="\"$(APP_VERSION)\"" \
-	-DBUILD_ID="\"$(BUILD_ID)\""
+	-DVERSION="\"$(APP_VERSION)\""
 
 CFLAGS	+= $(INCLUDE) -Wno-unused-result
 
@@ -151,7 +151,7 @@ export BUILD_EXEFS_SRC := $(TOPDIR)/$(EXEFS_SRC)
 
 export APP_JSON := $(TOPDIR)/res/module.json
 
-.PHONY	: $(BUILD) clean clean-libs clean-build all libs dist test test-sanitize
+.PHONY	: $(BUILD) clean clean-libs clean-build all libs dist test test-sanitize prepare-build-id
 
 #---------------------------------------------------------------------------------
 all	: $(BUILD)
@@ -182,10 +182,19 @@ $(HOST_SANITIZE_TARGET): Makefile $(HOST_TEST_CPP_SOURCES) $(HOST_TEST_C_SOURCES
 libs	:
 	@$(foreach lib,$(LIBNAMES),$(MAKE) --no-print-directory -C $(TOPDIR)/lib/$(lib) && ) true
 
+prepare-build-id:
+	@[ -d $(dir $(BUILD_ID_HEADER)) ] || mkdir -p $(dir $(BUILD_ID_HEADER))
+	@printf '#pragma once\n\nnamespace wgnx {\ninline constexpr char BuildId[] = "$(BUILD_ID)";\n} // namespace wgnx\n' > $(BUILD_ID_HEADER).tmp
+	@if ! cmp -s $(BUILD_ID_HEADER).tmp $(BUILD_ID_HEADER); then \
+		mv $(BUILD_ID_HEADER).tmp $(BUILD_ID_HEADER); \
+	else \
+		rm $(BUILD_ID_HEADER).tmp; \
+	fi
+
 $(LIBNAMES)	:
 	@echo $@
 
-$(BUILD)	: libs
+$(BUILD)	: libs prepare-build-id
 	@[ -d $@ ] || mkdir -p $@
 	@[ -d $(OUTDIR) ] || mkdir -p $(OUTDIR)
 	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile

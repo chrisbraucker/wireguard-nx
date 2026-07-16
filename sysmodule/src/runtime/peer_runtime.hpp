@@ -59,6 +59,7 @@ constexpr inline std::size_t MaxEncryptedDatagramSize =
 enum class PendingDatagramKind : std::uint8_t {
     None = 0,
     HandshakeInitiation,
+    HandshakeResponse,
     TransportData,
     Keepalive,
 };
@@ -67,6 +68,7 @@ constexpr const char *GetPendingDatagramKindName(PendingDatagramKind kind) {
     switch (kind) {
         case PendingDatagramKind::None: return "none";
         case PendingDatagramKind::HandshakeInitiation: return "handshake_initiation";
+        case PendingDatagramKind::HandshakeResponse: return "handshake_response";
         case PendingDatagramKind::TransportData: return "transport_data";
         case PendingDatagramKind::Keepalive: return "keepalive";
     }
@@ -89,6 +91,21 @@ struct PendingDatagramSnapshot {
     std::uint64_t inner_packet_id{0};
     PendingDatagramKind kind{PendingDatagramKind::None};
     UdpBinding::SendSnapshot binding{};
+};
+
+struct DecryptedPacketView {
+    std::span<const std::uint8_t> packet{};
+    std::uint32_t generation{0};
+};
+
+constexpr inline std::size_t MaxDecryptedPayloadSize =
+    wgnx::wireguard::GetPaddedTransportPayloadSize(
+        wgnx::wireguard::MaxInnerIpv4PacketSize);
+
+struct DecryptedPacketSlot {
+    std::array<std::uint8_t, MaxDecryptedPayloadSize> bytes{};
+    std::size_t size{0};
+    std::uint32_t generation{0};
 };
 
 class PeerRuntime {
@@ -126,6 +143,10 @@ public:
         std::uint32_t activation_generation,
         std::uint32_t datagram_generation,
         PendingDatagramSnapshot &out) const;
+    bool ViewDecryptedPacket(
+        std::uint32_t activation_generation,
+        std::uint32_t packet_generation,
+        DecryptedPacketView &out) const;
     bool CanStageInnerPacket() const;
     std::size_t ClearStagedInnerPackets();
     std::size_t StagedInnerPacketCount() const;
@@ -147,6 +168,7 @@ private:
     wgnx::wireguard::wg_peer *ProtocolPeer();
     const wgnx::wireguard::wg_peer *ProtocolPeer() const;
     bool PrepareHandshakeInitiation(PendingDatagramKind kind);
+    bool PrepareHandshakeResponse();
     bool PrepareTransportDatagram(
         std::span<const std::uint8_t> payload,
         PendingDatagramKind kind,
@@ -165,8 +187,20 @@ private:
     void HandlePendingDatagramCompletion(
         const PendingDatagramSentEvent &event,
         EffectBatch &effects);
+    void HandleEncryptedDatagram(
+        const EncryptedDatagramReceivedEvent &event,
+        EffectBatch &effects);
+    void CompleteInitiatorSession(
+        const EncryptedDatagramReceivedEvent &event,
+        EffectBatch &effects);
+    void HandleTransportData(
+        const EncryptedDatagramReceivedEvent &event,
+        EffectBatch &effects);
+    void UpdateEndpointFromAuthenticatedPacket(
+        const EncryptedDatagramReceivedEvent &event);
     std::uint32_t AllocateSocketGeneration();
     std::uint32_t AllocateDatagramGeneration();
+    std::uint32_t AllocateDecryptedPacketGeneration();
     void EnterActivationError(
         wgnx::PeerErrorStage stage,
         wgnx::PeerErrorCode code,
@@ -179,6 +213,8 @@ private:
     std::uint32_t m_next_datagram_generation{1};
     PendingDatagram m_pending_datagram{};
     wgnx::wireguard::InnerPacketRecord m_staging_record{};
+    DecryptedPacketSlot m_decrypted_packet{};
+    std::uint32_t m_next_decrypted_packet_generation{1};
     std::uint32_t m_peer_index{0};
 };
 

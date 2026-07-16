@@ -89,6 +89,8 @@ public:
     HandshakeTransition StartHandshake(wg_device &device, wg_peer &peer) const;
     HandshakeTransition HandleHandshakeRetryTimer(wg_device &device, wg_peer &peer) const;
     bool CompleteSession(wg_device &device, wg_peer &peer) const;
+    bool DeriveResponderSession(wg_device &device, wg_peer &peer) const;
+    void ConfirmResponderSession(wg_peer &peer) const;
 
 private:
     static HandshakeTransition PrepareFreshInitiation(

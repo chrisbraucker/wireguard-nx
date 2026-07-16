@@ -45,8 +45,11 @@ struct UdpBindOpenedEvent {
     wgnx::platform::ktime_t occurred_at{0};
 };
 
-struct SessionEstablishedEvent {
+struct EncryptedDatagramReceivedEvent {
     PeerIdentity peer{};
+    std::span<const std::uint8_t> packet{};
+    wgnx::platform::endpoint source{};
+    std::array<char, sizeof(wgnx::PeerInfo::resolved_endpoint)> source_text{};
     wgnx::wireguard::TimerDeadline keepalive_deadline{};
     wgnx::wireguard::TimerDeadline rekey_deadline{};
     wgnx::wireguard::TimerDeadline zero_key_material_deadline{};
@@ -95,7 +98,7 @@ using PeerEvent = std::variant<
     ActivationRequestedEvent,
     EndpointResolvedEvent,
     UdpBindOpenedEvent,
-    SessionEstablishedEvent,
+    EncryptedDatagramReceivedEvent,
     PendingDatagramSentEvent,
     InnerPacketStagedEvent,
     ProcessOutboundQueueEvent,
@@ -146,6 +149,11 @@ struct QueueInnerPacketSubmissionEffect {
     PeerIdentity peer{};
 };
 
+struct PublishDecryptedPacketEffect {
+    PeerIdentity peer{};
+    std::uint32_t packet_generation{0};
+};
+
 using RuntimeEffect = std::variant<
     ResolveEndpointEffect,
     OpenUdpBindEffect,
@@ -155,7 +163,8 @@ using RuntimeEffect = std::variant<
     ArmProtocolTimerEffect,
     CancelProtocolTimerEffect,
     SuspendUdpTransportEffect,
-    QueueInnerPacketSubmissionEffect>;
+    QueueInnerPacketSubmissionEffect,
+    PublishDecryptedPacketEffect>;
 
 class EffectBatch {
 public:
@@ -181,6 +190,7 @@ public:
 
     constexpr std::size_t Size() const { return m_size; }
     constexpr bool Empty() const { return m_size == 0; }
+    constexpr void Clear() { m_size = 0; }
     constexpr const RuntimeEffect *begin() const { return m_effects.data(); }
     constexpr const RuntimeEffect *end() const { return m_effects.data() + m_size; }
 

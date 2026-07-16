@@ -9,8 +9,10 @@
 
 #include "logger.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstring>
+#include <iterator>
 
 namespace wgnx::wireguard {
 
@@ -433,6 +435,25 @@ void ComputeMac1(message_handshake_response *message, const noise_public_key &re
     crypto::secure_clear(serialized.data(), serialized.size());
 }
 
+template <typename Message>
+bool VerifyMac1(
+    const Message &message,
+    const noise_public_key &local_static,
+    void (*compute)(Message *, const noise_public_key &)) {
+    if (!local_static.valid) {
+        return false;
+    }
+
+    Message expected = message;
+    compute(&expected, local_static);
+    const bool matches = crypto::secure_equal(
+        expected.macs.mac1.data(),
+        message.macs.mac1.data(),
+        message.macs.mac1.size());
+    crypto::secure_clear(expected.macs.mac1.data(), expected.macs.mac1.size());
+    return matches;
+}
+
 bool ComputeCookieKey(
     std::uint8_t key[NoiseSymmetricKeySize],
     const noise_public_key &remote_static) {
@@ -590,6 +611,8 @@ const char *GetHandshakePacketOutcomeName(HandshakePacketOutcome outcome) {
     switch (outcome) {
         case HandshakePacketOutcome::Invalid:
             return "invalid";
+        case HandshakePacketOutcome::InitiationConsumed:
+            return "initiation_consumed";
         case HandshakePacketOutcome::ResponseConsumed:
             return "response_consumed";
         case HandshakePacketOutcome::CookieReplyConsumed:
@@ -758,22 +781,16 @@ bool noise_handshake_create_initiation(message_handshake_initiation *dst, wg_pee
 bool noise_handshake_consume_initiation(const message_handshake_initiation *src, wg_peer *peer) {
     if (src == nullptr || peer == nullptr || !peer->static_identity.static_private.valid ||
         !peer->static_identity.static_public.valid || !peer->static_identity.remote_static.valid ||
-        !peer->handshake_material.precomputed_static_static.valid || peer->handshake.local_index == 0) {
+        !peer->handshake_material.precomputed_static_static.valid) {
         return false;
     }
-
-    /*
-     * Deliberate protocol-hardening scope note:
-     * This responder-side path exists primarily to let the deterministic
-     * harness create a valid response packet for initiator-side verification.
-     * Replay and flood checks are deferred to Milestone 7.
-     */
     std::uint8_t key[NoiseSymmetricKeySize]{};
     std::uint8_t chaining_key[NoiseHashSize]{};
     std::uint8_t hash[NoiseHashSize]{};
     std::uint8_t remote_ephemeral[NoisePublicKeySize]{};
     std::uint8_t remote_static[NoisePublicKeySize]{};
     std::uint8_t timestamp[TAI64NTimestampSize]{};
+    MonotonicTimePoint now{};
     bool ok = false;
 
     if (GetMessageType(src->type) != MessageType::HandshakeInitiation) {
@@ -784,12 +801,8 @@ bool noise_handshake_consume_initiation(const message_handshake_initiation *src,
         wgnx::sysmodule::logger::Log("WG handshake peer='%s': rejected initiation with zero sender index", peer->name);
         goto out;
     }
-    if (peer->handshake.remote_index != 0 && peer->handshake.remote_index != src->sender_index) {
-        wgnx::sysmodule::logger::Log(
-            "WG handshake peer='%s': rejected initiation remote index changed old=0x%08x new=0x%08x",
-            peer->name,
-            peer->handshake.remote_index,
-            src->sender_index);
+    if (!VerifyMac1(*src, peer->static_identity.static_public, ComputeMac1)) {
+        wgnx::sysmodule::logger::Log("WG handshake peer='%s': rejected initiation mac1", peer->name);
         goto out;
     }
 
@@ -819,6 +832,23 @@ bool noise_handshake_consume_initiation(const message_handshake_initiation *src,
         goto out;
     }
 
+    if (peer->handshake.has_last_initiation_timestamp &&
+        !std::lexicographical_compare(
+            peer->handshake.last_initiation_timestamp.begin(),
+            peer->handshake.last_initiation_timestamp.end(),
+            std::begin(timestamp),
+            std::end(timestamp))) {
+        wgnx::sysmodule::logger::Log("WG handshake peer='%s': rejected replayed initiation", peer->name);
+        goto out;
+    }
+    now = GetMonotonicTime();
+    if (peer->handshake.last_initiation_consumption > MonotonicTimePoint{} &&
+        (now < peer->handshake.last_initiation_consumption ||
+         now - peer->handshake.last_initiation_consumption <= HandshakeInitiationRate)) {
+        wgnx::sysmodule::logger::Log("WG handshake peer='%s': rejected flooded initiation", peer->name);
+        goto out;
+    }
+
     std::memcpy(peer->handshake_material.remote_ephemeral.bytes.data(), remote_ephemeral, sizeof(remote_ephemeral));
     peer->handshake_material.remote_ephemeral.valid = true;
     std::memcpy(peer->handshake_material.hash.bytes.data(), hash, sizeof(hash));
@@ -826,6 +856,9 @@ bool noise_handshake_consume_initiation(const message_handshake_initiation *src,
     std::memcpy(peer->handshake_material.chaining_key.bytes.data(), chaining_key, sizeof(chaining_key));
     peer->handshake_material.chaining_key.valid = true;
     peer->handshake.remote_index = src->sender_index;
+    std::copy(std::begin(timestamp), std::end(timestamp), peer->handshake.last_initiation_timestamp.begin());
+    peer->handshake.has_last_initiation_timestamp = true;
+    peer->handshake.last_initiation_consumption = now;
     static_cast<void>(noise_handshake_transition(
         &peer->handshake,
         HandshakeState::InitiationReceived,
@@ -943,6 +976,10 @@ bool noise_handshake_consume_response(const message_handshake_response *src, con
     }
     if (src->sender_index == 0) {
         wgnx::sysmodule::logger::Log("WG handshake peer='%s': rejected response with zero sender index", peer->name);
+        goto out;
+    }
+    if (!VerifyMac1(*src, peer->static_identity.static_public, ComputeMac1)) {
+        wgnx::sysmodule::logger::Log("WG handshake peer='%s': rejected response mac1", peer->name);
         goto out;
     }
     if (src->sender_index == peer->handshake.local_index) {
@@ -1137,7 +1174,7 @@ bool noise_handshake_begin_session(wg_device *device, wg_peer *peer) {
 
 HandshakePacketOutcome noise_handshake_consume_incoming_packet(
     std::span<const std::uint8_t> packet,
-    const wg_device *device,
+    wg_device *device,
     wg_peer *peer) {
     if (device == nullptr || peer == nullptr) {
         return HandshakePacketOutcome::Invalid;
@@ -1153,6 +1190,28 @@ HandshakePacketOutcome noise_handshake_consume_incoming_packet(
     }
 
     switch (type_result.type) {
+        case MessageType::HandshakeInitiation: {
+            message_handshake_initiation initiation{};
+            const ParseResult parse_result = ParseHandshakeInitiation(packet, initiation);
+            if (!parse_result.success) {
+                wgnx::sysmodule::logger::Log(
+                    "WG handshake peer='%s': rejected initiation packet err=%s",
+                    peer->name,
+                    GetParseErrorName(parse_result.error));
+                return HandshakePacketOutcome::Invalid;
+            }
+            if (!noise_handshake_consume_initiation(&initiation, peer)) {
+                return HandshakePacketOutcome::Invalid;
+            }
+            const std::uint32_t local_index = wg_device_allocate_index(device);
+            if (local_index == 0) {
+                noise_handshake_clear_transcript(peer);
+                return HandshakePacketOutcome::Invalid;
+            }
+            noise_handshake_set_local_index(&peer->handshake, local_index);
+            wg_device_register_handshake_index(device, local_index);
+            return HandshakePacketOutcome::InitiationConsumed;
+        }
         case MessageType::HandshakeResponse: {
             message_handshake_response response{};
             const ParseResult parse_result = ParseHandshakeResponse(packet, response);
@@ -1181,7 +1240,6 @@ HandshakePacketOutcome noise_handshake_consume_incoming_packet(
                 ? HandshakePacketOutcome::CookieReplyConsumed
                 : HandshakePacketOutcome::Invalid;
         }
-        case MessageType::HandshakeInitiation:
         case MessageType::TransportData:
         case MessageType::Invalid:
             break;

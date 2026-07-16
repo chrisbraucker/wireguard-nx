@@ -19,6 +19,7 @@ int main() {
             WGNX_TEST_CHECK(context, wgnx::wireguard::RunCoreSelfTest());
         }},
         TestCase{"protocol.deterministic-handshake", wgnx::test::TestDeterministicHandshake},
+        TestCase{"protocol.handshake-initiation-admission", wgnx::test::TestHandshakeInitiationAdmission},
         TestCase{"protocol.bidirectional-transport", wgnx::test::TestBidirectionalTransport},
         TestCase{"protocol.timer-intent", wgnx::test::TestTimerIntent},
         TestCase{"protocol.typed-message-boundaries", wgnx::test::TestTypedMessageBoundaries},

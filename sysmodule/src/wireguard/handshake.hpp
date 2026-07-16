@@ -28,12 +28,16 @@ struct noise_handshake {
     std::uint32_t remote_index{0};
     std::uint32_t transition_count{0};
     MonotonicTimePoint last_transition{};
+    std::array<std::uint8_t, TAI64NTimestampSize> last_initiation_timestamp{};
+    MonotonicTimePoint last_initiation_consumption{};
+    bool has_last_initiation_timestamp{false};
 };
 
 enum class HandshakePacketOutcome : std::uint8_t {
     Invalid = 0,
-    ResponseConsumed = 1,
-    CookieReplyConsumed = 2,
+    InitiationConsumed = 1,
+    ResponseConsumed = 2,
+    CookieReplyConsumed = 3,
 };
 
 const char *GetHandshakeStateName(HandshakeState state);
@@ -56,7 +60,7 @@ bool noise_handshake_consume_cookie_reply(const message_handshake_cookie *src, c
 bool noise_handshake_begin_session(wg_device *device, wg_peer *peer);
 HandshakePacketOutcome noise_handshake_consume_incoming_packet(
     std::span<const std::uint8_t> packet,
-    const wg_device *device,
+    wg_device *device,
     wg_peer *peer);
 
 } // namespace wgnx::wireguard

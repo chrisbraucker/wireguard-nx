@@ -9,21 +9,24 @@ IPC and WireGuard wire contracts remain unchanged; the separation is internal.
   operations and owns service registration. It does not own peer state,
   sockets, queues, or lifecycle policy.
 - `runtime/daemon_runtime.cpp` owns the single state mutex and executes
-  generation-checked platform effects. Inbound packet processing, concrete
-  timer scheduling, debug probes, and auxiliary path observation remain
-  transitional procedures for later extraction chunks.
+  generation-checked platform effects. Its receive worker adapts outer UDP
+  datagrams into typed events and publishes peer-validated plaintext to the
+  development packet channel. Concrete timer scheduling, debug probes, and
+  auxiliary path observation remain transitional procedures for later chunks.
 - `runtime/peer_runtime.hpp` defines the fixed-capacity `PeerRegistry`. Each
   `PeerRuntime` slot is the structural owner of one peer's configuration,
   derived secrets, lifecycle and metrics state, UDP binding, protocol device,
   and peer controller. Lifecycle state is private; activation generations,
-  transitions, metrics, errors, status projection, activation, and outbound
-  queue/handshake policy are peer-owned. Each peer also owns one bounded pending
-  encrypted datagram so effects never carry large packet buffers.
+  transitions, metrics, errors, status projection, activation, and inbound and
+  outbound protocol policy are peer-owned. Each peer owns one bounded pending
+  encrypted datagram and one bounded generation-tagged plaintext slot, so
+  events and effects never carry owned packet buffers.
 - `runtime/runtime_events.hpp` defines the closed event/effect vocabulary and
   bounded effect storage. `runtime/runtime_coordinator.*` resolves event peer
   identity and dispatches into `PeerRuntime`. Activation, endpoint and bind
-  completion, outbound packet staging, send completion, protocol timer expiry,
-  transport rebound, and authenticated session completion use this path.
+  completion, outbound packet staging, send completion, encrypted datagram
+  receipt, protocol timer expiry, transport rebound, and decrypted-packet
+  publication use this path.
 - `runtime/endpoint_resolver.*` owns the bounded pending endpoint-resolution
   request. Resolution runs on its Horizon work queue and returns a typed,
   activation-tagged completion instead of mutating daemon-owned request state.
@@ -36,9 +39,17 @@ IPC and WireGuard wire contracts remain unchanged; the separation is internal.
   receive queueing, and packet IDs. Peer-owned outbound staging remains in the
   protocol peer.
 - `wireguard/peer_controller.*` owns platform-independent staged-send,
-  handshake retry, and timer-token transitions. Each `PeerRuntime` owns one
-  controller; production and deterministic host tests invoke the same
-  operations.
+  handshake retry, initiator/responder session derivation, responder-session
+  confirmation, and timer-token transitions. Each `PeerRuntime` owns one
+  controller; production and deterministic host tests invoke the same paths.
+
+Inbound endpoint roaming occurs only after handshake or transport
+authentication. A responder-derived keypair enters the `next` slot and does not
+replace the current session until its first authenticated transport packet;
+that promotion moves the old current keypair to `previous`. Invalid MACs,
+non-increasing initiation timestamps, initiations inside the upstream 20 ms
+flood interval, transport replays, and unknown receiver indices do not update
+endpoint or authenticated byte counters.
 
 ## Concurrency Rule
 
@@ -65,11 +76,13 @@ handlers are non-inlined stack boundaries so their I/O snapshots cannot be
 coalesced into the executor frame.
 
 The ordered receive work queue owns one process-lifetime 4 KiB datagram scratch
-buffer. `ReceiveWorkMain` places only a small `packet_buffer` view on its worker
-stack. Work for the same receive item cannot execute concurrently, so this
-storage is exclusive without requiring one allocation per peer. Received bytes
-are consumed synchronously before the next socket read and are never retained
-through the scratch view.
+buffer and one 2,184-byte effect batch. `ReceiveWorkMain` places only a small
+`packet_buffer` view on its worker stack. Work for the same receive item cannot
+execute concurrently, so this storage is exclusive without requiring one
+allocation per peer. Received bytes are consumed synchronously before the next
+socket read and are never retained through the scratch view. The non-inlined
+commit boundary returns before the static batch enters effect execution, so its
+frame cannot accumulate with UDP send effects.
 
 The single mutex is intentionally retained until on-device regression testing
 confirms this ownership refactor. Narrower locks can be considered later from
@@ -79,13 +92,21 @@ measured contention, without weakening generation-checked commits.
 
 The host suite links the production `PeerRegistry`, `PeerRuntime`,
 `RuntimeCoordinator`, `EndpointResolver`, `UdpBinding`, `PeerController`,
-`TimerCoordinator`, and `PacketChannel`. Its 24 deterministic cases characterize
+`TimerCoordinator`, and `PacketChannel`. Its 25 deterministic cases characterize
 selection, activation, lifecycle transitions, status projection, stale event
 rejection, bounded effects, generation matching, per-peer ownership, and the
 outbound send lifecycle. Its production-runtime recovery workflow drives:
 
 `stage -> 20 fresh unanswered sends -> exhaust/drop -> stage later packet ->
 fresh handshake -> derive session -> release packet`
+
+The same runtime test then drives peer-originated rotation:
+
+`authenticated initiation -> preserve current/install next -> send response ->
+authenticated transport -> promote next/preserve previous -> publish plaintext`
+
+It also verifies initiation admission, malformed input, transport replay,
+unknown receiver indices, and unauthenticated endpoint-roaming rejection.
 
 Horizon work-queue scheduling, synchronous timer cancellation, BSD socket
 lifetime, and real callback races remain on-device validation responsibilities.
@@ -117,3 +138,19 @@ packet capacity. Including the 2,608-byte inbound commit, 4,560-byte effect
 executor, 4,048-byte datagram-send effect, and 160-byte UDP adapter frames, the
 measured target path now consumes about 11.6 KiB before small workqueue frames
 instead of exceeding the 16 KiB worker stack.
+
+Chunk 6's first shape retained the inbound commit's effect batch while entering
+effect execution and reached roughly 13 KiB before workqueue frames. Receive
+effects now use the ordered worker's persistent batch and cross a non-inlined
+commit boundary that returns before execution.
+
+The first Chunk 6 device run exposed a separate activation-path regression.
+The compiler had inlined the plaintext-publication effect's validation and
+logging locals into the shared variant visitor, increasing every executor
+frame from 4,560 to 6,144 bytes. The initial outbound handshake then overflowed
+the resolver worker during formatted logging before any inbound packet was
+handled. Plaintext publication now crosses a dedicated 192-byte non-inlined
+adapter. Target frames are again 3,168 bytes for resolver work, 4,560 bytes for
+effect iteration, 2,544 bytes for bind opening, and 4,064 bytes for datagram
+send. This restores the proven pre-Chunk-6 activation shape while keeping the
+publication path generation-checked under the daemon mutex.

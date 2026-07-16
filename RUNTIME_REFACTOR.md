@@ -234,8 +234,9 @@ deactivation, and status snapshots.
 **Status:** Complete. Closed variant-based `PeerEvent` and `RuntimeEffect`
 vocabularies, a fixed-capacity `EffectBatch`, and `RuntimeCoordinator` are in
 production. Authenticated session completion now dispatches a
-`SessionEstablishedEvent`; the resulting packet-submission effect executes
-after the daemon lock is released and its peer identity is revalidated.
+`EncryptedDatagramReceivedEvent`; authenticated session completion and the
+resulting packet-submission effects are peer-owned, while platform effects
+execute after the daemon lock is released and revalidate peer identity.
 
 The first on-device load regression exposed a pre-existing aggregate-reset
 hazard in this build during peer initialization: assigning `{}` to the roughly
@@ -324,6 +325,33 @@ passes.
 
 ### Chunk 6: Extract Inbound Lifecycle
 
+**Status:** Implementation complete; corrected real-peer on-device regression
+pending. The first Chunk 6 target reached peer activation but overflowed the
+16 KiB resolver-worker stack during initial handshake logging. Target
+disassembly traced this to inbound publication logic being inlined into the
+shared effect executor even though that effect was not active. Publication now
+crosses a dedicated non-inlined adapter, restoring the executor's pre-Chunk-6
+frame size without changing protocol behavior.
+
+The receive worker now emits one generation-tagged
+`EncryptedDatagramReceivedEvent`. `PeerRuntime` owns message admission,
+handshake response creation, initiator and responder session derivation,
+current/next/previous key rotation, transport replay filtering, authenticated
+endpoint roaming, and plaintext validation. A single bounded peer-owned
+plaintext slot backs a generation-tagged publication effect, so neither events
+nor effects copy packet-sized buffers.
+
+Responder admission now verifies MAC1, rejects non-increasing TAI64N
+timestamps, and enforces wireguard-go's 20 ms initiation flood interval. A
+deterministic real-protocol runtime workflow establishes an initiator session,
+accepts a peer-originated replacement initiation while preserving the current
+session, emits and consumes the response, promotes the next keypair on first
+authenticated transport, and publishes the decrypted IPv4 packet. The same
+workflow rejects malformed input, duplicate transport counters, unknown
+receiver indices, and replayed initiations without changing authenticated
+counters or the roaming endpoint. All 25 host and ASan/UBSan cases and the
+target build pass.
+
 The Chunk 5 real-peer regression captured a peer-originated handshake
 initiation after multiple successful requests. The current daemon accepts a
 handshake response and transport data but rejects an incoming initiation. The
@@ -339,7 +367,8 @@ decisions, and decrypted-packet publication behind the peer boundary.
 **Definition of done:** `WireGuardUdpBind` owns outer UDP sockets and datagrams
 only; all protocol and key decisions are peer-owned; malformed, replayed, and
 stale-session packets are covered; bidirectional real-peer traffic still
-passes.
+passes. The implementation and deterministic portions are complete; the final
+real-peer condition remains the next on-device gate.
 
 ### Chunk 7: Formalize Scheduling
 
@@ -403,6 +432,26 @@ This preserves bounded storage and serialized ownership without increasing the
 worker stack. Generated target code measures the corrected receive frame at 160
 bytes, down from 6,816 bytes in the crashing build; the complete measured
 receive-to-send path is about 11.6 KiB before small workqueue frames.
+
+Chunk 6 initially retained its 2,184-byte receive effect batch in the inbound
+commit frame while synchronously entering the effect executor and UDP send
+adapter. Target disassembly showed roughly 13 KiB of explicit frames before
+workqueue overhead. The ordered receive worker now owns that batch next to its
+datagram scratch, and the inbound commit is a non-inlined boundary that returns
+before effect execution.
+
+The first Chunk 6 device run then overflowed during the initial outbound
+handshake, before any inbound packet was handled. The fatal chain was resolver
+work -> effect execution -> UDP bind completion -> handshake initiation ->
+logging. The new plaintext-publication branch had been fully inlined into the
+variant visitor, increasing every effect-execution frame from 4,560 to 6,144
+bytes. A dedicated non-inlined publication adapter now holds the lock,
+generation checks, packet view, and publication path. Generated target code
+measures 3,168 bytes for resolver work, 4,560 bytes for effect iteration, 2,544
+bytes for bind opening, and 192 bytes for the publication adapter. This removes
+1,584 bytes from the crashing activation chain and keeps publication-only
+locals out of unrelated effects. The corrected target still requires the next
+real-peer device pass.
 
 Every chunk must pass:
 

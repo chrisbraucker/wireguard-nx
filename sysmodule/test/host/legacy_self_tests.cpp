@@ -267,7 +267,7 @@ TransportDataError noise_consume_incoming_transport_data_packet(
 
 HandshakePacketOutcome noise_handshake_consume_incoming_packet(
     const wgnx::platform::packet_buffer *packet,
-    const wg_device *device,
+    wg_device *device,
     wg_peer *peer) {
     if (packet == nullptr) {
         return HandshakePacketOutcome::Invalid;
