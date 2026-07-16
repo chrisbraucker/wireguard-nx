@@ -30,6 +30,8 @@ int main() {
         TestCase{"runtime.peer-registry-ownership", wgnx::test::TestPeerRegistryOwnership},
         TestCase{"runtime.peer-lifecycle", wgnx::test::TestPeerRuntimeLifecycle},
         TestCase{"runtime.coordinator-dispatch", wgnx::test::TestRuntimeCoordinatorDispatch},
+        TestCase{"runtime.peer-activation", wgnx::test::TestRuntimePeerActivation},
+        TestCase{"runtime.outbound-lifecycle", wgnx::test::TestRuntimeOutboundLifecycle},
         TestCase{"protocol.replay-window-parity", wgnx::test::TestReplayWindowParity},
         TestCase{"runtime.timer-coordinator", wgnx::test::TestTimerCoordinator},
         TestCase{"runtime.peer-controller-send-policy", wgnx::test::TestPeerControllerSendPolicy},

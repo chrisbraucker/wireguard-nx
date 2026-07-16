@@ -4,6 +4,7 @@
 #include "test_runtime.hpp"
 
 #include "runtime/packet_channel.hpp"
+#include "runtime/endpoint_resolver.hpp"
 #include "runtime/peer_runtime.hpp"
 #include "runtime/runtime_coordinator.hpp"
 #include "runtime/runtime_contracts.hpp"
@@ -1061,17 +1062,11 @@ void TestRuntimeCoordinatorDispatch(TestContext &context) {
         .peer = {.peer_index = 0, .activation_generation = 1},
         .occurred_at = 4'000,
     });
-    const auto *queue_effect = effects.Empty()
-        ? nullptr
-        : std::get_if<QueueInnerPacketSubmissionEffect>(effects.begin());
     WGNX_TEST_REQUIRE(
         context,
-        effects.Size() == 1 && queue_effect != nullptr &&
-            queue_effect->peer.peer_index == 0 &&
-            queue_effect->peer.activation_generation == 1 &&
-            registry[0].Lifecycle().state == wgnx::PeerRuntimeState::Active &&
-            registry[0].Lifecycle().last_handshake_ns == 4'000,
-        "coordinator did not complete session establishment and emit its effect");
+        effects.Empty() &&
+            registry[0].Lifecycle().state == wgnx::PeerRuntimeState::Handshaking,
+        "coordinator accepted session completion without protocol state");
 
     EffectBatch bounded{};
     const RuntimeEffect effect = QueueInnerPacketSubmissionEffect{
@@ -1085,6 +1080,419 @@ void TestRuntimeCoordinatorDispatch(TestContext &context) {
         context,
         filled && bounded.Size() == EffectBatch::Capacity && !bounded.Push(effect),
         "runtime effect batch did not enforce fixed capacity");
+
+    EffectBatch first{};
+    EffectBatch second{};
+    WGNX_TEST_REQUIRE(
+        context,
+        first.Push(QueueReceiveEffect{
+            .peer = {.peer_index = 0, .activation_generation = 1},
+        }) &&
+            second.Push(SendPendingDatagramEffect{
+                .peer = {.peer_index = 0, .activation_generation = 1},
+                .datagram_generation = 7,
+            }) &&
+            first.Append(second) && first.Size() == 2 &&
+            std::holds_alternative<QueueReceiveEffect>(*first.begin()) &&
+            std::holds_alternative<SendPendingDatagramEffect>(*(first.begin() + 1)) &&
+            !bounded.Append(second) && bounded.Size() == EffectBatch::Capacity,
+        "runtime effect batch append lost ordering or violated bounded capacity");
+}
+
+void TestRuntimePeerActivation(TestContext &context) {
+    using namespace wgnx::sysmodule::runtime;
+    using namespace wgnx::wireguard;
+
+    runtime::Reset(InitialRuntimeState);
+    std::array<wgnx::PeerConfigEntry, 1> configured{};
+    FillConfig(
+        &configured[0],
+        "activation",
+        "10.66.66.2/32",
+        InitiatorPrivateKey,
+        ResponderPublicKey);
+
+    PeerRegistry registry{};
+    WGNX_TEST_REQUIRE(
+        context,
+        registry.Assign(configured) && registry.SetActivePeerIndex(0),
+        "activation test registry initialization failed");
+    auto &peer = registry[0];
+    peer.derived.secrets_valid =
+        noise_parse_private_key(
+            &peer.derived.local_private_key,
+            InitiatorPrivateKey) &&
+        noise_parse_preshared_key(
+            &peer.derived.preshared_key,
+            PresharedKey);
+    peer.derived.has_preshared_key = true;
+
+    RuntimeCoordinator coordinator{registry};
+    const auto activation = coordinator.Dispatch(ActivationRequestedEvent{
+        .peer_index = 0,
+        .occurred_at = 1'000,
+    });
+    const auto *resolve = activation.Size() == 1
+        ? std::get_if<ResolveEndpointEffect>(activation.begin())
+        : nullptr;
+    const PeerIdentity expected_activation{.peer_index = 0, .activation_generation = 1};
+    WGNX_TEST_REQUIRE(
+        context,
+        resolve != nullptr && resolve->peer == expected_activation &&
+            std::strcmp(resolve->endpoint.data(), "peer.test:51820") == 0 &&
+            peer.Lifecycle().state == wgnx::PeerRuntimeState::ResolvingEndpoint &&
+            !peer.protocol.instantiated,
+        "activation did not enter resolution with a generation-tagged request");
+
+    EndpointResolver resolver{};
+    ResolveEndpointEffect replacement = *resolve;
+    replacement.peer.activation_generation = 2;
+    const bool first_resolve_scheduled = resolver.Queue(*resolve);
+    const bool replacement_resolve_scheduled = resolver.Queue(replacement);
+    const auto latest_resolve = resolver.Take();
+    WGNX_TEST_REQUIRE(
+        context,
+        first_resolve_scheduled && !replacement_resolve_scheduled &&
+            latest_resolve.has_value() && latest_resolve->peer == replacement.peer &&
+            !resolver.Take().has_value(),
+        "endpoint resolver did not coalesce pending work under one scheduled worker");
+    resolver.MarkWorkerIdle();
+    WGNX_TEST_REQUIRE(
+        context,
+        resolver.Queue(*resolve),
+        "idle endpoint resolver did not request worker scheduling");
+
+    wgnx::platform::endpoint_resolution_result resolved{
+        .success = true,
+        .resolved = {
+            .family = wgnx::platform::address_family::inet,
+            .port = 51820,
+            .address = {192, 0, 2, 1},
+        },
+    };
+    std::snprintf(resolved.text.data(), resolved.text.size(), "192.0.2.1:51820");
+    const auto stale_resolution = coordinator.Dispatch(EndpointResolvedEvent{
+        .peer = {.peer_index = 0, .activation_generation = 2},
+        .result = resolved,
+        .occurred_at = 2'000,
+    });
+    WGNX_TEST_REQUIRE(
+        context,
+        stale_resolution.Empty() && !peer.protocol.instantiated,
+        "stale endpoint completion mutated protocol state");
+
+    const auto resolution = coordinator.Dispatch(EndpointResolvedEvent{
+        .peer = {.peer_index = 0, .activation_generation = 1},
+        .result = resolved,
+        .occurred_at = 2'000,
+    });
+    const auto *open = resolution.Size() == 1
+        ? std::get_if<OpenUdpBindEffect>(resolution.begin())
+        : nullptr;
+    WGNX_TEST_REQUIRE(
+        context,
+        open != nullptr && open->socket_generation != 0 &&
+            !peer.protocol.instantiated && peer.binding.HasEndpoint(),
+        "resolution did not request a UDP bind before protocol instantiation");
+
+    const auto opened = coordinator.Dispatch(UdpBindOpenedEvent{
+        .peer = open->peer,
+        .endpoint = open->endpoint,
+        .endpoint_text = open->endpoint_text,
+        .socket = 42,
+        .error = wgnx::platform::socket_error::none,
+        .socket_generation = open->socket_generation,
+        .retry_deadline = TimerDeadlineFromJiffies(500),
+        .occurred_at = 3'000,
+    });
+    const auto *send = opened.Size() > 1
+        ? std::get_if<SendPendingDatagramEffect>(opened.begin() + 1)
+        : nullptr;
+    WGNX_TEST_REQUIRE(
+        context,
+        opened.Size() == 3 && send != nullptr &&
+            std::get_if<ArmProtocolTimerEffect>(opened.begin()) != nullptr &&
+            std::get_if<QueueReceiveEffect>(opened.begin() + 2) != nullptr &&
+            peer.Lifecycle().state == wgnx::PeerRuntimeState::Handshaking &&
+            peer.protocol.instantiated &&
+            peer.binding.Matches(open->socket_generation, 42),
+        "opened bind did not deterministically start the first handshake");
+
+    PendingDatagramSnapshot snapshot{};
+    WGNX_TEST_REQUIRE(
+        context,
+        peer.SnapshotPendingDatagram(1, send->datagram_generation, snapshot) &&
+            snapshot.size == HandshakeInitiationSize,
+        "initial handshake effect did not reference a peer-owned datagram");
+    const auto sent = coordinator.Dispatch(PendingDatagramSentEvent{
+        .peer = send->peer,
+        .datagram_generation = send->datagram_generation,
+        .bytes_sent = snapshot.size,
+        .error = wgnx::platform::socket_error::none,
+        .occurred_at = 4'000,
+    });
+    WGNX_TEST_REQUIRE(
+        context,
+        sent.Empty() && peer.Lifecycle().tx_bytes == HandshakeInitiationSize &&
+            !peer.SnapshotPendingDatagram(1, send->datagram_generation, snapshot),
+        "handshake send completion did not retire pending transport state");
+
+    PeerRegistry failed_registry{};
+    std::array<wgnx::PeerConfigEntry, 1> invalid{};
+    RuntimeCoordinator failed_coordinator{failed_registry};
+    WGNX_TEST_REQUIRE(
+        context,
+        failed_registry.Assign(invalid) && failed_registry.SetActivePeerIndex(0),
+        "failure-path registry initialization failed");
+    const auto invalid_effects = failed_coordinator.Dispatch(ActivationRequestedEvent{
+        .peer_index = 0,
+        .occurred_at = 5'000,
+    });
+    WGNX_TEST_REQUIRE(
+        context,
+        invalid_effects.Empty() &&
+            failed_registry[0].Lifecycle().state == wgnx::PeerRuntimeState::Error &&
+            failed_registry[0].Lifecycle().error_stage == wgnx::PeerErrorStage::Config,
+        "invalid activation did not fail before platform work");
+}
+
+void TestRuntimeOutboundLifecycle(TestContext &context) {
+    using namespace wgnx::sysmodule::runtime;
+    using namespace wgnx::wireguard;
+
+    runtime::Reset(InitialRuntimeState);
+    std::array<wgnx::PeerConfigEntry, 1> configured{};
+    FillConfig(
+        &configured[0],
+        "runtime-outbound",
+        "10.66.66.2/32",
+        InitiatorPrivateKey,
+        ResponderPublicKey);
+    PeerRegistry registry{};
+    WGNX_TEST_REQUIRE(
+        context,
+        registry.Assign(configured) && registry.SetActivePeerIndex(0),
+        "outbound runtime registry initialization failed");
+    auto &runtime_peer = registry[0];
+    WGNX_TEST_REQUIRE(
+        context,
+        wg_device_init_from_config_entry(
+            &runtime_peer.protocol.device,
+            runtime_peer.config),
+        "outbound runtime protocol initialization failed");
+    runtime_peer.protocol.instantiated = true;
+    WGNX_TEST_REQUIRE(
+        context,
+        runtime_peer.BeginActivation(1'000) == 1 &&
+            runtime_peer.EnterHandshaking(1, 2'000),
+        "outbound runtime lifecycle initialization failed");
+    runtime_peer.binding.AdoptOpenSocket(
+        wgnx::platform::endpoint{
+            .family = wgnx::platform::address_family::inet,
+            .port = 51820,
+            .address = {192, 0, 2, 1},
+        },
+        "192.0.2.1:51820",
+        1,
+        91);
+
+    RuntimeCoordinator coordinator{registry};
+    constexpr std::array<std::uint8_t, 20> FirstPacket = {
+        0x45, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00, 0x00, 0x40, 0x11,
+        0x00, 0x00, 0x0A, 0x42, 0x42, 0x02, 0x0A, 0x42, 0x42, 0x01,
+    };
+    const PeerIdentity identity{.peer_index = 0, .activation_generation = 1};
+    const auto retry_deadline = TimerDeadlineFromJiffies(500);
+    auto effects = coordinator.Dispatch(InnerPacketStagedEvent{
+        .peer = identity,
+        .packet = FirstPacket,
+        .packet_id = 61,
+        .owner_process_id = 7,
+        .retry_deadline = retry_deadline,
+        .occurred_at = 3'000,
+    });
+    auto *send = effects.Size() > 1
+        ? std::get_if<SendPendingDatagramEffect>(effects.begin() + 1)
+        : nullptr;
+    WGNX_TEST_REQUIRE(
+        context,
+        effects.Size() == 2 && send != nullptr &&
+            runtime_peer.StagedInnerPacketCount() == 1,
+        "staged packet did not start the production handshake path");
+
+    PendingDatagramSnapshot snapshot{};
+    constexpr std::uint32_t MaxSendAttempts = MaxTimerHandshakes + 2;
+    for (std::uint32_t attempt = 1; attempt <= MaxSendAttempts; ++attempt) {
+        WGNX_TEST_REQUIRE(
+            context,
+            send != nullptr && runtime_peer.SnapshotPendingDatagram(
+                1,
+                send->datagram_generation,
+                snapshot) && snapshot.size == HandshakeInitiationSize,
+            "runtime retry did not expose a fresh pending initiation");
+        effects = coordinator.Dispatch(PendingDatagramSentEvent{
+            .peer = identity,
+            .datagram_generation = send->datagram_generation,
+            .bytes_sent = snapshot.size,
+            .error = wgnx::platform::socket_error::none,
+            .occurred_at = 4'000 + attempt,
+        });
+        WGNX_TEST_REQUIRE(
+            context,
+            effects.Empty(),
+            "successful handshake submission produced an unexpected follow-up");
+        if (attempt == MaxSendAttempts) {
+            break;
+        }
+        effects = coordinator.Dispatch(ProtocolTimerExpiredEvent{
+            .peer = identity,
+            .hook = TimerHook::RetransmitHandshake,
+            .retry_deadline = retry_deadline,
+            .zero_key_material_deadline = TimerDeadlineFromJiffies(5'000),
+            .occurred_at = 5'000 + attempt,
+        });
+        send = effects.Size() > 2
+            ? std::get_if<SendPendingDatagramEffect>(effects.begin() + 2)
+            : nullptr;
+        WGNX_TEST_REQUIRE(
+            context,
+            effects.Size() == 3 &&
+                std::get_if<CancelProtocolTimerEffect>(effects.begin()) != nullptr &&
+                std::get_if<ArmProtocolTimerEffect>(effects.begin() + 1) != nullptr &&
+                send != nullptr,
+            "runtime retry expiration did not request a fresh initiation");
+    }
+
+    effects = coordinator.Dispatch(ProtocolTimerExpiredEvent{
+        .peer = identity,
+        .hook = TimerHook::RetransmitHandshake,
+        .retry_deadline = retry_deadline,
+        .zero_key_material_deadline = TimerDeadlineFromJiffies(5'000),
+        .occurred_at = 7'000,
+    });
+    WGNX_TEST_REQUIRE(
+        context,
+        effects.Size() == 2 &&
+            std::get_if<CancelProtocolTimerEffect>(effects.begin()) != nullptr &&
+            std::get_if<ArmProtocolTimerEffect>(effects.begin() + 1) != nullptr &&
+            runtime_peer.StagedInnerPacketCount() == 0,
+        "runtime retry exhaustion did not drop and account for staged traffic");
+
+    constexpr std::array<std::uint8_t, 20> RecoveryPacket = {
+        0x45, 0x00, 0x00, 0x14, 0x00, 0x01, 0x00, 0x00, 0x40, 0x11,
+        0x00, 0x00, 0x0A, 0x42, 0x42, 0x02, 0x0A, 0x42, 0x42, 0x01,
+    };
+    effects = coordinator.Dispatch(InnerPacketStagedEvent{
+        .peer = identity,
+        .packet = RecoveryPacket,
+        .packet_id = 62,
+        .owner_process_id = 7,
+        .retry_deadline = retry_deadline,
+        .occurred_at = 8'000,
+    });
+    send = effects.Size() > 1
+        ? std::get_if<SendPendingDatagramEffect>(effects.begin() + 1)
+        : nullptr;
+    WGNX_TEST_REQUIRE(
+        context,
+        send != nullptr && runtime_peer.SnapshotPendingDatagram(
+            1,
+            send->datagram_generation,
+            snapshot),
+        "later traffic did not begin a fresh runtime handshake");
+
+    ProtocolPair responder{};
+    WGNX_TEST_REQUIRE(context, responder.Initialize(), "recovery responder initialization failed");
+    WGNX_TEST_REQUIRE(
+        context,
+        responder.initiator_to_responder.Send(
+            std::span<const std::uint8_t>(snapshot.bytes).first(snapshot.size)) &&
+            responder.ReceiveInitiationAndSendResponse(),
+        "runtime initiation did not produce a responder handshake");
+    std::span<const std::uint8_t> response{};
+    auto *protocol_peer = wg_device_first_peer(&runtime_peer.protocol.device);
+    WGNX_TEST_REQUIRE(
+        context,
+        protocol_peer != nullptr && responder.responder_to_initiator.Receive(response) &&
+            noise_handshake_consume_incoming_packet(
+                response,
+                &runtime_peer.protocol.device,
+                protocol_peer) == HandshakePacketOutcome::ResponseConsumed,
+        "runtime peer did not authenticate the recovery response");
+    effects = coordinator.Dispatch(PendingDatagramSentEvent{
+        .peer = identity,
+        .datagram_generation = send->datagram_generation,
+        .bytes_sent = snapshot.size,
+        .error = wgnx::platform::socket_error::none,
+        .occurred_at = 9'000,
+    });
+    runtime::SetMonotonicTime(SessionBirthTime);
+    WGNX_TEST_REQUIRE(
+        context,
+        effects.Empty() && noise_handshake_begin_session(
+            &responder.responder_device,
+            responder.responder),
+        "responder session derivation failed");
+    effects = coordinator.Dispatch(SessionEstablishedEvent{
+        .peer = identity,
+        .keepalive_deadline = TimerDeadlineFromJiffies(600),
+        .rekey_deadline = TimerDeadlineFromJiffies(700),
+        .zero_key_material_deadline = TimerDeadlineFromJiffies(800),
+        .occurred_at = SessionBirthTime,
+    });
+    send = nullptr;
+    for (const auto &effect : effects) {
+        if (auto *candidate = std::get_if<SendPendingDatagramEffect>(&effect)) {
+            send = candidate;
+        }
+    }
+    WGNX_TEST_REQUIRE(
+        context,
+        effects.Size() == 6 && send != nullptr &&
+            runtime_peer.Lifecycle().state == wgnx::PeerRuntimeState::Active,
+        "session establishment did not arm timers and release outbound work");
+
+    WGNX_TEST_REQUIRE(
+        context,
+        runtime_peer.SnapshotPendingDatagram(1, send->datagram_generation, snapshot),
+        "session confirmation keepalive was not staged");
+    effects = coordinator.Dispatch(PendingDatagramSentEvent{
+        .peer = identity,
+        .datagram_generation = send->datagram_generation,
+        .bytes_sent = snapshot.size,
+        .error = wgnx::platform::socket_error::none,
+        .occurred_at = SessionBirthTime + 1,
+    });
+    WGNX_TEST_REQUIRE(context, effects.Empty(), "keepalive completion mutated queue policy");
+
+    effects = coordinator.Dispatch(ProcessOutboundQueueEvent{
+        .peer = identity,
+        .retry_deadline = retry_deadline,
+        .occurred_at = SessionBirthTime + 2,
+    });
+    send = effects.Size() == 1
+        ? std::get_if<SendPendingDatagramEffect>(effects.begin())
+        : nullptr;
+    WGNX_TEST_REQUIRE(
+        context,
+        send != nullptr && runtime_peer.SnapshotPendingDatagram(
+            1,
+            send->datagram_generation,
+            snapshot) && snapshot.size > TransportDataHeaderSize,
+        "recovered plaintext was not converted to encrypted transport data");
+    effects = coordinator.Dispatch(PendingDatagramSentEvent{
+        .peer = identity,
+        .datagram_generation = send->datagram_generation,
+        .bytes_sent = snapshot.size,
+        .error = wgnx::platform::socket_error::none,
+        .occurred_at = SessionBirthTime + 3,
+    });
+    WGNX_TEST_REQUIRE(
+        context,
+        effects.Size() == 1 &&
+            std::get_if<QueueInnerPacketSubmissionEffect>(effects.begin()) != nullptr &&
+            runtime_peer.StagedInnerPacketCount() == 0,
+        "successful transport completion did not retire and continue the queue");
 }
 
 void TestReplayWindowParity(TestContext &context) {

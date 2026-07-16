@@ -16,6 +16,8 @@ void TestRuntimeContracts(TestContext &context);
 void TestPeerRegistryOwnership(TestContext &context);
 void TestPeerRuntimeLifecycle(TestContext &context);
 void TestRuntimeCoordinatorDispatch(TestContext &context);
+void TestRuntimePeerActivation(TestContext &context);
+void TestRuntimeOutboundLifecycle(TestContext &context);
 void TestReplayWindowParity(TestContext &context);
 void TestTimerCoordinator(TestContext &context);
 void TestPeerControllerSendPolicy(TestContext &context);

@@ -44,6 +44,18 @@ wgnx::platform::socket_error UdpBinding::Open(std::uint32_t generation) {
     return wgnx::platform::socket_error::none;
 }
 
+void UdpBinding::AdoptOpenSocket(
+    const wgnx::platform::endpoint &endpoint,
+    const char *text,
+    std::uint32_t generation,
+    wgnx::platform::socket_handle socket) {
+    Close();
+    SetEndpoint(endpoint, text);
+    m_socket = socket;
+    m_generation = generation;
+    m_suspended = false;
+}
+
 void UdpBinding::Close() {
     if (m_socket != wgnx::platform::InvalidSocket) {
         wgnx::platform::udp_close(m_socket);
@@ -57,6 +69,13 @@ void UdpBinding::Suspend() {
     Close();
 }
 
+wgnx::platform::socket_handle UdpBinding::ReleaseSocket() {
+    const auto socket = m_socket;
+    m_socket = wgnx::platform::InvalidSocket;
+    m_generation = 0;
+    return socket;
+}
+
 wgnx::platform::socket_error UdpBinding::Send(
     std::span<const std::uint8_t> packet,
     std::size_t *sent) const {
@@ -64,6 +83,18 @@ wgnx::platform::socket_error UdpBinding::Send(
         return wgnx::platform::socket_error::send_failed;
     }
     return wgnx::platform::udp_send(m_socket, m_endpoint, packet, sent);
+}
+
+bool UdpBinding::SnapshotForSend(SendSnapshot &out) const {
+    if (m_suspended || !m_has_endpoint || !IsOpen()) {
+        return false;
+    }
+    out = {
+        .endpoint = m_endpoint,
+        .socket = m_socket,
+        .generation = m_generation,
+    };
+    return true;
 }
 
 } // namespace wgnx::sysmodule::runtime

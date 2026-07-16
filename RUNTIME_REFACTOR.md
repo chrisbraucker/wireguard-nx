@@ -243,8 +243,9 @@ hazard in this build during peer initialization: assigning `{}` to the roughly
 temporaries on the 16 KiB main-thread stack. These resets now destroy and
 reconstruct the objects in place, preserving secret scrubbing while keeping
 their target stack frames bounded. Target C++ builds reject frames larger than
-8 KiB so this failure mode cannot silently return. The corrected binary remains
-pending an on-device load and real-peer regression pass.
+8 KiB so this failure mode cannot silently return. The corrected binary passed
+on-device loading, repeated requester traffic, and Wi-Fi/flight-mode/Wi-Fi
+transition testing.
 
 Define closed `PeerEvent` and `RuntimeEffect` types and a fixed-capacity
 `EffectBatch`. Introduce `RuntimeCoordinator::Dispatch()` and route a small,
@@ -257,6 +258,24 @@ handler performs Horizon I/O while holding the state lock.
 
 ### Chunk 4: Extract Peer Activation
 
+**Status:** Complete. The production coordinator owns the generation-tagged
+`activate -> resolve -> bind -> instantiate -> handshake` path. A dedicated
+`EndpointResolver` owns pending resolution work, while endpoint resolution and
+UDP socket opening execute outside the runtime lock and return typed completion
+events. Stale resolution and bind completions are deterministic no-ops, with
+stale opened sockets explicitly closed.
+
+The first on-device connection attempt exposed cumulative stack growth in the
+platform effect adapter: bind and datagram-send completions recursively invoked
+the effect executor while retaining their caller's bounded batches. The fatal
+reported stack overflow in the first handshake send on the 16 KiB resolver
+worker stack. Effect execution now drains bounded batches iteratively, and the
+two I/O-heavy handlers have explicit non-inlined stack boundaries. The target
+frames are 3,152 bytes for resolver work, 4,560 bytes for effect iteration,
+2,528 bytes for bind opening, and 4,048 bytes for datagram send. The corrected
+path subsequently passed real-peer activation and repeated requester traffic
+on-device.
+
 Move the complete activation path to events and effects: configuration
 validation, endpoint-resolution request and completion, `WireGuardUdpBind`
 creation, protocol instantiation, and initial handshake startup. Make endpoint
@@ -268,6 +287,28 @@ host tests, including stale completion and failure paths. A real-peer on-device
 connection regression passes.
 
 ### Chunk 5: Extract Outbound Lifecycle
+
+**Status:** Complete for the outbound lifecycle. Inner-packet staging,
+encrypted datagram construction, send outcomes, initial and replacement
+handshakes, retransmission, exhaustion, keepalive/rekey
+decisions, session derivation, and queue retirement now run through
+`PeerRuntime` events. Encrypted bytes remain in one bounded peer-owned pending
+slot; post-lock send effects carry only peer and datagram generations.
+
+The deterministic production-runtime test covers the complete recovery shape:
+`stage -> 20 unanswered fresh sends -> exhaust/drop -> stage later packet ->
+fresh handshake -> derive session -> confirmation keepalive -> encrypt/send ->
+retire packet`. The target build and all 24 host and ASan/UBSan cases pass.
+
+The corrected on-device regression established one real-peer session and ran
+three requester submissions without a crash. All three plaintext packets were
+staged, encrypted, sent, and retired; the first two completed bidirectional
+round trips. The third received no echo before its requester timeout. The next
+encrypted inbound packet was a peer-originated handshake initiation, which the
+current inbound path explicitly rejected as unsupported. That does not identify
+an outbound queue or send-completion failure: responder-initiated handshake and
+session rotation belong to Chunk 6 and are recorded there as an explicit
+real-peer requirement.
 
 Move inner-packet staging, initiation creation, encrypted transport creation,
 send outcomes, replacement handshakes, retries, exhaustion, and keepalive
@@ -282,6 +323,13 @@ mutation remains in daemon orchestration. A repeated-requester real-peer test
 passes.
 
 ### Chunk 6: Extract Inbound Lifecycle
+
+The Chunk 5 real-peer regression captured a peer-originated handshake
+initiation after multiple successful requests. The current daemon accepts a
+handshake response and transport data but rejects an incoming initiation. The
+extracted inbound lifecycle must consume authenticated initiations, create and
+send responses, install the resulting responder session, and preserve any
+valid previous session during rotation.
 
 Make `WireGuardUdpBind` receive return encrypted datagram events. Move handshake
 parsing and responses, session installation and rotation, replay protection,
@@ -345,6 +393,16 @@ Target builds enforce an 8 KiB maximum C++ stack frame. The sysmodule main
 thread has a 16 KiB stack, so large owned protocol and packet-storage objects
 must be reset or initialized in place rather than copied through aggregate
 temporaries.
+
+The Chunk 5 on-device regression also caught cumulative receive-worker stack
+usage that the per-frame guard cannot detect. `ReceiveWorkMain` kept a 4 KiB
+datagram buffer live while inbound processing synchronously executed generated
+send effects. The ordered receive queue now owns one process-lifetime 4 KiB
+scratch buffer and the callback keeps only a small packet view on its stack.
+This preserves bounded storage and serialized ownership without increasing the
+worker stack. Generated target code measures the corrected receive frame at 160
+bytes, down from 6,816 bytes in the crashing build; the complete measured
+receive-to-send path is about 11.6 KiB before small workqueue frames.
 
 Every chunk must pass:
 

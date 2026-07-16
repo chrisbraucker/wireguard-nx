@@ -47,6 +47,7 @@ HOST_TEST_TARGET := $(HOST_TEST_DIR)/wireguard-host-test
 HOST_SANITIZE_DIR := $(OUTDIR)/host-test-sanitize
 HOST_SANITIZE_TARGET := $(HOST_SANITIZE_DIR)/wireguard-host-test
 HOST_TEST_CPP_SOURCES := \
+	src/runtime/endpoint_resolver.cpp \
 	src/runtime/peer_runtime.cpp \
 	src/runtime/runtime_coordinator.cpp \
 	src/runtime/udp_binding.cpp \

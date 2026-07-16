@@ -23,8 +23,14 @@ public:
     void Reset();
 
     wgnx::platform::socket_error Open(std::uint32_t generation);
+    void AdoptOpenSocket(
+        const wgnx::platform::endpoint &endpoint,
+        const char *text,
+        std::uint32_t generation,
+        wgnx::platform::socket_handle socket);
     void Close();
     void Suspend();
+    wgnx::platform::socket_handle ReleaseSocket();
 
     wgnx::platform::socket_error Send(
         std::span<const std::uint8_t> packet,
@@ -41,6 +47,14 @@ public:
     const char *EndpointText() const { return m_endpoint_text; }
     wgnx::platform::socket_handle Socket() const { return m_socket; }
     std::uint32_t Generation() const { return m_generation; }
+
+    struct SendSnapshot {
+        wgnx::platform::endpoint endpoint{};
+        wgnx::platform::socket_handle socket{wgnx::platform::InvalidSocket};
+        std::uint32_t generation{0};
+    };
+
+    bool SnapshotForSend(SendSnapshot &out) const;
 
 private:
     wgnx::platform::endpoint m_endpoint{};

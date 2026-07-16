@@ -1,10 +1,17 @@
 #pragma once
 
+#include "wgnx/platform/udp.hpp"
 #include "wgnx/platform/clock.hpp"
+#include "wgnx/protocol.hpp"
+#include "wireguard/peer_controller.hpp"
+#include "wireguard/inner_packet.hpp"
+#include "wireguard/timers.hpp"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <span>
+#include <type_traits>
 #include <variant>
 
 namespace wgnx::sysmodule::runtime {
@@ -12,20 +19,143 @@ namespace wgnx::sysmodule::runtime {
 struct PeerIdentity {
     std::uint32_t peer_index{0};
     std::uint32_t activation_generation{0};
+
+    constexpr bool operator==(const PeerIdentity &) const = default;
+};
+
+struct ActivationRequestedEvent {
+    std::uint32_t peer_index{0};
+    wgnx::platform::ktime_t occurred_at{0};
+};
+
+struct EndpointResolvedEvent {
+    PeerIdentity peer{};
+    wgnx::platform::endpoint_resolution_result result{};
+    wgnx::platform::ktime_t occurred_at{0};
+};
+
+struct UdpBindOpenedEvent {
+    PeerIdentity peer{};
+    wgnx::platform::endpoint endpoint{};
+    std::array<char, sizeof(wgnx::PeerInfo::resolved_endpoint)> endpoint_text{};
+    wgnx::platform::socket_handle socket{wgnx::platform::InvalidSocket};
+    wgnx::platform::socket_error error{wgnx::platform::socket_error::open_failed};
+    std::uint32_t socket_generation{0};
+    wgnx::wireguard::TimerDeadline retry_deadline{};
+    wgnx::platform::ktime_t occurred_at{0};
 };
 
 struct SessionEstablishedEvent {
     PeerIdentity peer{};
+    wgnx::wireguard::TimerDeadline keepalive_deadline{};
+    wgnx::wireguard::TimerDeadline rekey_deadline{};
+    wgnx::wireguard::TimerDeadline zero_key_material_deadline{};
     wgnx::platform::ktime_t occurred_at{0};
 };
 
-using PeerEvent = std::variant<SessionEstablishedEvent>;
+struct PendingDatagramSentEvent {
+    PeerIdentity peer{};
+    std::uint32_t datagram_generation{0};
+    std::size_t bytes_sent{0};
+    wgnx::platform::socket_error error{wgnx::platform::socket_error::send_failed};
+    wgnx::platform::ktime_t occurred_at{0};
+};
+
+struct InnerPacketStagedEvent {
+    PeerIdentity peer{};
+    std::span<const std::uint8_t> packet{};
+    std::uint64_t packet_id{0};
+    std::uint64_t owner_process_id{0};
+    wgnx::wireguard::TimerDeadline retry_deadline{};
+    wgnx::platform::ktime_t occurred_at{0};
+};
+
+struct ProcessOutboundQueueEvent {
+    PeerIdentity peer{};
+    wgnx::wireguard::TimerDeadline retry_deadline{};
+    wgnx::platform::ktime_t occurred_at{0};
+};
+
+struct ProtocolTimerExpiredEvent {
+    PeerIdentity peer{};
+    wgnx::wireguard::TimerHook hook{wgnx::wireguard::TimerHook::RetransmitHandshake};
+    wgnx::wireguard::TimerDeadline retry_deadline{};
+    wgnx::wireguard::TimerDeadline keepalive_deadline{};
+    wgnx::wireguard::TimerDeadline zero_key_material_deadline{};
+    wgnx::platform::ktime_t occurred_at{0};
+};
+
+struct TransportReboundEvent {
+    PeerIdentity peer{};
+    wgnx::wireguard::TimerDeadline retry_deadline{};
+    wgnx::platform::ktime_t occurred_at{0};
+};
+
+using PeerEvent = std::variant<
+    ActivationRequestedEvent,
+    EndpointResolvedEvent,
+    UdpBindOpenedEvent,
+    SessionEstablishedEvent,
+    PendingDatagramSentEvent,
+    InnerPacketStagedEvent,
+    ProcessOutboundQueueEvent,
+    ProtocolTimerExpiredEvent,
+    TransportReboundEvent>;
+
+struct ResolveEndpointEffect {
+    PeerIdentity peer{};
+    std::array<char, sizeof(wgnx::PeerConfigEntry::endpoint)> endpoint{};
+};
+
+struct OpenUdpBindEffect {
+    PeerIdentity peer{};
+    wgnx::platform::endpoint endpoint{};
+    std::array<char, sizeof(wgnx::PeerInfo::resolved_endpoint)> endpoint_text{};
+    std::uint32_t socket_generation{0};
+};
+
+struct CloseUdpSocketEffect {
+    wgnx::platform::socket_handle socket{wgnx::platform::InvalidSocket};
+};
+
+struct SendPendingDatagramEffect {
+    PeerIdentity peer{};
+    std::uint32_t datagram_generation{0};
+};
+
+struct QueueReceiveEffect {
+    PeerIdentity peer{};
+};
+
+struct ArmProtocolTimerEffect {
+    PeerIdentity peer{};
+    wgnx::wireguard::TimerHook hook{wgnx::wireguard::TimerHook::RetransmitHandshake};
+    wgnx::wireguard::TimerDeadline deadline{};
+};
+
+struct CancelProtocolTimerEffect {
+    PeerIdentity peer{};
+    wgnx::wireguard::TimerHook hook{wgnx::wireguard::TimerHook::RetransmitHandshake};
+};
+
+struct SuspendUdpTransportEffect {
+    PeerIdentity peer{};
+};
 
 struct QueueInnerPacketSubmissionEffect {
     PeerIdentity peer{};
 };
 
-using RuntimeEffect = std::variant<QueueInnerPacketSubmissionEffect>;
+using RuntimeEffect = std::variant<
+    ResolveEndpointEffect,
+    OpenUdpBindEffect,
+    CloseUdpSocketEffect,
+    SendPendingDatagramEffect,
+    QueueReceiveEffect,
+    ArmProtocolTimerEffect,
+    CancelProtocolTimerEffect,
+    SuspendUdpTransportEffect,
+    QueueInnerPacketSubmissionEffect>;
 
 class EffectBatch {
 public:
@@ -36,6 +166,16 @@ public:
             return false;
         }
         m_effects[m_size++] = effect;
+        return true;
+    }
+
+    bool Append(const EffectBatch &other) {
+        if (other.m_size > m_effects.size() - m_size) {
+            return false;
+        }
+        for (const auto &effect : other) {
+            m_effects[m_size++] = effect;
+        }
         return true;
     }
 
@@ -50,7 +190,16 @@ private:
 };
 
 inline PeerIdentity GetPeerIdentity(const PeerEvent &event) {
-    return std::visit([](const auto &value) { return value.peer; }, event);
+    return std::visit(
+        [](const auto &value) -> PeerIdentity {
+            using Event = std::remove_cvref_t<decltype(value)>;
+            if constexpr (std::is_same_v<Event, ActivationRequestedEvent>) {
+                return {.peer_index = value.peer_index};
+            } else {
+                return value.peer;
+            }
+        },
+        event);
 }
 
 } // namespace wgnx::sysmodule::runtime

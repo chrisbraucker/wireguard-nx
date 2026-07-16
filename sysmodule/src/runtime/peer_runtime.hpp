@@ -8,6 +8,7 @@
 #include "wgnx/platform/clock.hpp"
 #include "wireguard/crypto/primitives.hpp"
 #include "wireguard/device.hpp"
+#include "wireguard/data.hpp"
 #include "wireguard/peer_controller.hpp"
 
 #include <array>
@@ -50,8 +51,49 @@ struct PeerProtocolInfo {
     bool instantiated{false};
 };
 
+constexpr inline std::size_t MaxEncryptedDatagramSize =
+    wgnx::wireguard::TransportDataHeaderSize +
+    wgnx::wireguard::GetPaddedTransportPayloadSize(wgnx::MaxInnerIpv4PacketSize) +
+    wgnx::wireguard::NoiseMacSize;
+
+enum class PendingDatagramKind : std::uint8_t {
+    None = 0,
+    HandshakeInitiation,
+    TransportData,
+    Keepalive,
+};
+
+constexpr const char *GetPendingDatagramKindName(PendingDatagramKind kind) {
+    switch (kind) {
+        case PendingDatagramKind::None: return "none";
+        case PendingDatagramKind::HandshakeInitiation: return "handshake_initiation";
+        case PendingDatagramKind::TransportData: return "transport_data";
+        case PendingDatagramKind::Keepalive: return "keepalive";
+    }
+    return "unknown";
+}
+
+struct PendingDatagram {
+    std::array<std::uint8_t, MaxEncryptedDatagramSize> bytes{};
+    std::size_t size{0};
+    std::uint32_t generation{0};
+    std::uint64_t inner_packet_id{0};
+    PendingDatagramKind kind{PendingDatagramKind::None};
+
+    bool IsPending() const { return kind != PendingDatagramKind::None; }
+};
+
+struct PendingDatagramSnapshot {
+    std::array<std::uint8_t, MaxEncryptedDatagramSize> bytes{};
+    std::size_t size{0};
+    std::uint64_t inner_packet_id{0};
+    PendingDatagramKind kind{PendingDatagramKind::None};
+    UdpBinding::SendSnapshot binding{};
+};
+
 class PeerRuntime {
 public:
+    void SetPeerIndex(std::uint32_t peer_index) { m_peer_index = peer_index; }
     const PeerRuntimeInfo &Lifecycle() const { return m_lifecycle; }
 
     void Deactivate(wgnx::platform::ktime_t now);
@@ -80,6 +122,13 @@ public:
         bool is_active,
         bool is_auto_start) const;
     EffectBatch Handle(const PeerEvent &event);
+    bool SnapshotPendingDatagram(
+        std::uint32_t activation_generation,
+        std::uint32_t datagram_generation,
+        PendingDatagramSnapshot &out) const;
+    bool CanStageInnerPacket() const;
+    std::size_t ClearStagedInnerPackets();
+    std::size_t StagedInnerPacketCount() const;
 
     wgnx::PeerConfigEntry config{};
     PeerConfigDerivedInfo derived{};
@@ -92,9 +141,45 @@ private:
         wgnx::PeerRuntimeState state,
         std::uint32_t activation_generation,
         wgnx::platform::ktime_t now);
+    wgnx::PeerErrorCode ValidateConfiguration() const;
+    bool InstantiateProtocol();
+    void ResetProtocol();
+    wgnx::wireguard::wg_peer *ProtocolPeer();
+    const wgnx::wireguard::wg_peer *ProtocolPeer() const;
+    bool PrepareHandshakeInitiation(PendingDatagramKind kind);
+    bool PrepareTransportDatagram(
+        std::span<const std::uint8_t> payload,
+        PendingDatagramKind kind,
+        std::uint64_t inner_packet_id,
+        wgnx::wireguard::TransportDataError &out_error);
+    bool StartHandshake(
+        const PeerIdentity &identity,
+        wgnx::wireguard::TimerDeadline retry_deadline,
+        EffectBatch &effects,
+        bool retry);
+    void ProcessOutboundQueue(
+        const PeerIdentity &identity,
+        wgnx::wireguard::TimerDeadline retry_deadline,
+        wgnx::platform::ktime_t now,
+        EffectBatch &effects);
+    void HandlePendingDatagramCompletion(
+        const PendingDatagramSentEvent &event,
+        EffectBatch &effects);
+    std::uint32_t AllocateSocketGeneration();
+    std::uint32_t AllocateDatagramGeneration();
+    void EnterActivationError(
+        wgnx::PeerErrorStage stage,
+        wgnx::PeerErrorCode code,
+        wgnx::platform::ktime_t now,
+        EffectBatch *effects);
 
     PeerRuntimeInfo m_lifecycle{};
     std::uint32_t m_next_activation_generation{1};
+    std::uint32_t m_next_socket_generation{1};
+    std::uint32_t m_next_datagram_generation{1};
+    PendingDatagram m_pending_datagram{};
+    wgnx::wireguard::InnerPacketRecord m_staging_record{};
+    std::uint32_t m_peer_index{0};
 };
 
 class PeerRegistry {
@@ -109,6 +194,7 @@ public:
 
         m_count = static_cast<std::uint32_t>(configured_peers.size());
         for (std::size_t index = 0; index < configured_peers.size(); ++index) {
+            m_peers[index].SetPeerIndex(static_cast<std::uint32_t>(index));
             m_peers[index].config = configured_peers[index];
         }
         m_active_peer_index = -1;
