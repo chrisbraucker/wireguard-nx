@@ -115,6 +115,23 @@ socket_error udp_send(
     return socket_error::none;
 }
 
+udp_receive_result udp_receive(
+    socket_handle socket,
+    std::span<std::uint8_t> buffer) {
+    static_cast<void>(buffer);
+    if (socket == InvalidSocket) {
+        return {
+            .disposition = udp_receive_disposition::failure,
+            .native_condition = udp_receive_native_condition::other,
+            .error = socket_error::receive_failed,
+        };
+    }
+    return classify_udp_receive_result(
+        -1,
+        udp_receive_native_condition::timed_out,
+        0);
+}
+
 } // namespace wgnx::platform
 
 namespace wgnx::test::runtime {

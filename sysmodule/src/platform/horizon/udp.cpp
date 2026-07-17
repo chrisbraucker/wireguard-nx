@@ -170,6 +170,24 @@ bool SetReceiveTimeout(socket_handle socket) {
                sizeof(timeout)) == 0;
 }
 
+udp_receive_native_condition ClassifyNativeReceiveCondition(
+    ams::socket::Errno error) {
+    if (error == ams::socket::Errno::ESuccess) {
+        return udp_receive_native_condition::none;
+    }
+    if (error == ams::socket::Errno::EAgain ||
+        error == ams::socket::Errno::EWouldBlock) {
+        return udp_receive_native_condition::would_block;
+    }
+    if (error == ams::socket::Errno::ETimedOut) {
+        return udp_receive_native_condition::timed_out;
+    }
+    if (error == ams::socket::Errno::EIntr) {
+        return udp_receive_native_condition::interrupted;
+    }
+    return udp_receive_native_condition::other;
+}
+
 } // namespace
 
 bool endpoint_to_string(const endpoint &endpoint, std::span<char> out_text) {
@@ -309,17 +327,19 @@ socket_error udp_send(socket_handle socket, const endpoint &destination, std::sp
     return socket_error::none;
 }
 
-socket_error udp_receive(socket_handle socket, std::span<std::uint8_t> buffer, std::size_t *out_received, endpoint *out_source) {
+udp_receive_result udp_receive(
+    socket_handle socket,
+    std::span<std::uint8_t> buffer) {
     if (socket == InvalidSocket) {
-        return socket_error::receive_failed;
+        return {
+            .disposition = udp_receive_disposition::failure,
+            .native_condition = udp_receive_native_condition::other,
+            .error = socket_error::receive_failed,
+        };
     }
 
     sockaddr_storage native_address = {};
     ams::socket::SockLenT native_length = sizeof(native_address);
-    wgnx::sysmodule::logger::Log(
-        "udp_receive RecvFrom begin socket=%d capacity=%zu",
-        static_cast<int>(socket),
-        buffer.size());
     const ssize_t rc = ams::socket::RecvFrom(
         socket,
         buffer.data(),
@@ -330,48 +350,25 @@ socket_error udp_receive(socket_handle socket, std::span<std::uint8_t> buffer, s
     const auto socket_errno = rc < 0
         ? ams::socket::GetLastError()
         : ams::socket::Errno::ESuccess;
-    wgnx::sysmodule::logger::Log(
-        "udp_receive RecvFrom end socket=%d result=%lld socket_errno=%u",
-        static_cast<int>(socket),
-        static_cast<long long>(rc),
-        static_cast<unsigned int>(socket_errno));
-    if (rc < 0) {
-        if (socket_errno == ams::socket::Errno::ESuccess ||
-            socket_errno == ams::socket::Errno::EAgain ||
-            socket_errno == ams::socket::Errno::EWouldBlock ||
-            socket_errno == ams::socket::Errno::ETimedOut ||
-            socket_errno == ams::socket::Errno::EIntr) {
-            if (out_received != nullptr) {
-                *out_received = 0;
-            }
-            if (out_source != nullptr) {
-                *out_source = {};
-            }
-            return socket_error::none;
-        }
 
+    endpoint source{};
+    if (rc >= 0 &&
+        !wgnx::sysmodule::platform::horizon::internal::EncodeEndpointFromSockaddr(
+            std::addressof(source),
+            reinterpret_cast<const sockaddr *>(std::addressof(native_address)))) {
+        const auto *generic =
+            reinterpret_cast<const sockaddr *>(std::addressof(native_address));
         wgnx::sysmodule::logger::Log(
-            "udp_receive failed socket_errno=%u",
-            static_cast<unsigned int>(socket_errno));
-        return socket_error::receive_failed;
+            "udp_receive source decode skipped sa_family=%d addrlen=%u",
+            generic->sa_family,
+            static_cast<unsigned int>(native_length));
     }
 
-    if (out_received != nullptr) {
-        *out_received = static_cast<std::size_t>(rc);
-    }
-    if (out_source != nullptr) {
-        *out_source = {};
-        if (!wgnx::sysmodule::platform::horizon::internal::EncodeEndpointFromSockaddr(
-                out_source, reinterpret_cast<const sockaddr *>(std::addressof(native_address)))) {
-            const auto *generic = reinterpret_cast<const sockaddr *>(std::addressof(native_address));
-            wgnx::sysmodule::logger::Log(
-                "udp_receive source decode skipped sa_family=%d addrlen=%u",
-                generic->sa_family,
-                static_cast<unsigned int>(native_length));
-        }
-    }
-
-    return socket_error::none;
+    return classify_udp_receive_result(
+        static_cast<std::int64_t>(rc),
+        ClassifyNativeReceiveCondition(socket_errno),
+        static_cast<std::uint32_t>(socket_errno),
+        source);
 }
 
 wgnx::platform::NetworkPathSnapshot sample_network_path(std::uint64_t sequence) {

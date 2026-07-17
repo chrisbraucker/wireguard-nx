@@ -10,9 +10,23 @@ IPC and WireGuard wire contracts remain unchanged; the separation is internal.
   sockets, queues, or lifecycle policy.
 - `runtime/daemon_runtime.cpp` composes one `DaemonRuntime` instance. It owns
   the single state mutex, routes external commands, aggregates status, and
-  coordinates generation-checked platform effects. CMIF-facing free functions
-  are narrow adapters to that instance; no peer, packet, timer, probe, or
-  pending-request state exists in independent daemon globals.
+  wires platform callbacks to their concrete execution components.
+  CMIF-facing free functions are narrow adapters to that instance; no peer,
+  packet, timer, probe, or pending-request state exists in independent daemon
+  globals.
+- `runtime/runtime_effect_executor.*` owns the iterative runtime-effect visitor
+  and Horizon completion bridges. It performs endpoint resolution, UDP bind,
+  send, and close operations; arms and cancels concrete timers; queues receive
+  and outbound-submission work; publishes decrypted packets; and commits
+  resolver, timer, debug-probe, and NIFM observation completions. It executes
+  peer decisions and reports generation-tagged facts through
+  `RuntimeCoordinator`; it does not choose peer lifecycle or recovery policy.
+- `runtime/encrypted_receive_pump.*` owns encrypted UDP receive scheduling, the
+  bounded manual-rebind request, one 4 KiB process-lifetime datagram scratch
+  buffer, and one bounded completion batch. It snapshots receive identity under
+  the shared mutex, performs blocking receive without that mutex, and publishes
+  authenticated datagrams or factual receive failures only after generation
+  revalidation.
 - `runtime/peer_runtime.hpp` defines the fixed-capacity `PeerRegistry`. Each
   `PeerRuntime` slot is the structural owner of one peer's configuration,
   derived secrets, lifecycle and metrics state, UDP binding, protocol device,
@@ -79,7 +93,7 @@ IPC and WireGuard wire contracts remain unchanged; the separation is internal.
   the autostart selection, and scrubs encoded secret fields.
 - `runtime/udp_binding.hpp` also defines the bounded single-item
   `UdpRebindQueue`, which owns manual path-transition requests until the
-  receive worker can safely replace the socket.
+  receive pump can safely replace the socket.
 - `wireguard/peer_controller.*` owns platform-independent staged-send,
   handshake retry, initiator/responder session derivation, responder-session
   confirmation, and timer-token transitions. Each `PeerRuntime` owns one
@@ -107,24 +121,33 @@ three-step pattern:
 is similarly guarded by peer, activation, retry-sequence, and arm-generation
 tokens before a controller transition is applied.
 
-Event handlers mutate memory and return effects only. The daemon releases the
-state mutex before executing an effect, then revalidates its peer and activation
-identity before scheduling work. Stale effects are discarded.
+Event handlers mutate memory and return effects only. Command and completion
+paths release the state mutex before handing a batch to
+`RuntimeEffectExecutor`, which revalidates peer and activation identity before
+scheduling work. Stale effects are discarded.
 
 Effect execution is iterative. Completion events may produce another bounded
-batch, but the platform adapter drains those batches without recursively
+batch, but `RuntimeEffectExecutor` drains those batches without recursively
 retaining prior batches on a Horizon worker stack. Blocking UDP bind and send
 handlers are non-inlined stack boundaries so their I/O snapshots cannot be
 coalesced into the executor frame.
 
-The ordered receive work queue owns one process-lifetime 4 KiB datagram scratch
-buffer and one 2,184-byte effect batch. `ReceiveWorkMain` places only a small
-`packet_buffer` view on its worker stack. Work for the same receive item cannot
+`EncryptedReceivePump` owns one process-lifetime 4 KiB datagram scratch buffer
+and one 2,184-byte effect batch. Its ordered work item places only a small
+`packet_buffer` view on the worker stack. Work for the same receive item cannot
 execute concurrently, so this storage is exclusive without requiring one
 allocation per peer. Received bytes are consumed synchronously before the next
 socket read and are never retained through the scratch view. The non-inlined
-commit boundary returns before the static batch enters effect execution, so its
+commit boundary returns before the member batch enters effect execution, so its
 frame cannot accumulate with UDP send effects.
+
+The UDP platform boundary returns a `[[nodiscard]]` closed receive result.
+`Datagram`, `Retry`, and `Failure` are separate outcomes; byte count is therefore
+not used as an error channel, and a zero-length UDP datagram remains a datagram.
+The Horizon adapter normalizes retryable socket conditions but preserves the
+native result and errno value for diagnostics. The receive pump continues on a
+retry and publishes a generation-tagged transport failure only for a terminal
+outcome, preserving peer recovery policy outside the platform adapter.
 
 The single mutex is intentionally retained through the first post-refactor
 on-device regression. Narrower locks can be considered later from
@@ -136,9 +159,9 @@ The host suite links the production `PeerRegistry`, `PeerRuntime`,
 `RuntimeCoordinator`, `EndpointResolver`, `UdpBinding`, `PeerController`,
 `TimerCoordinator`, `TimerSchedule`, `PacketDataPlane`, `PacketChannel`,
 `DebugProbeRunner`, `NetworkPathObserver`, and `UdpRebindQueue`.
-Its 28 deterministic cases characterize selection, activation, lifecycle
-transitions, status projection, stale event rejection, timer
-arming/replacement/cancellation, queued stale delivery,
+Its 29 deterministic cases characterize UDP receive outcomes, selection,
+activation, lifecycle transitions, status projection, stale event rejection,
+timer arming/replacement/cancellation, queued stale delivery,
 bounded effects, generation matching, per-peer ownership, packet IDs, PID
 consumer transfer, IPv4/IPv6 envelope handling, packet queue overflow and
 staleness, and the outbound send lifecycle. Its production-runtime recovery
@@ -202,3 +225,15 @@ adapter. Target frames are again 3,168 bytes for resolver work, 4,560 bytes for
 effect iteration, 2,544 bytes for bind opening, and 4,064 bytes for datagram
 send. This restores the proven pre-Chunk-6 activation shape while keeping the
 publication path generation-checked under the daemon mutex.
+
+Chunk 12 preserves those boundaries after extracting concrete execution.
+Generated target code measures 3,168 bytes for endpoint completion, 4,448 bytes
+for effect iteration, 2,560 bytes for bind opening, 4,064 bytes for datagram
+send, 2,752 bytes for receive commit, and 144 bytes for the receive loop.
+Receive commit still returns before effect execution, and iterative completion
+draining still prevents prior effect batches from accumulating recursively.
+
+The typed UDP receive result grows the receive loop to 208 bytes while retaining
+the 192-byte UDP adapter frame. Terminal receive completion uses a 4,752-byte
+frame only after the adapter has returned, keeping the receive failure path
+inside the existing 16 KiB worker budget.

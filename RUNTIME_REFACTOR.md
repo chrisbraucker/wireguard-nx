@@ -480,7 +480,7 @@ language feature without one of those concrete benefits is not a goal.
 
 ### Chunk 11: Seal Peer Ownership
 
-**Status:** Locally complete; focused real-peer on-device regression pending.
+**Status:** Complete.
 
 Make configuration, derived secrets, UDP binding, protocol state, and the peer
 controller private implementation details of `PeerRuntime`. Remove unrestricted
@@ -517,13 +517,13 @@ peer chooses keepalive or handshake recovery. Host tests cover those policies,
 including delayed rebind completion rejection.
 
 Local validation passes 28 deterministic host cases, ASan/UBSan, the target
-build, the target frame guard, and the unchanged API v4 protocol header. The
-remaining completion gate is focused activation, traffic, bind-bump, outage,
-recovery, and teardown testing on-device.
+build, the target frame guard, and the unchanged API v4 protocol header. An
+extended real-peer requester run completed successfully with the resulting
+runtime, closing the focused on-device regression gate.
 
 ### Chunk 12: Extract Runtime I/O Execution
 
-**Status:** Planned.
+**Status:** Complete.
 
 Extract the concrete effect visitor and Horizon completion bridge into a
 `RuntimeEffectExecutor`. Extract encrypted UDP receive scheduling, receive
@@ -544,9 +544,35 @@ scratch has one bounded owner; stale I/O completions remain harmless; target
 stack measurements and focused activation, traffic, teardown, and outage
 regressions pass.
 
+**Implementation:** `RuntimeEffectExecutor` owns the iterative effect visitor
+and the concrete completion bridges for endpoint resolution, UDP bind and send,
+protocol timers, outbound submission, decrypted packet publication, debug
+probe timeout, and network-path observation. It receives immutable work or
+generation-tagged completion facts and re-enters peer policy only through
+`RuntimeCoordinator`.
+
+`EncryptedReceivePump` owns the ordered receive scheduling surface, manual
+rebind request, one process-lifetime 4 KiB datagram scratch buffer, and one
+bounded completion batch. Its receive loop snapshots a peer identity, socket,
+and generations under the shared mutex, performs blocking receive without the
+mutex, and publishes either an authenticated-datagram event or a factual
+transport-failure event after revalidation. `DaemonRuntime` now composes and
+routes callbacks to these components; it contains no socket, receive-loop,
+timer, resolver, or packet-completion procedure.
+
+Local validation passes 28 deterministic host cases, the same 28 cases under
+ASan/UBSan, the devkitA64 target build, the 8 KiB target frame guard, and
+`git diff --check`. IPC API v4 and `common/include/wgnx/protocol.hpp` remain
+unchanged. Generated target frames measure 3,168 bytes for endpoint completion,
+4,448 bytes for effect iteration, 2,560 bytes for bind opening, 4,064 bytes for
+datagram send, 2,752 bytes for receive commit, and 144 bytes for the receive
+loop. The focused real-peer on-device regression subsequently passed repeated
+requester traffic and clean teardown. Path recovery remained at its known
+pre-refactor limitation and did not expose a Chunk 12 regression.
+
 ### Chunk 13: Strengthen Domain Contracts
 
-**Status:** Planned.
+**Status:** In progress.
 
 Replace interchangeable integer identities with small, trivially copyable
 domain types for peer indices, activation generations, socket generations,
@@ -564,6 +590,15 @@ storage plus an identity token for asynchronous work.
 Use `std::expected` where the target standard library supports it without an
 unacceptable footprint; otherwise use a small project-local equivalent with the
 same explicit value-or-error semantics.
+
+The first contract slice replaces the ambiguous UDP receive error plus output
+parameters with a `[[nodiscard]]` closed result. It distinguishes a datagram,
+including a legitimate zero-length datagram, from a retryable native wakeup and
+a terminal platform failure. The Horizon adapter normalizes `EAGAIN`,
+`EWOULDBLOCK`, `ETIMEDOUT`, `EINTR`, and the observed negative
+`RecvFrom`/`ESuccess` anomaly while retaining the raw native result and error for
+diagnostics. Retry outcomes do not publish peer transport failures; terminal
+outcomes retain the existing generation-checked failure path.
 
 **Definition of done:** the compiler rejects cross-domain identity comparisons;
 no fallible effect insertion is ignored; tests exercise each typed rejection
@@ -667,7 +702,7 @@ Every chunk must pass:
 - review that `common/include/wgnx/protocol.hpp` and the CMIF contract remain
   unchanged unless an API change is intentional
 
-The final local gate contains 28 deterministic host cases, the same 28 cases
+The current local gate contains 29 deterministic host cases, the same 29 cases
 under ASan/UBSan, the devkitA64 target build, the 8 KiB frame guard, and
 `git diff --check`. IPC API v4 and `common/include/wgnx/protocol.hpp` are
 unchanged.
@@ -686,16 +721,35 @@ on-device measurement.
 | Pre-refactor `862ef32` | 282,258 | 205,608 | 504,016 | 991,882 | 192,616 |
 | After Chunk 8 `6650af9` | 295,330 | 242,600 | 508,112 | 1,046,042 | 202,431 |
 | After Chunk 10 | 295,722 | 50,088 | 712,912 | 1,058,722 | 201,824 |
+| After Chunk 11 | 296,714 | 50,088 | 712,912 | 1,059,714 | 202,979 |
+| After Chunk 12 | 304,960 | 50,776 | 713,304 | 1,069,040 | 206,979 |
+| Chunk 13 receive contract | 304,992 | 50,776 | 713,304 | 1,069,072 | 207,141 |
 
 The data-to-BSS shift after Chunk 8 is caused primarily by composing prior
 independent globals into the zero-initialized `DaemonRuntime`; compare
-`data + bss`, not either column alone. The complete refactor adds 66,840 bytes
-of static image footprint over `862ef32`. Chunks 9 and 10 add 12,680 bytes over
+`data + bss`, not either column alone. Chunks 0 through 10 add 66,840 bytes of
+static image footprint over `862ef32`. Chunks 9 and 10 add 12,680 bytes over
 Chunk 8, while the compressed NSO decreases by 607 bytes. The fixed 304 KiB BSD
 socket arena, 96 KiB workqueue-slot pool, and 16 KiB main-thread stack are
-unchanged. The final composed daemon object is 209,392 bytes, replacing the
-separate peer state, packet channel, scheduler, dispatcher, resolver, and
-receive scratch globals.
+unchanged. After Chunk 10 the composed daemon object is 209,392 bytes,
+replacing the separate peer state, packet channel, scheduler, dispatcher,
+resolver, and receive scratch globals.
+
+Chunk 12 adds 9,326 bytes of static image footprint and 4,000 bytes to the
+compressed NSO over Chunk 11. Most of that cost is executable code from making
+the concrete completion bridges externally defined component methods rather
+than anonymous-daemon procedures. The composed daemon object grows by 160 bytes
+to 209,552 bytes: the existing receive scratch and effect batch move into
+`EncryptedReceivePump`, while the pump and executor add their explicit
+dependency references. No queue, packet, socket-arena, or thread-stack capacity
+increases.
+
+The first Chunk 13 receive-contract slice adds 32 bytes to the static image and
+162 bytes to the compressed NSO. Returning the diagnostic result by value grows
+the receive-loop frame from 144 to 208 bytes; the UDP receive adapter remains
+192 bytes and the generation-checked failure completion is 4,752 bytes. The
+failure completion starts only after the adapter returns, so these frames do
+not accumulate.
 
 Run focused on-device regressions after chunks 4, 5, 6, 7, 10, 12, 14, and 15.
 At minimum, these runs should cover tunnel activation against a known-good

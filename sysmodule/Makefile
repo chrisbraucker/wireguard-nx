@@ -71,6 +71,7 @@ HOST_TEST_CPP_SOURCES := \
 	src/wireguard/crypto/primitives.cpp \
 	test/host/host_stubs.cpp \
 	test/host/legacy_self_tests.cpp \
+	test/host/platform_tests.cpp \
 	test/host/protocol_tests.cpp \
 	test/host/main.cpp
 HOST_TEST_C_SOURCES := src/wireguard/crypto/monocypher.c

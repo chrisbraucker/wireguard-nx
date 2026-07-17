@@ -45,6 +45,71 @@ enum class socket_error : std::uint32_t {
     receive_failed = 5,
 };
 
+enum class udp_receive_disposition : std::uint8_t {
+    datagram = 0,
+    retry,
+    failure,
+};
+
+enum class udp_receive_native_condition : std::uint8_t {
+    none = 0,
+    would_block,
+    timed_out,
+    interrupted,
+    other,
+};
+
+struct udp_receive_result {
+    udp_receive_disposition disposition{udp_receive_disposition::failure};
+    udp_receive_native_condition native_condition{
+        udp_receive_native_condition::other};
+    std::size_t bytes_received{0};
+    endpoint source{};
+    socket_error error{socket_error::receive_failed};
+    std::int64_t native_result{-1};
+    std::uint32_t native_error{0};
+};
+
+[[nodiscard]] constexpr udp_receive_result classify_udp_receive_result(
+    std::int64_t native_result,
+    udp_receive_native_condition native_condition,
+    std::uint32_t native_error,
+    const endpoint &source = {}) {
+    if (native_result >= 0) {
+        return {
+            .disposition = udp_receive_disposition::datagram,
+            .native_condition = udp_receive_native_condition::none,
+            .bytes_received = static_cast<std::size_t>(native_result),
+            .source = source,
+            .error = socket_error::none,
+            .native_result = native_result,
+            .native_error = native_error,
+        };
+    }
+
+    if (native_condition != udp_receive_native_condition::other) {
+        return {
+            .disposition = udp_receive_disposition::retry,
+            .native_condition = native_condition,
+            .bytes_received = 0,
+            .source = {},
+            .error = socket_error::none,
+            .native_result = native_result,
+            .native_error = native_error,
+        };
+    }
+
+    return {
+        .disposition = udp_receive_disposition::failure,
+        .native_condition = native_condition,
+        .bytes_received = 0,
+        .source = {},
+        .error = socket_error::receive_failed,
+        .native_result = native_result,
+        .native_error = native_error,
+    };
+}
+
 struct NetworkPathSnapshot {
     std::uint32_t initialization_result{0};
     std::uint32_t internet_status_result{0};
@@ -86,11 +151,9 @@ socket_error udp_send(
     const endpoint &destination,
     std::span<const std::uint8_t> data,
     std::size_t *out_sent);
-socket_error udp_receive(
+[[nodiscard]] udp_receive_result udp_receive(
     socket_handle socket,
-    std::span<std::uint8_t> buffer,
-    std::size_t *out_received,
-    endpoint *out_source);
+    std::span<std::uint8_t> buffer);
 
 // Samples Horizon's network path. Runtime policy owns comparison and reaction.
 NetworkPathSnapshot sample_network_path(std::uint64_t sequence);
