@@ -21,12 +21,24 @@ IPC and WireGuard wire contracts remain unchanged; the separation is internal.
   outbound protocol policy are peer-owned. Each peer owns one bounded pending
   encrypted datagram and one bounded generation-tagged plaintext slot, so
   events and effects never carry owned packet buffers.
+- `runtime/runtime_coordinator.*` is the only mutable entry point to the peer
+  registry and peer policy. Peer configuration, derived secrets, binding,
+  protocol device, controller, generations, and lifecycle are private. Runtime
+  adapters receive immutable lifecycle, binding, packet, timer, or protocol
+  snapshots scoped to one operation; they cannot obtain a mutable peer.
 - `runtime/runtime_events.hpp` defines the closed event/effect vocabulary and
   bounded effect storage. `runtime/runtime_coordinator.*` resolves event peer
-identity and dispatches into `PeerRuntime`. Activation, endpoint and bind
-completion, outbound packet staging, send completion, encrypted datagram
-receipt, protocol timer expiry, transport rebound, fatal transport failure,
-deactivation, and decrypted-packet publication use this path.
+  identity and dispatches into `PeerRuntime`. Activation, endpoint and bind
+  completion, outbound packet staging, send completion, encrypted datagram
+  receipt, protocol timer expiry, transport rebind, transport failure,
+  deactivation, and decrypted-packet publication use this path. UDP transport
+  failures cross this boundary as socket- and generation-tagged facts. The peer
+  decides whether an error is nonterminal, whether send failure suspends
+  transport, which timers must be canceled, and whether successful rebinding
+  resumes with a keepalive or a handshake. Rebind opens are tagged by purpose
+  and generation: failed opens preserve the old socket, stale completions close
+  only their candidate, and successful completion atomically adopts the
+  replacement before recovery effects are emitted.
 - `runtime/endpoint_resolver.*` owns the bounded pending endpoint-resolution
   request. Resolution runs on its Horizon work queue and returns a typed,
   activation-tagged completion instead of mutating daemon-owned request state.

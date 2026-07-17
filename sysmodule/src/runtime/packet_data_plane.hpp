@@ -12,7 +12,6 @@
 
 namespace wgnx::sysmodule::runtime {
 
-class PeerRegistry;
 class RuntimeCoordinator;
 
 enum class PacketSubmissionStatus : std::uint8_t {
@@ -82,10 +81,9 @@ struct PacketClearOutcome {
 class PacketDataPlane {
 public:
     PacketDataPlane(
-        PeerRegistry &peers,
         RuntimeCoordinator &coordinator,
         PacketTransport &transport)
-        : m_peers(peers), m_coordinator(coordinator), m_transport(transport) {}
+        : m_coordinator(coordinator), m_transport(transport) {}
 
     PacketSubmissionOutcome SubmitIpPacket(
         std::span<const std::uint8_t> packet,
@@ -124,7 +122,6 @@ private:
         EffectBatch &out_effects);
     std::uint64_t AllocatePacketId();
 
-    PeerRegistry &m_peers;
     RuntimeCoordinator &m_coordinator;
     PacketTransport &m_transport;
     std::uint64_t m_next_packet_id{1};

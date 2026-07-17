@@ -33,10 +33,16 @@ struct DeactivationRequestedEvent {
     wgnx::platform::ktime_t occurred_at{0};
 };
 
+enum class TransportIoOperation : std::uint8_t {
+    Receive = 0,
+};
+
 struct TransportFailureEvent {
     PeerIdentity peer{};
-    wgnx::PeerErrorStage stage{wgnx::PeerErrorStage::Transport};
-    wgnx::PeerErrorCode code{wgnx::PeerErrorCode::TransportReceiveFailed};
+    TransportIoOperation operation{TransportIoOperation::Receive};
+    wgnx::platform::socket_handle socket{wgnx::platform::InvalidSocket};
+    std::uint32_t socket_generation{0};
+    wgnx::platform::socket_error error{wgnx::platform::socket_error::receive_failed};
     wgnx::platform::ktime_t occurred_at{0};
 };
 
@@ -46,6 +52,11 @@ struct EndpointResolvedEvent {
     wgnx::platform::ktime_t occurred_at{0};
 };
 
+enum class UdpBindPurpose : std::uint8_t {
+    Activation = 0,
+    Rebind,
+};
+
 struct UdpBindOpenedEvent {
     PeerIdentity peer{};
     wgnx::platform::endpoint endpoint{};
@@ -53,7 +64,13 @@ struct UdpBindOpenedEvent {
     wgnx::platform::socket_handle socket{wgnx::platform::InvalidSocket};
     wgnx::platform::socket_error error{wgnx::platform::socket_error::open_failed};
     std::uint32_t socket_generation{0};
+    UdpBindPurpose purpose{UdpBindPurpose::Activation};
     wgnx::wireguard::TimerDeadline retry_deadline{};
+    wgnx::platform::ktime_t occurred_at{0};
+};
+
+struct UdpRebindRequestedEvent {
+    PeerIdentity peer{};
     wgnx::platform::ktime_t occurred_at{0};
 };
 
@@ -100,24 +117,18 @@ struct ProtocolTimerExpiredEvent {
     wgnx::platform::ktime_t occurred_at{0};
 };
 
-struct TransportReboundEvent {
-    PeerIdentity peer{};
-    wgnx::wireguard::TimerDeadline retry_deadline{};
-    wgnx::platform::ktime_t occurred_at{0};
-};
-
 using PeerEvent = std::variant<
     ActivationRequestedEvent,
     DeactivationRequestedEvent,
     TransportFailureEvent,
     EndpointResolvedEvent,
     UdpBindOpenedEvent,
+    UdpRebindRequestedEvent,
     EncryptedDatagramReceivedEvent,
     PendingDatagramSentEvent,
     InnerPacketStagedEvent,
     ProcessOutboundQueueEvent,
-    ProtocolTimerExpiredEvent,
-    TransportReboundEvent>;
+    ProtocolTimerExpiredEvent>;
 
 struct ResolveEndpointEffect {
     PeerIdentity peer{};
@@ -129,6 +140,7 @@ struct OpenUdpBindEffect {
     wgnx::platform::endpoint endpoint{};
     std::array<char, sizeof(wgnx::PeerInfo::resolved_endpoint)> endpoint_text{};
     std::uint32_t socket_generation{0};
+    UdpBindPurpose purpose{UdpBindPurpose::Activation};
 };
 
 struct CloseUdpSocketEffect {
@@ -157,10 +169,6 @@ struct CancelProtocolTimerEffect {
     wgnx::wireguard::TimerToken token{};
 };
 
-struct SuspendUdpTransportEffect {
-    PeerIdentity peer{};
-};
-
 struct QueueInnerPacketSubmissionEffect {
     PeerIdentity peer{};
 };
@@ -178,7 +186,6 @@ using RuntimeEffect = std::variant<
     QueueReceiveEffect,
     ArmProtocolTimerEffect,
     CancelProtocolTimerEffect,
-    SuspendUdpTransportEffect,
     QueueInnerPacketSubmissionEffect,
     PublishDecryptedPacketEffect>;
 

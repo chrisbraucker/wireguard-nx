@@ -49,6 +49,15 @@ struct PeerProtocolInfo {
     bool instantiated{false};
 };
 
+struct PeerProtocolSnapshot {
+    std::uint32_t current_keypair_index{0};
+    std::uint32_t previous_keypair_index{0};
+    bool instantiated{false};
+    bool current_keypair_valid{false};
+    bool next_keypair_valid{false};
+    bool previous_keypair_valid{false};
+};
+
 constexpr inline std::size_t MaxEncryptedDatagramSize =
     wgnx::wireguard::TransportDataHeaderSize +
     wgnx::wireguard::GetPaddedTransportPayloadSize(wgnx::wireguard::MaxInnerIpPacketSize) +
@@ -106,32 +115,25 @@ struct DecryptedPacketSlot {
     std::uint32_t generation{0};
 };
 
+class RuntimeCoordinator;
+
 class PeerRuntime {
 public:
-    void SetPeerIndex(std::uint32_t peer_index) { m_peer_index = peer_index; }
     const PeerRuntimeInfo &Lifecycle() const { return m_lifecycle; }
-
-    void Deactivate(wgnx::platform::ktime_t now);
-    std::uint32_t BeginActivation(wgnx::platform::ktime_t now);
-    bool EnterHandshaking(std::uint32_t activation_generation, wgnx::platform::ktime_t now);
-    bool EnterActive(std::uint32_t activation_generation, wgnx::platform::ktime_t now);
-    void EnterError(
-        wgnx::PeerErrorStage stage,
-        wgnx::PeerErrorCode code,
-        wgnx::platform::ktime_t now);
-
+    const wgnx::PeerConfigEntry &Configuration() const { return m_config; }
+    UdpBinding::Snapshot BindingSnapshot() const { return m_binding.StateSnapshot(); }
+    PeerProtocolSnapshot ProtocolSnapshot() const;
     bool IsCurrentActivation(std::uint32_t activation_generation) const;
     bool IsInTransportState() const;
     bool AcceptsInnerPacketSubmission() const;
-
-    void RecordReceivedBytes(std::size_t byte_count, wgnx::platform::ktime_t now);
-    void RecordTransmittedBytes(std::size_t byte_count, wgnx::platform::ktime_t now);
-
+    bool CanSendTransportNow() const;
+    bool IsTimerCurrent(
+        const wgnx::wireguard::TimerToken &token,
+        const wgnx::wireguard::TimerOwner &owner) const;
     wgnx::PeerInfo BuildInfo(
         wgnx::platform::ktime_t now,
         bool is_active,
         bool is_auto_start) const;
-    EffectBatch Handle(const PeerEvent &event);
     bool SnapshotPendingDatagram(
         std::uint32_t activation_generation,
         std::uint32_t datagram_generation,
@@ -141,16 +143,28 @@ public:
         std::uint32_t packet_generation,
         DecryptedPacketView &out) const;
     bool CanStageInnerPacket() const;
-    std::size_t ClearStagedInnerPackets();
     std::size_t StagedInnerPacketCount() const;
 
-    wgnx::PeerConfigEntry config{};
-    PeerConfigDerivedInfo derived{};
-    UdpBinding binding{};
-    PeerProtocolInfo protocol{};
-    wgnx::wireguard::PeerController controller{};
-
 private:
+    friend class RuntimeCoordinator;
+
+    void Configure(
+        std::uint32_t peer_index,
+        const wgnx::PeerConfigEntry &config,
+        PeerConfigDerivedInfo derived,
+        wgnx::platform::ktime_t now);
+    void Deactivate(wgnx::platform::ktime_t now);
+    std::uint32_t BeginActivation(wgnx::platform::ktime_t now);
+    bool EnterHandshaking(std::uint32_t activation_generation, wgnx::platform::ktime_t now);
+    bool EnterActive(std::uint32_t activation_generation, wgnx::platform::ktime_t now);
+    void EnterError(
+        wgnx::PeerErrorStage stage,
+        wgnx::PeerErrorCode code,
+        wgnx::platform::ktime_t now);
+    void RecordReceivedBytes(std::size_t byte_count, wgnx::platform::ktime_t now);
+    void RecordTransmittedBytes(std::size_t byte_count, wgnx::platform::ktime_t now);
+    EffectBatch Handle(const PeerEvent &event);
+    std::size_t ClearStagedInnerPackets();
     void ResetLifecycle(
         wgnx::PeerRuntimeState state,
         std::uint32_t activation_generation,
@@ -200,10 +214,23 @@ private:
         wgnx::platform::ktime_t now,
         EffectBatch *effects);
     void FinalizeTimerEffects(EffectBatch &effects);
+    void SuspendTransport(const PeerIdentity &identity, EffectBatch &effects);
+    void RecoverTransport(
+        const PeerIdentity &identity,
+        wgnx::wireguard::TimerDeadline retry_deadline,
+        wgnx::platform::ktime_t now,
+        EffectBatch &effects);
 
+    wgnx::PeerConfigEntry m_config{};
+    PeerConfigDerivedInfo m_derived{};
+    UdpBinding m_binding{};
+    PeerProtocolInfo m_protocol{};
+    wgnx::wireguard::PeerController m_controller{};
     PeerRuntimeInfo m_lifecycle{};
     std::uint32_t m_next_activation_generation{1};
     std::uint32_t m_next_socket_generation{1};
+    std::uint32_t m_pending_socket_generation{0};
+    UdpBindPurpose m_pending_bind_purpose{UdpBindPurpose::Activation};
     std::uint32_t m_next_datagram_generation{1};
     PendingDatagram m_pending_datagram{};
     wgnx::wireguard::InnerPacketRecord m_staging_record{};
@@ -217,65 +244,16 @@ public:
     constexpr std::uint32_t Count() const { return m_count; }
     constexpr bool Empty() const { return m_count == 0; }
 
-    bool Assign(
-        std::span<const wgnx::PeerConfigEntry> configured_peers,
-        std::span<PeerConfigDerivedInfo> derived = {}) {
-        if (configured_peers.size() > m_peers.size() ||
-            (!derived.empty() && derived.size() != configured_peers.size())) {
-            return false;
-        }
-
-        m_count = static_cast<std::uint32_t>(configured_peers.size());
-        for (std::size_t index = 0; index < configured_peers.size(); ++index) {
-            m_peers[index].SetPeerIndex(static_cast<std::uint32_t>(index));
-            m_peers[index].config = configured_peers[index];
-            if (!derived.empty()) {
-                m_peers[index].derived = std::move(derived[index]);
-            }
-        }
-        m_active_peer_index = -1;
-        m_auto_start_peer_index = -1;
-        return true;
-    }
-
-    void ClearConfiguration() {
-        m_count = 0;
-        m_active_peer_index = -1;
-        m_auto_start_peer_index = -1;
-    }
-
     constexpr bool IsValidSelection(std::int32_t peer_index) const {
         return IsValidPeerSelection(peer_index, m_count);
-    }
-
-    constexpr PeerRuntime &operator[](std::size_t peer_index) {
-        return m_peers[peer_index];
-    }
-
-    constexpr const PeerRuntime &operator[](std::size_t peer_index) const {
-        return m_peers[peer_index];
     }
 
     constexpr std::int32_t ActivePeerIndex() const { return m_active_peer_index; }
     constexpr std::int32_t AutoStartPeerIndex() const { return m_auto_start_peer_index; }
 
-    bool SetActivePeerIndex(std::int32_t peer_index) {
-        if (!IsValidSelection(peer_index)) {
-            return false;
-        }
-        m_active_peer_index = peer_index;
-        return true;
-    }
-
-    bool SetAutoStartPeerIndex(std::int32_t peer_index) {
-        if (!IsValidSelection(peer_index)) {
-            return false;
-        }
-        m_auto_start_peer_index = peer_index;
-        return true;
-    }
-
 private:
+    friend class RuntimeCoordinator;
+
     std::array<PeerRuntime, wgnx::MaxPeers> m_peers{};
     std::uint32_t m_count{0};
     std::int32_t m_active_peer_index{-1};

@@ -45,7 +45,6 @@ namespace {
 
 struct DaemonState {
     runtime::PeerRegistry peers{};
-    std::uint32_t next_socket_generation{1};
     bool initialized{false};
 };
 
@@ -82,17 +81,6 @@ private:
     static void DebugProbeTimeoutCallback();
     static void NetworkPathObserverCallback();
 
-    runtime::PeerRuntime &PeerAt(std::size_t peer_index);
-    void CloseRuntimeSocket(std::size_t peer_index);
-    std::uint32_t AllocateSocketGeneration();
-    wgnx::PeerErrorCode OpenRuntimeSocket(std::size_t peer_index);
-    void SuspendRuntimeTransportAfterSendFailure(std::size_t peer_index, const char *operation);
-    void LogRecoverableTransportIoError(
-        std::size_t peer_index,
-        wgnx::PeerErrorCode code,
-        const char *operation);
-    wgnx::wireguard::wg_peer *GetProtocolPeer(std::size_t peer_index);
-    void CancelProtocolTimer(std::size_t peer_index, wgnx::wireguard::TimerHook hook);
     void SchedulePayloadProbeTimeout();
     void CancelPayloadProbeTimeout();
     void ClearInnerPacketStateLocked(const char *reason);
@@ -174,13 +162,9 @@ DaemonRuntime *DaemonRuntime::s_instance = nullptr;
 DaemonRuntime::DaemonRuntime()
     : m_state_mutex(false),
       m_runtime_coordinator(m_state.peers),
-      m_packet_data_plane(m_state.peers, m_runtime_coordinator, m_packet_channel) {
+      m_packet_data_plane(m_runtime_coordinator, m_packet_channel) {
     AMS_ABORT_UNLESS(s_instance == nullptr);
     s_instance = this;
-}
-
-runtime::PeerRuntime &DaemonRuntime::PeerAt(std::size_t peer_index) {
-    return m_state.peers[peer_index];
 }
 
 template<std::size_t Size>
@@ -205,165 +189,7 @@ wgnx::platform::ktime_t GetRuntimeNowNs() {
     return wgnx::platform::ktime_get_coarse_boottime_ns();
 }
 
-void DaemonRuntime::CloseRuntimeSocket(std::size_t peer_index) {
-    runtime::UdpBinding &binding = PeerAt(peer_index).binding;
-    if (binding.IsOpen()) {
-        logger::Log(
-            "Closing runtime UDP socket generation=%u socket=%d suspended=%u",
-            binding.Generation(),
-            static_cast<int>(binding.Socket()),
-            binding.IsSuspended() ? 1U : 0U);
-        const std::uint32_t generation = binding.Generation();
-        const auto socket = binding.Socket();
-        binding.Close();
-        logger::Log(
-            "Closed runtime UDP socket generation=%u socket=%d",
-            generation,
-            static_cast<int>(socket));
-    }
-}
-
-std::uint32_t DaemonRuntime::AllocateSocketGeneration() {
-    const std::uint32_t generation = m_state.next_socket_generation++;
-    if (m_state.next_socket_generation == 0) {
-        m_state.next_socket_generation = 1;
-    }
-    return generation;
-}
-
-wgnx::PeerErrorCode MapSocketErrorToPeerErrorCode(wgnx::platform::socket_error error) {
-    switch (error) {
-        case wgnx::platform::socket_error::none:
-            return wgnx::PeerErrorCode::None;
-        case wgnx::platform::socket_error::transport_init_failed:
-            return wgnx::PeerErrorCode::TransportInitFailed;
-        case wgnx::platform::socket_error::open_failed:
-            return wgnx::PeerErrorCode::TransportOpenFailed;
-        case wgnx::platform::socket_error::send_failed:
-            return wgnx::PeerErrorCode::TransportSendFailed;
-        case wgnx::platform::socket_error::receive_failed:
-            return wgnx::PeerErrorCode::TransportReceiveFailed;
-        case wgnx::platform::socket_error::invalid_endpoint:
-            return wgnx::PeerErrorCode::InternalFailure;
-    }
-
-    return wgnx::PeerErrorCode::InternalFailure;
-}
-
-wgnx::PeerErrorCode DaemonRuntime::OpenRuntimeSocket(std::size_t peer_index) {
-    auto &binding = PeerAt(peer_index).binding;
-    CloseRuntimeSocket(peer_index);
-
-    logger::Log(
-        "Opening UDP socket for peer %zu family=%s endpoint=%s",
-        peer_index,
-        wgnx::GetPeerResolvedFamilyName(
-            static_cast<wgnx::PeerResolvedFamily>(binding.Endpoint().family)),
-        binding.EndpointText());
-    const auto open_error = binding.Open(AllocateSocketGeneration());
-    if (open_error != wgnx::platform::socket_error::none) {
-        logger::Log(
-            "Failed to open UDP socket for peer %zu endpoint=%s err=%u",
-            peer_index,
-            binding.EndpointText(),
-            static_cast<unsigned int>(open_error));
-        return MapSocketErrorToPeerErrorCode(open_error);
-    }
-    logger::Log(
-        "Opened UDP socket for peer %zu generation=%u socket=%d family=%s endpoint=%s",
-        peer_index,
-        binding.Generation(),
-        static_cast<int>(binding.Socket()),
-        wgnx::GetPeerResolvedFamilyName(
-            static_cast<wgnx::PeerResolvedFamily>(binding.Endpoint().family)),
-        binding.EndpointText());
-    return wgnx::PeerErrorCode::None;
-}
-
-bool IsRecoverableTransportIoError(wgnx::PeerErrorCode code) {
-    return code == wgnx::PeerErrorCode::TransportSendFailed ||
-           code == wgnx::PeerErrorCode::TransportReceiveFailed;
-}
-
-
-void DaemonRuntime::SuspendRuntimeTransportAfterSendFailure(std::size_t peer_index, const char *operation) {
-    if constexpr (!development_config::SuspendUdpTransportOnFirstSendFailure) {
-        return;
-    }
-
-    const auto &runtime = PeerAt(peer_index).Lifecycle();
-    auto &binding = PeerAt(peer_index).binding;
-    if (binding.IsSuspended()) {
-        logger::Log(
-            "UDP transport already suspended peer=%zu activation=%u operation=%s",
-            peer_index,
-            runtime.activation_generation,
-            operation != nullptr ? operation : "unspecified");
-        return;
-    }
-
-    const auto socket = binding.Socket();
-    const std::uint32_t socket_generation = binding.Generation();
-    logger::Log(
-        "EXPERIMENT suspending UDP transport after send failure peer=%zu activation=%u socket_generation=%u socket=%d operation=%s; preserving peer, keys, protocol, and NIFM state",
-        peer_index,
-        runtime.activation_generation,
-        socket_generation,
-        static_cast<int>(socket),
-        operation != nullptr ? operation : "unspecified");
-    CancelProtocolTimer(peer_index, wgnx::wireguard::TimerHook::RetransmitHandshake);
-    CancelProtocolTimer(peer_index, wgnx::wireguard::TimerHook::SendKeepalive);
-    CancelProtocolTimer(peer_index, wgnx::wireguard::TimerHook::Rekey);
-    binding.Suspend();
-    logger::Log(
-        "EXPERIMENT UDP transport suspended peer=%zu activation=%u old_socket_generation=%u old_socket=%d state=%s",
-        peer_index,
-        runtime.activation_generation,
-        socket_generation,
-        static_cast<int>(socket),
-        wgnx::GetPeerRuntimeStateName(runtime.state));
-}
-
-void DaemonRuntime::LogRecoverableTransportIoError(
-    std::size_t peer_index,
-    wgnx::PeerErrorCode code,
-    const char *operation) {
-    const auto &runtime = PeerAt(peer_index).Lifecycle();
-    logger::Log(
-        "Nonterminal WG transport I/O failure peer=%zu activation=%u state=%s operation=%s error=%s",
-        peer_index,
-        runtime.activation_generation,
-        wgnx::GetPeerRuntimeStateName(runtime.state),
-        operation != nullptr ? operation : "unspecified",
-        wgnx::GetPeerErrorCodeName(code));
-    if (code == wgnx::PeerErrorCode::TransportSendFailed) {
-        SuspendRuntimeTransportAfterSendFailure(peer_index, operation);
-    }
-}
-
-wgnx::wireguard::wg_peer *DaemonRuntime::GetProtocolPeer(std::size_t peer_index) {
-    auto &protocol = PeerAt(peer_index).protocol;
-    if (!protocol.instantiated) {
-        return nullptr;
-    }
-
-    return wgnx::wireguard::wg_device_first_peer(std::addressof(protocol.device));
-}
-
-void DaemonRuntime::CancelProtocolTimer(std::size_t peer_index, wgnx::wireguard::TimerHook hook) {
-    wgnx::wireguard::wg_peer *peer = GetProtocolPeer(peer_index);
-    if (peer != nullptr) {
-        wgnx::wireguard::wg_timers_cancel(
-            std::addressof(peer->timers),
-            hook,
-            peer->name);
-    }
-
-    PeerAt(peer_index).controller.Timers().Cancel(hook);
-    m_timer_scheduler.CancelProtocolTimer(hook);
-}
-
-[[maybe_unused]] void DaemonRuntime::SchedulePayloadProbeTimeout() {
+ [[maybe_unused]] void DaemonRuntime::SchedulePayloadProbeTimeout() {
     m_timer_scheduler.ArmDebugProbeTimeout(
         wgnx::platform::get_jiffies_64() + DebugProbeTimeoutJiffies);
 }
@@ -385,9 +211,11 @@ void DaemonRuntime::ClearInnerPacketStateLocked(const char *reason) {
 
 runtime::EffectBatch DaemonRuntime::SetPeerInactive(std::size_t peer_index) {
     CancelPayloadProbeTimeout();
+    const auto *lifecycle = m_runtime_coordinator.Lifecycle(peer_index);
+    AMS_ABORT_UNLESS(lifecycle != nullptr);
     const runtime::PeerIdentity peer{
         .peer_index = static_cast<std::uint32_t>(peer_index),
-        .activation_generation = PeerAt(peer_index).Lifecycle().activation_generation,
+        .activation_generation = lifecycle->activation_generation,
     };
     m_debug_probe_runner.Cancel(&peer);
     ClearInnerPacketStateLocked("peer inactive");
@@ -410,46 +238,26 @@ void DaemonRuntime::QueueInnerPacketSubmissionWork() {
 }
 
 [[maybe_unused]] bool DaemonRuntime::QueuePayloadSubmissionRequestLocked(wgnx::DebugTriggerAction action) {
-    if (m_state.peers.ActivePeerIndex() < 0) {
-        return false;
-    }
-
-    const std::size_t peer_index = static_cast<std::size_t>(m_state.peers.ActivePeerIndex());
-    const auto &runtime = PeerAt(peer_index).Lifecycle();
-    wgnx::wireguard::wg_peer *peer = GetProtocolPeer(peer_index);
-    if (runtime.state != wgnx::PeerRuntimeState::Active ||
-        !PeerAt(peer_index).binding.IsOpen() ||
-        peer == nullptr ||
-        !peer->current_keypair.CanSendAt(wgnx::wireguard::GetMonotonicTime())) {
+    runtime::DebugPeerSnapshot peer{};
+    if (!m_runtime_coordinator.SnapshotDebugPeer(peer)) {
         return false;
     }
     return m_debug_probe_runner.Queue(
-        {
-            .peer_index = static_cast<std::uint32_t>(peer_index),
-            .activation_generation = runtime.activation_generation,
-        },
-        PeerAt(peer_index).config.address.data(),
+        peer.peer,
+        peer.source_address.data(),
         action,
         GetRuntimeNowNs());
 }
 
 wgnx::PeerInfo DaemonRuntime::BuildPeerInfo(std::size_t peer_index) {
     const auto now = GetRuntimeNowNs();
-    auto info = PeerAt(peer_index).BuildInfo(
-        now,
-        static_cast<std::int32_t>(peer_index) == m_state.peers.ActivePeerIndex(),
-        static_cast<std::int32_t>(peer_index) == m_state.peers.AutoStartPeerIndex());
+    auto info = m_runtime_coordinator.BuildPeerInfo(peer_index, now);
     m_debug_probe_runner.Project(static_cast<std::uint32_t>(peer_index), now, info);
     return info;
 }
 
 bool DaemonRuntime::HasRuntimeErrors() {
-    for (std::size_t i = 0; i < m_state.peers.Count(); ++i) {
-        if (PeerAt(i).Lifecycle().state == wgnx::PeerRuntimeState::Error) {
-            return true;
-        }
-    }
-    return false;
+    return m_runtime_coordinator.HasRuntimeErrors();
 }
 
 void DaemonRuntime::InitializeState() {
@@ -459,28 +267,26 @@ void DaemonRuntime::InitializeState() {
 
     auto &config = m_loaded_peer_configuration;
     if (m_peer_configuration_loader.Load(config)) {
-        const bool assigned = m_state.peers.Assign(
+        const bool assigned = m_runtime_coordinator.Configure(
             std::span<const wgnx::PeerConfigEntry>(config.peers).first(config.peer_count),
-            std::span<runtime::PeerConfigDerivedInfo>(config.derived).first(config.peer_count));
+            std::span<runtime::PeerConfigDerivedInfo>(config.derived).first(config.peer_count),
+            config.auto_start_peer_index,
+            GetRuntimeNowNs());
         AMS_ABORT_UNLESS(assigned);
-
-        for (std::size_t i = 0; i < config.peer_count; ++i) {
-            PeerAt(i).binding.Reset();
-            PeerAt(i).Deactivate(GetRuntimeNowNs());
-        }
-        AMS_ABORT_UNLESS(m_state.peers.SetAutoStartPeerIndex(config.auto_start_peer_index));
     } else {
-        m_state.peers.ClearConfiguration();
+        m_runtime_coordinator.ClearConfiguration(GetRuntimeNowNs());
     }
     config.~LoadedPeerConfiguration();
     std::construct_at(std::addressof(config));
 
     m_state.initialized = true;
-    logger::Log("Initialized peer state with %u configured peer(s)", m_state.peers.Count());
+    logger::Log(
+        "Initialized peer state with %u configured peer(s)",
+        m_runtime_coordinator.PeerCount());
 }
 
 bool DaemonRuntime::IsValidPeerIndex(std::int32_t peer_index) {
-    return runtime::IsValidPeerSelection(peer_index, m_state.peers.Count());
+    return m_runtime_coordinator.IsValidSelection(peer_index);
 }
 
 [[maybe_unused]] bool DaemonRuntime::DequeuePayloadSubmissionRequest(runtime::DebugProbeRequest *out_request) {
@@ -502,23 +308,15 @@ bool DaemonRuntime::SnapshotReceiveRuntime(
     }
 
     std::scoped_lock lock(m_state_mutex);
-    if (m_state.peers.ActivePeerIndex() < 0) {
+    runtime::ReceiveRuntimeSnapshot snapshot{};
+    if (!m_runtime_coordinator.SnapshotReceiveRuntime(snapshot)) {
         return false;
     }
 
-    const std::size_t peer_index = static_cast<std::size_t>(m_state.peers.ActivePeerIndex());
-    const auto &runtime = PeerAt(peer_index).Lifecycle();
-    const auto &binding = PeerAt(peer_index).binding;
-    if ((runtime.state != wgnx::PeerRuntimeState::Handshaking &&
-         runtime.state != wgnx::PeerRuntimeState::Active) ||
-        !binding.IsOpen()) {
-        return false;
-    }
-
-    *out_peer_index = peer_index;
-    *out_activation_generation = runtime.activation_generation;
-    *out_socket_generation = binding.Generation();
-    *out_socket = binding.Socket();
+    *out_peer_index = snapshot.peer.peer_index;
+    *out_activation_generation = snapshot.peer.activation_generation;
+    *out_socket_generation = snapshot.socket_generation;
+    *out_socket = snapshot.socket;
     return true;
 }
 
@@ -553,6 +351,7 @@ NOINLINE void DaemonRuntime::ExecuteOpenUdpBindEffect(
             .socket = socket,
             .error = error,
             .socket_generation = effect.socket_generation,
+            .purpose = effect.purpose,
             .retry_deadline = retry_deadline,
             .occurred_at = GetRuntimeNowNs(),
         });
@@ -567,13 +366,10 @@ NOINLINE void DaemonRuntime::ExecutePendingDatagramSendEffect(
     bool current = false;
     {
         std::scoped_lock lock(m_state_mutex);
-        current = effect.peer.peer_index < m_state.peers.Count() &&
-                  m_state.peers.ActivePeerIndex() ==
-                      static_cast<std::int32_t>(effect.peer.peer_index) &&
-                  PeerAt(effect.peer.peer_index).SnapshotPendingDatagram(
-                      effect.peer.activation_generation,
-                      effect.datagram_generation,
-                      snapshot);
+        current = m_runtime_coordinator.SnapshotPendingDatagram(
+            effect.peer,
+            effect.datagram_generation,
+            snapshot);
     }
     if (!current) {
         return;
@@ -613,15 +409,9 @@ NOINLINE void DaemonRuntime::ExecutePendingDatagramSendEffect(
 NOINLINE void DaemonRuntime::ExecutePublishDecryptedPacketEffect(
     const runtime::PublishDecryptedPacketEffect &effect) {
     std::scoped_lock lock(m_state_mutex);
-    if (effect.peer.peer_index >= m_state.peers.Count() ||
-        m_state.peers.ActivePeerIndex() !=
-            static_cast<std::int32_t>(effect.peer.peer_index)) {
-        return;
-    }
-
     runtime::DecryptedPacketView view{};
-    if (PeerAt(effect.peer.peer_index).ViewDecryptedPacket(
-            effect.peer.activation_generation,
+    if (m_runtime_coordinator.ViewDecryptedPacket(
+            effect.peer,
             effect.packet_generation,
             view)) {
         PublishDecryptedPacketLocked(
@@ -644,11 +434,7 @@ void DaemonRuntime::ExecuteRuntimeEffects(const runtime::EffectBatch &effects) {
                         bool schedule = false;
                         {
                             std::scoped_lock lock(m_state_mutex);
-                            current = value.peer.peer_index < m_state.peers.Count() &&
-                                      m_state.peers.ActivePeerIndex() ==
-                                          static_cast<std::int32_t>(value.peer.peer_index) &&
-                                      PeerAt(value.peer.peer_index).IsCurrentActivation(
-                                          value.peer.activation_generation);
+                            current = m_runtime_coordinator.IsActiveIdentity(value.peer);
                             if (current) {
                                 schedule = m_endpoint_resolver.Queue(value);
                             }
@@ -676,12 +462,8 @@ void DaemonRuntime::ExecuteRuntimeEffects(const runtime::EffectBatch &effects) {
                         bool current = false;
                         {
                             std::scoped_lock lock(m_state_mutex);
-                            current = value.peer.peer_index < m_state.peers.Count() &&
-                                      m_state.peers.ActivePeerIndex() ==
-                                          static_cast<std::int32_t>(value.peer.peer_index) &&
-                                      PeerAt(value.peer.peer_index).IsCurrentActivation(
-                                          value.peer.activation_generation) &&
-                                      PeerAt(value.peer.peer_index).IsInTransportState();
+                            current =
+                                m_runtime_coordinator.IsActiveTransportIdentity(value.peer);
                         }
                         if (current) {
                             QueueReceiveWork();
@@ -690,26 +472,7 @@ void DaemonRuntime::ExecuteRuntimeEffects(const runtime::EffectBatch &effects) {
                         bool current = false;
                         {
                             std::scoped_lock lock(m_state_mutex);
-                            if (value.peer.peer_index < m_state.peers.Count() &&
-                                m_state.peers.ActivePeerIndex() ==
-                                    static_cast<std::int32_t>(value.peer.peer_index) &&
-                                PeerAt(value.peer.peer_index).IsCurrentActivation(
-                                    value.peer.activation_generation)) {
-                                const auto *peer = GetProtocolPeer(value.peer.peer_index);
-                                const wgnx::wireguard::TimerOwner owner{
-                                    .peer_index = value.peer.peer_index,
-                                    .activation_generation =
-                                        value.peer.activation_generation,
-                                    .protocol_sequence =
-                                        value.hook == wgnx::wireguard::TimerHook::RetransmitHandshake &&
-                                                peer != nullptr
-                                            ? peer->handshake_retry.sequence_count
-                                            : 0,
-                                };
-                                current = PeerAt(value.peer.peer_index)
-                                              .controller.Timers()
-                                              .IsCurrent(value.token, owner);
-                            }
+                            current = m_runtime_coordinator.IsCurrentTimerEffect(value);
                         }
                         if (current) {
                             m_timer_scheduler.ArmProtocolTimer(
@@ -718,28 +481,12 @@ void DaemonRuntime::ExecuteRuntimeEffects(const runtime::EffectBatch &effects) {
                         }
                     } else if constexpr (std::is_same_v<Effect, runtime::CancelProtocolTimerEffect>) {
                         m_timer_scheduler.CancelProtocolTimer(value.token);
-                    } else if constexpr (std::is_same_v<Effect, runtime::SuspendUdpTransportEffect>) {
-                        std::scoped_lock lock(m_state_mutex);
-                        if (value.peer.peer_index < m_state.peers.Count() &&
-                            m_state.peers.ActivePeerIndex() ==
-                                static_cast<std::int32_t>(value.peer.peer_index) &&
-                            PeerAt(value.peer.peer_index).IsCurrentActivation(
-                                value.peer.activation_generation)) {
-                            SuspendRuntimeTransportAfterSendFailure(
-                                value.peer.peer_index,
-                                "event-driven datagram send");
-                        }
                     } else if constexpr (std::is_same_v<Effect, runtime::QueueInnerPacketSubmissionEffect>) {
                         bool current = false;
                         {
                             std::scoped_lock lock(m_state_mutex);
-                            current = value.peer.peer_index < m_state.peers.Count() &&
-                                      m_state.peers.ActivePeerIndex() ==
-                                          static_cast<std::int32_t>(value.peer.peer_index) &&
-                                      PeerAt(value.peer.peer_index).IsCurrentActivation(
-                                          value.peer.activation_generation) &&
-                                      PeerAt(value.peer.peer_index).Lifecycle().state ==
-                                          wgnx::PeerRuntimeState::Active;
+                            current =
+                                m_runtime_coordinator.IsActiveEstablishedIdentity(value.peer);
                         }
                         if (current) {
                             QueueInnerPacketSubmissionWork();
@@ -861,17 +608,13 @@ NOINLINE void DaemonRuntime::CommitReceivedPacket(
     runtime::EffectBatch &out_effects) {
     out_effects.Clear();
     std::scoped_lock lock(m_state_mutex);
-    if (peer_index >= m_state.peers.Count() ||
-        m_state.peers.ActivePeerIndex() !=
-            static_cast<std::int32_t>(peer_index)) {
-        return;
-    }
-
-    const auto &lifecycle = PeerAt(peer_index).Lifecycle();
-    const auto &binding = PeerAt(peer_index).binding;
-    if (lifecycle.activation_generation != activation_generation ||
-        !binding.Matches(socket_generation, socket) ||
-        !PeerAt(peer_index).IsInTransportState()) {
+    const runtime::PeerIdentity identity{
+        .peer_index = static_cast<std::uint32_t>(peer_index),
+        .activation_generation = activation_generation,
+    };
+    const auto binding = m_runtime_coordinator.BindingSnapshot(peer_index);
+    if (!m_runtime_coordinator.IsActiveTransportIdentity(identity) ||
+        !binding.Matches(socket_generation, socket)) {
         return;
     }
 
@@ -890,7 +633,8 @@ NOINLINE void DaemonRuntime::CommitReceivedPacket(
             .keepalive_deadline =
                 wgnx::wireguard::TimerDeadlineFromJiffies(now_jiffies) +
                 std::chrono::seconds{
-                    PeerAt(peer_index).Lifecycle().persistent_keepalive_interval},
+                    m_runtime_coordinator.Lifecycle(peer_index)
+                        ->persistent_keepalive_interval},
             .rekey_deadline =
                 wgnx::wireguard::TimerDeadlineFromJiffies(now_jiffies) +
                 wgnx::wireguard::RekeyAfterTime,
@@ -908,44 +652,35 @@ void DaemonRuntime::CommitReceiveFailure(
     wgnx::platform::socket_error error) {
     runtime::EffectBatch effects{};
     std::unique_lock lock(m_state_mutex);
-    if (peer_index >= m_state.peers.Count() || m_state.peers.ActivePeerIndex() != static_cast<std::int32_t>(peer_index)) {
-        return;
-    }
-
-    const auto &runtime = PeerAt(peer_index).Lifecycle();
-    const auto &binding = PeerAt(peer_index).binding;
-    if (runtime.activation_generation != activation_generation ||
-        !binding.Matches(socket_generation, socket) ||
-        (runtime.state != wgnx::PeerRuntimeState::Handshaking &&
-         runtime.state != wgnx::PeerRuntimeState::Active)) {
+    const runtime::PeerIdentity identity{
+        .peer_index = static_cast<std::uint32_t>(peer_index),
+        .activation_generation = activation_generation,
+    };
+    const auto binding = m_runtime_coordinator.BindingSnapshot(peer_index);
+    if (!m_runtime_coordinator.IsActiveTransportIdentity(identity) ||
+        !binding.Matches(socket_generation, socket)) {
         return;
     }
 
     logger::Log(
         "UDP receive failed for peer %zu endpoint=%s err=%u",
         peer_index,
-        binding.EndpointText(),
+        binding.endpoint_text.data(),
         static_cast<unsigned int>(error));
-    const wgnx::PeerErrorCode receive_error = MapSocketErrorToPeerErrorCode(error);
-    if (IsRecoverableTransportIoError(receive_error)) {
-        LogRecoverableTransportIoError(peer_index, receive_error, "receive worker");
-        logger::Log(
-            "WG receive worker stopped after nonterminal transport failure peer=%zu activation=%u socket_generation=%u socket=%d",
-            peer_index,
-            activation_generation,
-            socket_generation,
-            static_cast<int>(socket));
-        return;
-    }
     effects = m_runtime_coordinator.Dispatch(runtime::TransportFailureEvent{
-        .peer = {
-            .peer_index = static_cast<std::uint32_t>(peer_index),
-            .activation_generation = activation_generation,
-        },
-        .stage = wgnx::PeerErrorStage::Transport,
-        .code = receive_error,
+        .peer = identity,
+        .operation = runtime::TransportIoOperation::Receive,
+        .socket = socket,
+        .socket_generation = socket_generation,
+        .error = error,
         .occurred_at = GetRuntimeNowNs(),
     });
+    logger::Log(
+        "WG receive worker stopped after transport failure peer=%zu activation=%u socket_generation=%u socket=%d",
+        peer_index,
+        activation_generation,
+        socket_generation,
+        static_cast<int>(socket));
     lock.unlock();
     ExecuteRuntimeEffects(effects);
 }
@@ -953,8 +688,7 @@ void DaemonRuntime::CommitReceiveFailure(
 [[maybe_unused]] void DaemonRuntime::CommitPayloadSubmission(const runtime::DebugProbeRequest &request) {
     runtime::EffectBatch effects{};
     std::unique_lock lock(m_state_mutex);
-    if (request.peer.peer_index >= m_state.peers.Count() ||
-        m_state.peers.ActivePeerIndex() != static_cast<std::int32_t>(request.peer.peer_index)) {
+    if (!m_runtime_coordinator.IsActiveIdentity(request.peer)) {
         static_cast<void>(m_debug_probe_runner.MarkFailed(
             request,
             wgnx::DebugProbeStatus::StaleActivation,
@@ -966,22 +700,23 @@ void DaemonRuntime::CommitReceiveFailure(
         return;
     }
 
-    const auto &lifecycle = PeerAt(request.peer.peer_index).Lifecycle();
-    if (lifecycle.activation_generation != request.peer.activation_generation ||
-        lifecycle.state != wgnx::PeerRuntimeState::Active ||
-        !PeerAt(request.peer.peer_index).binding.IsOpen()) {
+    const auto *lifecycle = m_runtime_coordinator.Lifecycle(request.peer.peer_index);
+    const auto binding = m_runtime_coordinator.BindingSnapshot(request.peer.peer_index);
+    AMS_ABORT_UNLESS(lifecycle != nullptr);
+    if (!m_runtime_coordinator.IsActiveEstablishedIdentity(request.peer) ||
+        !binding.IsOpen()) {
         static_cast<void>(m_debug_probe_runner.MarkFailed(
             request,
-            lifecycle.activation_generation == request.peer.activation_generation
+            lifecycle->activation_generation == request.peer.activation_generation
                 ? wgnx::DebugProbeStatus::InvalidState
                 : wgnx::DebugProbeStatus::StaleActivation,
             GetRuntimeNowNs()));
         logger::Log(
             "Discarded queued payload submission for peer %u state=%s activation=%u current_activation=%u",
             request.peer.peer_index,
-            wgnx::GetPeerRuntimeStateName(lifecycle.state),
+            wgnx::GetPeerRuntimeStateName(lifecycle->state),
             request.peer.activation_generation,
-            lifecycle.activation_generation);
+            lifecycle->activation_generation);
         return;
     }
 
@@ -1090,70 +825,20 @@ void DaemonRuntime::ProcessPendingBindBump() {
     if (!m_rebind_requests.Take(request)) {
         return;
     }
-    if (request.peer_index >= m_state.peers.Count() ||
-        m_state.peers.ActivePeerIndex() != static_cast<std::int32_t>(request.peer_index)) {
-        logger::Log(
-            "Discarded UDP bind bump peer=%zu activation=%u reason=inactive_peer",
-            request.peer_index,
-            request.activation_generation);
-        return;
-    }
-
-    const auto &runtime = PeerAt(request.peer_index).Lifecycle();
-    auto &binding = PeerAt(request.peer_index).binding;
-    if (runtime.activation_generation != request.activation_generation ||
-        (runtime.state != wgnx::PeerRuntimeState::Handshaking &&
-         runtime.state != wgnx::PeerRuntimeState::Active) ||
-        !binding.HasEndpoint()) {
-        logger::Log(
-            "Discarded UDP bind bump peer=%zu activation=%u reason=stale_runtime state=%s current_activation=%u",
-            request.peer_index,
-            request.activation_generation,
-            wgnx::GetPeerRuntimeStateName(runtime.state),
-            runtime.activation_generation);
-        return;
-    }
-
-    const std::uint32_t old_socket_generation = binding.Generation();
-    const auto old_socket = binding.Socket();
+    const runtime::PeerIdentity identity{
+        .peer_index = static_cast<std::uint32_t>(request.peer_index),
+        .activation_generation = request.activation_generation,
+    };
     logger::Log(
-        "Starting UDP bind bump peer=%zu activation=%u old_socket_generation=%u old_socket=%d state=%s",
+        "Dispatching UDP bind bump peer=%zu activation=%u",
         request.peer_index,
-        request.activation_generation,
-        old_socket_generation,
-        static_cast<int>(old_socket),
-        wgnx::GetPeerRuntimeStateName(runtime.state));
-
-    const wgnx::PeerErrorCode open_error = OpenRuntimeSocket(request.peer_index);
-    if (open_error != wgnx::PeerErrorCode::None) {
-        logger::Log(
-            "UDP bind bump open failed peer=%zu activation=%u code=%s; peer state preserved",
-            request.peer_index,
-            request.activation_generation,
-            wgnx::GetPeerErrorCodeName(open_error));
-        return;
-    }
+        request.activation_generation);
 
     const runtime::EffectBatch effects = m_runtime_coordinator.Dispatch(
-        runtime::TransportReboundEvent{
-            .peer = {
-                .peer_index = static_cast<std::uint32_t>(request.peer_index),
-                .activation_generation = request.activation_generation,
-            },
-            .retry_deadline =
-                wgnx::wireguard::TimerDeadlineFromJiffies(
-                    wgnx::platform::get_jiffies_64()) +
-                wgnx::wireguard::GetHandshakeRetryDelay(
-                    wgnx::platform::get_random_u32_below(
-                        wgnx::wireguard::RekeyTimeoutJitterMaxMs)),
+        runtime::UdpRebindRequestedEvent{
+            .peer = identity,
             .occurred_at = GetRuntimeNowNs(),
         });
-    logger::Log(
-        "Completed UDP bind bump peer=%zu activation=%u socket_generation=%u socket=%d",
-        request.peer_index,
-        request.activation_generation,
-        binding.Generation(),
-        static_cast<int>(binding.Socket()));
     lock.unlock();
     ExecuteRuntimeEffects(effects);
 }
@@ -1236,17 +921,12 @@ void DaemonRuntime::ReceiveWorkMain(wgnx::platform::work_struct *) {
     runtime::EffectBatch effects{};
     {
         std::scoped_lock lock(m_state_mutex);
-        if (m_state.peers.ActivePeerIndex() < 0) {
+        runtime::PeerPacketStateSnapshot peer{};
+        if (!m_runtime_coordinator.SnapshotPacketState(peer)) {
             return;
         }
-        const auto peer_index = static_cast<std::uint32_t>(
-            m_state.peers.ActivePeerIndex());
-        const auto &lifecycle = PeerAt(peer_index).Lifecycle();
         effects = m_runtime_coordinator.Dispatch(runtime::ProcessOutboundQueueEvent{
-            .peer = {
-                .peer_index = peer_index,
-                .activation_generation = lifecycle.activation_generation,
-            },
+            .peer = peer.identity,
             .retry_deadline =
                 wgnx::wireguard::TimerDeadlineFromJiffies(
                     wgnx::platform::get_jiffies_64()) +
@@ -1278,7 +958,7 @@ void DaemonRuntime::RunTimerAction(
     const wgnx::wireguard::TimerToken &token) {
     std::unique_lock lock(m_state_mutex);
     if (!token.IsValid() || token.hook != hook ||
-        token.owner.peer_index >= m_state.peers.Count()) {
+        token.owner.peer_index >= m_runtime_coordinator.PeerCount()) {
         return;
     }
 
@@ -1299,7 +979,9 @@ void DaemonRuntime::RunTimerAction(
                         wgnx::wireguard::RekeyTimeoutJitterMaxMs)),
             .keepalive_deadline =
                 wgnx::wireguard::TimerDeadlineFromJiffies(now_jiffies) +
-                std::chrono::seconds{PeerAt(peer_index).config.persistent_keepalive},
+                std::chrono::seconds{
+                    m_runtime_coordinator.Configuration(peer_index)
+                        ->persistent_keepalive},
             .zero_key_material_deadline =
                 wgnx::wireguard::TimerDeadlineFromJiffies(now_jiffies) +
                 wgnx::wireguard::ZeroKeyMaterialAfterTime,
@@ -1313,7 +995,7 @@ void DaemonRuntime::NetworkPathObserverWorkMain(wgnx::platform::work_struct *) {
     bool has_active_transport = false;
     {
         std::scoped_lock lock(m_state_mutex);
-        has_active_transport = m_state.peers.ActivePeerIndex() >= 0;
+        has_active_transport = m_runtime_coordinator.ActivePeerIndex() >= 0;
     }
 
     if (has_active_transport) {
@@ -1401,11 +1083,11 @@ wgnx::DaemonStatus DaemonRuntime::GetDaemonStatus() {
 
     return {
         .abi_version = wgnx::IpcApiVersion,
-        .peer_count = m_state.peers.Count(),
-        .active_peer_index = m_state.peers.ActivePeerIndex(),
-        .auto_start_peer_index = m_state.peers.AutoStartPeerIndex(),
+        .peer_count = m_runtime_coordinator.PeerCount(),
+        .active_peer_index = m_runtime_coordinator.ActivePeerIndex(),
+        .auto_start_peer_index = m_runtime_coordinator.AutoStartPeerIndex(),
         .flags = runtime::BuildDaemonFlags(
-            m_state.peers.ActivePeerIndex() >= 0,
+            m_runtime_coordinator.ActivePeerIndex() >= 0,
             HasRuntimeErrors()),
         .reserved = 0,
     };
@@ -1415,12 +1097,13 @@ std::uint32_t DaemonRuntime::CopyPeers(std::span<wgnx::PeerInfo> out) {
     std::scoped_lock lock(m_state_mutex);
     InitializeState();
 
-    const std::size_t copy_count = std::min<std::size_t>(out.size(), m_state.peers.Count());
+    const std::size_t copy_count =
+        std::min<std::size_t>(out.size(), m_runtime_coordinator.PeerCount());
     for (std::size_t i = 0; i < copy_count; ++i) {
         out[i] = BuildPeerInfo(i);
     }
 
-    return m_state.peers.Count();
+    return m_runtime_coordinator.PeerCount();
 }
 
 ams::Result DaemonRuntime::SetActivePeer(std::int32_t peer_index) {
@@ -1432,18 +1115,20 @@ ams::Result DaemonRuntime::SetActivePeer(std::int32_t peer_index) {
         R_THROW(ams::fs::ResultInvalidArgument());
     }
 
-    if (peer_index == m_state.peers.ActivePeerIndex()) {
+    if (peer_index == m_runtime_coordinator.ActivePeerIndex()) {
         logger::Log("SetActivePeer(%d): no change", peer_index);
         R_SUCCEED();
     }
 
     runtime::EffectBatch effects{};
-    if (m_state.peers.ActivePeerIndex() >= 0 && m_state.peers.ActivePeerIndex() != peer_index) {
-        const std::size_t old_index = static_cast<std::size_t>(m_state.peers.ActivePeerIndex());
+    if (m_runtime_coordinator.ActivePeerIndex() >= 0 &&
+        m_runtime_coordinator.ActivePeerIndex() != peer_index) {
+        const std::size_t old_index =
+            static_cast<std::size_t>(m_runtime_coordinator.ActivePeerIndex());
         effects = SetPeerInactive(old_index);
     }
 
-    AMS_ABORT_UNLESS(m_state.peers.SetActivePeerIndex(peer_index));
+    AMS_ABORT_UNLESS(m_runtime_coordinator.SetActivePeerIndex(peer_index));
     if (peer_index >= 0) {
         const auto activation_effects = m_runtime_coordinator.Dispatch(runtime::ActivationRequestedEvent{
             .peer_index = static_cast<std::uint32_t>(peer_index),
@@ -1468,7 +1153,9 @@ ams::Result DaemonRuntime::SetAutoStartPeer(std::int32_t peer_index) {
 
     const char *peer_name = nullptr;
     if (peer_index >= 0) {
-        peer_name = PeerAt(static_cast<std::size_t>(peer_index)).config.name.data();
+        peer_name = m_runtime_coordinator
+                        .Configuration(static_cast<std::size_t>(peer_index))
+                        ->name.data();
     }
 
     const ams::Result store_rc = StoreAutoStartPeerName(peer_name);
@@ -1477,7 +1164,7 @@ ams::Result DaemonRuntime::SetAutoStartPeer(std::int32_t peer_index) {
         R_THROW(store_rc);
     }
 
-    AMS_ABORT_UNLESS(m_state.peers.SetAutoStartPeerIndex(peer_index));
+    AMS_ABORT_UNLESS(m_runtime_coordinator.SetAutoStartPeerIndex(peer_index));
     logger::Log("SetAutoStartPeer(%d)", peer_index);
     R_SUCCEED();
 }
@@ -1502,42 +1189,42 @@ ams::Result DaemonRuntime::BumpUdpBinding() {
     {
         std::scoped_lock lock(m_state_mutex);
         InitializeState();
-        if (m_state.peers.ActivePeerIndex() < 0) {
+        runtime::PeerPacketStateSnapshot peer{};
+        if (!m_runtime_coordinator.SnapshotPacketState(peer)) {
             logger::Log("Rejected BumpUdpBinding: no active peer");
             R_THROW(ams::fs::ResultInvalidArgument());
         }
 
-        const std::size_t peer_index = static_cast<std::size_t>(m_state.peers.ActivePeerIndex());
-        const auto &runtime = PeerAt(peer_index).Lifecycle();
-        const auto &binding = PeerAt(peer_index).binding;
-        if ((runtime.state != wgnx::PeerRuntimeState::Handshaking &&
-             runtime.state != wgnx::PeerRuntimeState::Active) ||
-            !binding.HasEndpoint()) {
+        const std::size_t peer_index = peer.identity.peer_index;
+        const auto binding = m_runtime_coordinator.BindingSnapshot(peer_index);
+        if ((peer.state != wgnx::PeerRuntimeState::Handshaking &&
+             peer.state != wgnx::PeerRuntimeState::Active) ||
+            !binding.has_endpoint) {
             logger::Log(
                 "Rejected BumpUdpBinding: peer=%zu state=%s resolved=%u",
                 peer_index,
-                wgnx::GetPeerRuntimeStateName(runtime.state),
-                binding.HasEndpoint() ? 1U : 0U);
+                wgnx::GetPeerRuntimeStateName(peer.state),
+                binding.has_endpoint ? 1U : 0U);
             R_THROW(ams::fs::ResultInvalidArgument());
         }
 
         const runtime::UdpRebindRequest request{
             .peer_index = peer_index,
-            .activation_generation = runtime.activation_generation,
+            .activation_generation = peer.identity.activation_generation,
         };
         if (m_rebind_requests.IsPending(request)) {
             logger::Log(
                 "Coalesced UDP bind bump peer=%zu activation=%u",
                 peer_index,
-                runtime.activation_generation);
+                peer.identity.activation_generation);
         } else {
             static_cast<void>(m_rebind_requests.Queue(request));
             logger::Log(
                 "Queued UDP bind bump peer=%zu activation=%u socket_generation=%u socket=%d",
                 peer_index,
-                runtime.activation_generation,
-                binding.Generation(),
-                static_cast<int>(binding.Socket()));
+                peer.identity.activation_generation,
+                binding.generation,
+                static_cast<int>(binding.socket));
         }
     }
 

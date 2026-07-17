@@ -464,6 +464,162 @@ than the transition.
 routing, effect execution coordination, and status aggregation only. It contains
 no protocol, socket, timer, packet, resolver, probe, or NIFM algorithms.
 
+## Post-Refactor Hardening Extension
+
+Chunks 0 through 10 establish the target component model, but the resulting
+implementation still permits several forms of accidental coupling that the
+model intends to prevent. The following chunks close those remaining ownership
+gaps and make the architecture enforceable through types, bounded-resource
+contracts, and build tooling. They remain part of the runtime refactor rather
+than introducing new tunnel or IPC behavior.
+
+IPC API v4, WireGuard interoperability, and the frozen runtime contracts remain
+unchanged throughout this extension. Modern C++ features are introduced where
+they improve ownership, lifetime, error, or resource semantics; adopting a
+language feature without one of those concrete benefits is not a goal.
+
+### Chunk 11: Seal Peer Ownership
+
+**Status:** Locally complete; focused real-peer on-device regression pending.
+
+Make configuration, derived secrets, UDP binding, protocol state, and the peer
+controller private implementation details of `PeerRuntime`. Remove unrestricted
+mutable peer access from `PeerRegistry`; mutable lifecycle transitions must pass
+through `RuntimeCoordinator`, while platform executors receive only the narrow
+snapshots needed to perform one effect. Move the remaining nonterminal
+transport-failure, suspension, recovery, and timer-cancellation decisions out
+of `DaemonRuntime` and into peer events and effects.
+
+This chunk changes internal interfaces freely but does not introduce additional
+state owners or divide one peer's lifecycle across components.
+
+**Definition of done:** code outside `PeerRuntime` cannot directly mutate peer
+configuration-derived, protocol, controller, binding, generation, or lifecycle
+state; `RuntimeCoordinator` is the only mutable peer-policy entry point; socket
+and timer executors report facts instead of choosing peer policy; all existing
+host, sanitizer, target, and real-peer behavior remains intact.
+
+**Implementation:** `PeerRuntime` now keeps configuration, derived secrets, UDP
+binding, protocol device, controller, generations, and lifecycle private.
+`PeerRegistry` exposes selection metadata only; configuration assignment,
+selection changes, packet-queue retirement, and event dispatch pass through
+`RuntimeCoordinator`. The daemon and packet data plane consume immutable,
+purpose-specific snapshots rather than peer references.
+
+UDP receive failures are reported as socket- and generation-tagged facts.
+Recoverable receive errors remain nonterminal, while terminal mapping and peer
+error entry are peer-owned. Send-failure suspension now cancels peer timers,
+detaches the socket, and emits platform effects entirely inside the peer event
+path. Manual rebinding similarly produces a peer-owned open request; failed
+opens preserve the old socket, stale completions close only their candidate,
+and a successful completion atomically adopts the new generation before the
+peer chooses keepalive or handshake recovery. Host tests cover those policies,
+including delayed rebind completion rejection.
+
+Local validation passes 28 deterministic host cases, ASan/UBSan, the target
+build, the target frame guard, and the unchanged API v4 protocol header. The
+remaining completion gate is focused activation, traffic, bind-bump, outage,
+recovery, and teardown testing on-device.
+
+### Chunk 12: Extract Runtime I/O Execution
+
+**Status:** Planned.
+
+Extract the concrete effect visitor and Horizon completion bridge into a
+`RuntimeEffectExecutor`. Extract encrypted UDP receive scheduling, receive
+scratch ownership, and completion publication into an
+`EncryptedReceivePump`. These components execute requests already chosen by
+peer policy and return generation-tagged events; they do not interpret
+WireGuard messages, alter peer lifecycle, or select recovery policy.
+
+`DaemonRuntime` remains the composition root and application facade. It wires
+commands to the coordinator, starts and stops platform services, and aggregates
+status without implementing socket, receive-loop, timer, resolver, packet, or
+protocol procedures.
+
+**Definition of done:** `daemon_runtime.cpp` contains construction,
+initialization, command routing, effect-drain coordination, and status
+aggregation only; blocking Horizon I/O remains outside the state lock; receive
+scratch has one bounded owner; stale I/O completions remain harmless; target
+stack measurements and focused activation, traffic, teardown, and outage
+regressions pass.
+
+### Chunk 13: Strengthen Domain Contracts
+
+**Status:** Planned.
+
+Replace interchangeable integer identities with small, trivially copyable
+domain types for peer indices, activation generations, socket generations,
+datagram generations, packet generations, packet IDs, and process IDs. Convert
+to and from fixed-width IPC and platform values only at their boundaries.
+
+Replace ambiguous boolean results with closed outcomes where callers must
+distinguish stale work, malformed input, invalid state, capacity exhaustion,
+and platform failure. Make fallible results `[[nodiscard]]`. Split bounded
+insertion into invariant-preserving and recoverable operations so
+`EffectBatch` capacity exhaustion cannot silently discard work. Formalize the
+lifetime rule for synchronous borrowed packet views and require owned bounded
+storage plus an identity token for asynchronous work.
+
+Use `std::expected` where the target standard library supports it without an
+unacceptable footprint; otherwise use a small project-local equivalent with the
+same explicit value-or-error semantics.
+
+**Definition of done:** the compiler rejects cross-domain identity comparisons;
+no fallible effect insertion is ignored; tests exercise each typed rejection
+and the maximum effect count of every event path; borrowed packet data cannot be
+retained by an asynchronous queue; IPC layout and API v4 remain unchanged.
+
+### Chunk 14: Enforce Resource And Concurrency Budgets
+
+**Status:** Planned.
+
+Centralize the fixed capacities and memory budgets for peer state, packet
+slots, effect batches, work queues, socket storage, and thread stacks. Add
+compile-time size checks and runtime high-water, overflow, and explicit drop
+accounting for bounded queues. Preserve allocation-free protocol, packet,
+timer, and transport hot paths unless a later bounded allocator is introduced
+with an explicit global budget.
+
+Replace manual platform mutex lock/unlock pairs with an RAII lock guard and
+document the lock order, lock-required methods, and worker execution contexts.
+Automate target stack-usage inspection with compiler stack-usage output so the
+known cumulative callback chains are checked in addition to the existing 8 KiB
+per-frame guard. Add reproducible ELF/NSO and `text`, `data`, and `bss` delta
+reporting against a named baseline.
+
+**Definition of done:** every bounded queue exposes capacity pressure and a
+drop disposition; lock release cannot be skipped by an early return; known
+worker chains fit their assigned stacks with documented margin; static and
+binary footprint regressions are reported automatically; path-transition and
+long-lived real-peer regressions pass.
+
+### Chunk 15: Establish Maintenance Gates
+
+**Status:** Planned.
+
+Split large implementation and test translation units along existing cohesive
+behavior without creating new state owners. In particular, separate
+`PeerRuntime` activation, outbound, inbound, timer, and projection
+implementations while retaining one class and one ownership boundary; split
+host tests by protocol and runtime subsystem.
+
+Add host fuzz targets for configuration and endpoint parsing, WireGuard message
+admission, and inner-IP validation. Add deterministic platform-failure
+injection for resolution, socket open, send, receive, timer scheduling, and
+persistence. Establish project-owned formatting and first-party warning/static
+analysis profiles, excluding vendored Atmosphere and Monocypher sources. Stage
+additional warnings so existing diagnostics are reviewed rather than hidden by
+broad suppressions.
+
+**Definition of done:** source and test files follow subsystem boundaries;
+parsers and hostile byte boundaries run under sanitizer-backed fuzz harnesses;
+startup, steady-state, and teardown platform failures have deterministic
+coverage; formatting, warnings, tests, sanitizers, stack budgets, target build,
+and footprint reporting form one documented local verification command; the
+final focused on-device regression passes without IPC or runtime behavior
+changes.
+
 ## Verification Gates
 
 Target builds enforce an 8 KiB maximum C++ stack frame. The sysmodule main
@@ -541,10 +697,13 @@ unchanged. The final composed daemon object is 209,392 bytes, replacing the
 separate peer state, packet channel, scheduler, dispatcher, resolver, and
 receive scratch globals.
 
-Run focused on-device regressions after chunks 4, 5, 6, 7, and 10. At minimum,
-these runs should cover tunnel activation against a known-good peer, repeated
-requester round trips under one continuously active sysmodule, clean teardown,
-and the path-outage scenario applicable to the migrated lifecycle.
+Run focused on-device regressions after chunks 4, 5, 6, 7, 10, 12, 14, and 15.
+At minimum, these runs should cover tunnel activation against a known-good
+peer, repeated requester round trips under one continuously active sysmodule,
+clean teardown, and the path-outage scenario applicable to the migrated
+lifecycle. Chunk 12 specifically revalidates activation and encrypted receive
+execution; Chunk 14 additionally requires a long-lived session and network-path
+transition; Chunk 15 is the final refactor acceptance run.
 
 ## Completion Criteria
 
@@ -556,6 +715,11 @@ The runtime refactor is complete when:
 - one peer's complete activation, handshake, transport, timer, recovery, and
   teardown lifecycle can be driven deterministically through production event
   handlers
+- peer and generation identities cannot be mixed accidentally, asynchronous
+  work cannot retain borrowed packet storage, and bounded effect insertion
+  cannot fail silently
+- stack, static-memory, queue-capacity, and binary-size budgets are explicit and
+  reproducibly checked
 - Horizon services can be substituted by host fakes without reproducing daemon
   policy in tests
 - the existing real-peer and development packet-API behavior remains intact

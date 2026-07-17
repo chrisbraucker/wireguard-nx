@@ -73,43 +73,41 @@ PacketSubmissionOutcome PacketDataPlane::SubmitValidatedPacket(
         outcome.status = PacketSubmissionStatus::MalformedPacket;
         return outcome;
     }
-    if (m_peers.ActivePeerIndex() < 0) {
+    PeerPacketStateSnapshot peer{};
+    if (!m_coordinator.SnapshotPacketState(peer)) {
         outcome.status = PacketSubmissionStatus::TunnelUnavailable;
         return outcome;
     }
-
-    const auto peer_index = static_cast<std::uint32_t>(m_peers.ActivePeerIndex());
-    auto &peer = m_peers[peer_index];
-    const auto &lifecycle = peer.Lifecycle();
     outcome.has_peer = true;
-    outcome.peer = {
-        .peer_index = peer_index,
-        .activation_generation = lifecycle.activation_generation,
-    };
-    outcome.peer_state = lifecycle.state;
-    if (lifecycle.state != wgnx::PeerRuntimeState::ResolvingEndpoint &&
-        lifecycle.state != wgnx::PeerRuntimeState::Handshaking &&
-        lifecycle.state != wgnx::PeerRuntimeState::Active) {
+    outcome.peer = peer.identity;
+    outcome.peer_state = peer.state;
+    if (peer.state != wgnx::PeerRuntimeState::ResolvingEndpoint &&
+        peer.state != wgnx::PeerRuntimeState::Handshaking &&
+        peer.state != wgnx::PeerRuntimeState::Active) {
         outcome.status = PacketSubmissionStatus::TunnelUnavailable;
         return outcome;
     }
 
     if (claim_transport && !m_transport.IsOwnedBy(consumer_id)) {
-        if (!peer.protocol.instantiated) {
+        if (!peer.protocol_instantiated) {
             return outcome;
         }
-        outcome.discarded_outbound = peer.ClearStagedInnerPackets();
+        outcome.discarded_outbound =
+            m_coordinator.ClearStagedInnerPackets(peer.identity.peer_index);
         outcome.discarded_inbound = m_transport.Claim(consumer_id);
         outcome.ownership_transferred = true;
+        if (!m_coordinator.SnapshotPacketState(peer)) {
+            return outcome;
+        }
     }
 
-    if (!peer.CanStageInnerPacket()) {
-        outcome.status = peer.protocol.instantiated
+    if (!peer.can_stage_packet) {
+        outcome.status = peer.protocol_instantiated
             ? PacketSubmissionStatus::QueueFull
             : PacketSubmissionStatus::InternalError;
         return outcome;
     }
-    if (!peer.protocol.instantiated) {
+    if (!peer.protocol_instantiated) {
         return outcome;
     }
 
@@ -121,7 +119,9 @@ PacketSubmissionOutcome PacketDataPlane::SubmitValidatedPacket(
         .retry_deadline = retry_deadline,
         .occurred_at = occurred_at,
     });
-    outcome.queue_depth = peer.StagedInnerPacketCount();
+    if (m_coordinator.SnapshotPacketState(peer) && peer.identity == outcome.peer) {
+        outcome.queue_depth = peer.staged_packet_count;
+    }
     outcome.status = PacketSubmissionStatus::Queued;
     return outcome;
 }
@@ -131,10 +131,7 @@ PacketDeliveryOutcome PacketDataPlane::DeliverDecryptedPacket(
     std::span<const std::uint8_t> packet) {
     PacketDeliveryOutcome outcome{.packet_size = packet.size()};
     outcome.queue_capacity = m_transport.ReceivedCapacity();
-    if (peer_identity.peer_index >= m_peers.Count() ||
-        m_peers.ActivePeerIndex() != static_cast<std::int32_t>(peer_identity.peer_index) ||
-        !m_peers[peer_identity.peer_index].IsCurrentActivation(
-            peer_identity.activation_generation)) {
+    if (!m_coordinator.IsActiveIdentity(peer_identity)) {
         return outcome;
     }
     if (m_transport.ConsumerId() == 0) {
@@ -189,9 +186,7 @@ PacketReceiveOutcome PacketDataPlane::ReceivePacket(
         .peer_index = front->peer_index,
         .activation_generation = front->activation_generation,
     };
-    if (front->peer_index >= m_peers.Count() ||
-        m_peers.ActivePeerIndex() != static_cast<std::int32_t>(front->peer_index) ||
-        !m_peers[front->peer_index].IsCurrentActivation(front->activation_generation)) {
+    if (!m_coordinator.IsActiveIdentity(outcome.peer)) {
         wireguard::InnerPacketRecord stale{};
         static_cast<void>(m_transport.PopReceived(
             std::addressof(stale),
@@ -218,9 +213,7 @@ PacketReceiveOutcome PacketDataPlane::ReceivePacket(
 
 PacketClearOutcome PacketDataPlane::Clear() {
     PacketClearOutcome outcome{};
-    for (std::size_t peer_index = 0; peer_index < m_peers.Count(); ++peer_index) {
-        outcome.outbound_count += m_peers[peer_index].ClearStagedInnerPackets();
-    }
+    outcome.outbound_count = m_coordinator.ClearAllStagedInnerPackets();
     outcome.inbound_count = m_transport.Release();
     return outcome;
 }

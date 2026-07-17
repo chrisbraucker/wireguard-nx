@@ -69,6 +69,11 @@ void UdpBinding::Suspend() {
     Close();
 }
 
+wgnx::platform::socket_handle UdpBinding::ReleaseAndSuspend() {
+    m_suspended = true;
+    return ReleaseSocket();
+}
+
 wgnx::platform::socket_handle UdpBinding::ReleaseSocket() {
     const auto socket = m_socket;
     m_socket = wgnx::platform::InvalidSocket;
@@ -95,6 +100,22 @@ bool UdpBinding::SnapshotForSend(SendSnapshot &out) const {
         .generation = m_generation,
     };
     return true;
+}
+
+UdpBinding::Snapshot UdpBinding::StateSnapshot() const {
+    Snapshot snapshot{
+        .endpoint = m_endpoint,
+        .socket = m_socket,
+        .generation = m_generation,
+        .has_endpoint = m_has_endpoint,
+        .suspended = m_suspended,
+    };
+    std::snprintf(
+        snapshot.endpoint_text.data(),
+        snapshot.endpoint_text.size(),
+        "%s",
+        m_endpoint_text);
+    return snapshot;
 }
 
 } // namespace wgnx::sysmodule::runtime

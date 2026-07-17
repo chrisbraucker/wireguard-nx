@@ -2,6 +2,7 @@
 
 #include "wgnx/platform/udp.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -43,6 +44,22 @@ private:
 
 class UdpBinding {
 public:
+    struct Snapshot {
+        wgnx::platform::endpoint endpoint{};
+        std::array<char, 64> endpoint_text{};
+        wgnx::platform::socket_handle socket{wgnx::platform::InvalidSocket};
+        std::uint32_t generation{0};
+        bool has_endpoint{false};
+        bool suspended{false};
+
+        bool IsOpen() const { return socket != wgnx::platform::InvalidSocket; }
+        bool Matches(
+            std::uint32_t expected_generation,
+            wgnx::platform::socket_handle expected_socket) const {
+            return generation == expected_generation && socket == expected_socket;
+        }
+    };
+
     constexpr UdpBinding() = default;
     ~UdpBinding();
 
@@ -63,6 +80,7 @@ public:
         wgnx::platform::socket_handle socket);
     void Close();
     void Suspend();
+    wgnx::platform::socket_handle ReleaseAndSuspend();
     wgnx::platform::socket_handle ReleaseSocket();
 
     wgnx::platform::socket_error Send(
@@ -88,6 +106,7 @@ public:
     };
 
     bool SnapshotForSend(SendSnapshot &out) const;
+    Snapshot StateSnapshot() const;
 
 private:
     wgnx::platform::endpoint m_endpoint{};
