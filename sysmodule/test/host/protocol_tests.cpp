@@ -211,7 +211,7 @@ wgnx::sysmodule::runtime::EffectBatch ActivateTestPeer(
     using namespace wgnx::sysmodule::runtime;
 
     const auto activation = coordinator.Dispatch(ActivationRequestedEvent{
-        .peer_index = peer_index,
+        .peer_index = PeerIndex{peer_index},
         .occurred_at = now,
     });
     const auto *resolve = activation.Size() == 1
@@ -944,9 +944,11 @@ void TestPacketChannelOwnership(TestContext &context) {
     using namespace wgnx::wireguard;
 
     PacketChannel channel{};
+    constexpr ProcessId FirstConsumer{100};
+    constexpr ProcessId SecondConsumer{200};
     WGNX_TEST_REQUIRE(
         context,
-        channel.Claim(100) == 0 && channel.IsOwnedBy(100),
+        channel.Claim(FirstConsumer) == 0 && channel.IsOwnedBy(FirstConsumer),
         "packet channel did not establish ownership");
 
     InnerPacketRecord received{.packet_id = 3};
@@ -957,13 +959,13 @@ void TestPacketChannelOwnership(TestContext &context) {
         "packet channel did not retain a received packet");
     WGNX_TEST_REQUIRE(
         context,
-        channel.Claim(200) == 1 && channel.IsOwnedBy(200) &&
-            !channel.IsOwnedBy(100) && channel.ReceivedSize() == 0 &&
+        channel.Claim(SecondConsumer) == 1 && channel.IsOwnedBy(SecondConsumer) &&
+            !channel.IsOwnedBy(FirstConsumer) && channel.ReceivedSize() == 0 &&
             channel.Statistics().cleared == 1,
         "packet channel ownership transfer retained the previous consumer's packets");
     WGNX_TEST_REQUIRE(
         context,
-        channel.Release() == 0 && channel.ConsumerId() == 0,
+        channel.Release() == 0 && channel.ConsumerId().IsZero(),
         "packet channel release retained its consumer identity");
 }
 
@@ -1001,12 +1003,15 @@ void TestPacketDataPlane(TestContext &context) {
         0x20, 0x01, 0x0D, 0xB8, 0x00, 0x00, 0x00, 0x00,
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
     };
-    const PeerIdentity identity{.peer_index = 0, .activation_generation = 1};
+    const PeerIdentity identity{.peer_index = PeerIndex{0}, .activation_generation = ActivationGeneration{1}};
+    constexpr ProcessId FirstConsumer{100};
+    constexpr ProcessId OtherConsumer{101};
+    constexpr ProcessId SecondConsumer{200};
     const auto retry_deadline = TimerDeadlineFromJiffies(500);
 
     const auto first = data_plane.SubmitIpv4Packet(
         Ipv4Packet,
-        100,
+        FirstConsumer,
         retry_deadline,
         3'000,
         effects);
@@ -1014,20 +1019,21 @@ void TestPacketDataPlane(TestContext &context) {
     static_cast<void>(coordinator.SnapshotPacketState(peer));
     WGNX_TEST_REQUIRE(
         context,
-        first.status == PacketSubmissionStatus::Queued && first.packet_id == 1 &&
+        first.status == PacketSubmissionStatus::Queued &&
+            first.packet_id == PacketId{1} &&
             first.peer == identity && first.ownership_transferred &&
-            channel.IsOwnedBy(100) && peer.staged_packet_count == 1,
+            channel.IsOwnedBy(FirstConsumer) && peer.staged_packet_count == 1,
         "packet data plane did not claim and route the first IPv4 packet");
 
     const auto ipv4_only = data_plane.SubmitIpv4Packet(
         Ipv6Packet,
-        100,
+        FirstConsumer,
         retry_deadline,
         3'100,
         effects);
     const auto generic = data_plane.SubmitIpPacket(
         Ipv6Packet,
-        100,
+        FirstConsumer,
         retry_deadline,
         3'200,
         effects);
@@ -1036,23 +1042,25 @@ void TestPacketDataPlane(TestContext &context) {
         context,
         ipv4_only.status == PacketSubmissionStatus::MalformedPacket &&
             ipv4_only.validation == InnerIpv4ValidationError::InvalidVersion &&
-            generic.status == PacketSubmissionStatus::Queued && generic.packet_id == 2 &&
+            generic.status == PacketSubmissionStatus::Queued &&
+            generic.packet_id == PacketId{2} &&
             peer.staged_packet_count == 2,
         "packet data plane did not preserve IPv4 IPC policy over the generic IP boundary");
 
     const auto unsupported = data_plane.DeliverDecryptedPacket(identity, Ipv6Packet);
     const auto delivered = data_plane.DeliverDecryptedPacket(identity, Ipv4Packet);
     std::array<std::uint8_t, MaxInnerIpPacketSize> output{};
-    const auto denied = data_plane.ReceivePacket(output, 101);
+    const auto denied = data_plane.ReceivePacket(output, OtherConsumer);
     const auto too_small = data_plane.ReceivePacket(
         std::span<std::uint8_t>(output).first(Ipv4Packet.size() - 1),
-        100);
-    const auto received = data_plane.ReceivePacket(output, 100);
+        FirstConsumer);
+    const auto received = data_plane.ReceivePacket(output, FirstConsumer);
     WGNX_TEST_REQUIRE(
         context,
         unsupported.status == PacketDeliveryStatus::UnsupportedPacket &&
             unsupported.version == InnerIpVersion::Ipv6 &&
-            delivered.status == PacketDeliveryStatus::Queued && delivered.packet_id == 3 &&
+            delivered.status == PacketDeliveryStatus::Queued &&
+            delivered.packet_id == PacketId{3} &&
             denied.status == PacketReceiveStatus::AccessDenied &&
             too_small.status == PacketReceiveStatus::OutputBufferTooSmall &&
             received.status == PacketReceiveStatus::Success &&
@@ -1077,7 +1085,7 @@ void TestPacketDataPlane(TestContext &context) {
 
     const auto transfer = data_plane.SubmitIpPacket(
         Ipv6Packet,
-        200,
+        SecondConsumer,
         retry_deadline,
         4'000,
         effects);
@@ -1086,7 +1094,7 @@ void TestPacketDataPlane(TestContext &context) {
         transfer.status == PacketSubmissionStatus::Queued &&
             transfer.ownership_transferred && transfer.discarded_outbound == 2 &&
             transfer.discarded_inbound == PacketChannel::ReceiveCapacity &&
-            channel.IsOwnedBy(200) && channel.ReceivedSize() == 0,
+            channel.IsOwnedBy(SecondConsumer) && channel.ReceivedSize() == 0,
         "packet data plane ownership transfer did not clear both traffic directions");
 
     const auto stale_packet = data_plane.DeliverDecryptedPacket(identity, Ipv4Packet);
@@ -1095,7 +1103,7 @@ void TestPacketDataPlane(TestContext &context) {
         stale_packet.status == PacketDeliveryStatus::Queued &&
             coordinator.SetActivePeerIndex(-1),
         "packet data plane stale-delivery setup failed");
-    const auto stale = data_plane.ReceivePacket(output, 200);
+    const auto stale = data_plane.ReceivePacket(output, SecondConsumer);
     WGNX_TEST_REQUIRE(
         context,
         stale.status == PacketReceiveStatus::StaleActivation &&
@@ -1103,18 +1111,160 @@ void TestPacketDataPlane(TestContext &context) {
         "packet data plane did not reject a queued packet from a stale activation");
 }
 
+void TestRuntimeTypedRejections(TestContext &context) {
+    using namespace wgnx::sysmodule::runtime;
+    using namespace wgnx::wireguard;
+
+    runtime::Reset(InitialRuntimeState);
+    std::array<wgnx::PeerConfigEntry, 1> configured{};
+    FillConfig(
+        &configured[0],
+        "typed-rejections",
+        "10.66.66.2/32",
+        InitiatorPrivateKey,
+        ResponderPublicKey);
+    PeerRegistry registry{};
+    RuntimeCoordinator coordinator{registry};
+    PacketChannel channel{};
+    PacketDataPlane data_plane{coordinator, channel};
+    EffectBatch effects{};
+    constexpr ProcessId Consumer{400};
+    constexpr std::array<std::uint8_t, 20> ValidPacket = {
+        0x45, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00, 0x00, 0x40, 0x11,
+        0xE2, 0x52, 0x0A, 0x42, 0x42, 0x02, 0x0A, 0x42, 0x42, 0x01,
+    };
+    constexpr std::array<std::uint8_t, 3> MalformedPacket = {0x45, 0x00, 0x00};
+    const auto retry_deadline = TimerDeadlineFromJiffies(500);
+
+    WGNX_TEST_REQUIRE(
+        context,
+        ConfigureTestPeers(coordinator, configured, 0),
+        "typed rejection registry setup failed");
+    const auto malformed_submission = data_plane.SubmitIpv4Packet(
+        MalformedPacket,
+        Consumer,
+        retry_deadline,
+        100,
+        effects);
+    const auto unavailable_submission = data_plane.SubmitIpv4Packet(
+        ValidPacket,
+        Consumer,
+        retry_deadline,
+        200,
+        effects);
+    WGNX_TEST_REQUIRE(
+        context,
+        malformed_submission.status == PacketSubmissionStatus::MalformedPacket &&
+            unavailable_submission.status ==
+                PacketSubmissionStatus::TunnelUnavailable,
+        "submission rejection did not distinguish malformed input from tunnel state");
+
+    const auto activation = coordinator.Dispatch(ActivationRequestedEvent{
+        .peer_index = PeerIndex{0},
+        .occurred_at = 300,
+    });
+    const auto *resolve = activation.Size() == 1
+        ? std::get_if<ResolveEndpointEffect>(activation.begin())
+        : nullptr;
+    const auto pre_protocol_submission = data_plane.SubmitIpv4Packet(
+        ValidPacket,
+        Consumer,
+        retry_deadline,
+        400,
+        effects);
+    WGNX_TEST_REQUIRE(
+        context,
+        resolve != nullptr &&
+            pre_protocol_submission.status == PacketSubmissionStatus::InternalError,
+        "submission rejection did not preserve the pre-protocol invalid state");
+
+    const auto activated = CompleteTestPeerActivation(
+        coordinator,
+        *resolve,
+        92,
+        500);
+    const PeerIdentity identity{
+        .peer_index = PeerIndex{0},
+        .activation_generation = ActivationGeneration{1},
+    };
+    WGNX_TEST_REQUIRE(
+        context,
+        !activated.Empty() &&
+            data_plane.DeliverDecryptedPacket(identity, ValidPacket).status ==
+                PacketDeliveryStatus::NoConsumer,
+        "delivery rejection did not preserve the no-consumer state");
+
+    static_cast<void>(channel.Claim(Consumer));
+    std::array<std::uint8_t, MaxInnerIpPacketSize> output{};
+    const auto malformed_delivery =
+        data_plane.DeliverDecryptedPacket(identity, MalformedPacket);
+    const auto stale_delivery = data_plane.DeliverDecryptedPacket(
+        PeerIdentity{
+            .peer_index = PeerIndex{0},
+            .activation_generation = ActivationGeneration{2},
+        },
+        ValidPacket);
+    const auto empty_receive = data_plane.ReceivePacket(output, Consumer);
+    WGNX_TEST_REQUIRE(
+        context,
+        malformed_delivery.status == PacketDeliveryStatus::MalformedPacket &&
+            stale_delivery.status == PacketDeliveryStatus::StalePeer &&
+            empty_receive.status == PacketReceiveStatus::QueueEmpty,
+        "delivery and receive rejection outcomes were conflated");
+
+    bool filled = true;
+    for (std::size_t index = 0; index < PeerStagedPacketCapacity; ++index) {
+        const auto submission = data_plane.SubmitIpv4Packet(
+            ValidPacket,
+            Consumer,
+            retry_deadline,
+            600 + static_cast<wgnx::platform::ktime_t>(index),
+            effects);
+        filled = filled && submission.status == PacketSubmissionStatus::Queued;
+    }
+    const auto full_submission = data_plane.SubmitIpv4Packet(
+        ValidPacket,
+        Consumer,
+        retry_deadline,
+        700,
+        effects);
+    WGNX_TEST_REQUIRE(
+        context,
+        filled && full_submission.status == PacketSubmissionStatus::QueueFull,
+        "submission rejection did not expose bounded staging capacity");
+}
+
 void TestAuxiliaryRuntimeWorkflows(TestContext &context) {
     using namespace wgnx::sysmodule::runtime;
 
     DebugProbeRunner probes{};
-    const PeerIdentity peer{.peer_index = 2, .activation_generation = 7};
+    const PeerIdentity peer{.peer_index = PeerIndex{2}, .activation_generation = ActivationGeneration{7}};
+    const auto unsupported_probe = probes.Queue(
+        peer,
+        "10.13.13.8/24",
+        wgnx::DebugTriggerAction::None,
+        900'000'000);
+    const auto invalid_source_probe = probes.Queue(
+        peer,
+        {},
+        wgnx::DebugTriggerAction::PingTunnelPeer,
+        950'000'000);
+    const auto valid_probe = probes.Queue(
+        peer,
+        "10.13.13.8/24",
+        wgnx::DebugTriggerAction::PingTunnelPeer,
+        1'000'000'000);
+    const auto busy_probe = probes.Queue(
+        peer,
+        "10.13.13.8/24",
+        wgnx::DebugTriggerAction::PingTunnelPeer,
+        1'100'000'000);
     WGNX_TEST_REQUIRE(
         context,
-        probes.Queue(
-            peer,
-            "10.13.13.8/24",
-            wgnx::DebugTriggerAction::PingTunnelPeer,
-            1'000'000'000) &&
+        unsupported_probe == DebugProbeQueueResult::UnsupportedAction &&
+            invalid_source_probe == DebugProbeQueueResult::InvalidSource &&
+            valid_probe == DebugProbeQueueResult::Queued &&
+            busy_probe == DebugProbeQueueResult::Busy &&
             probes.IsPending() &&
             probes.Status() == wgnx::DebugProbeStatus::Queued,
         "debug probe runner rejected a valid command");
@@ -1132,7 +1282,7 @@ void TestAuxiliaryRuntimeWorkflows(TestContext &context) {
         "debug probe command lifecycle diverged");
 
     wgnx::PeerInfo projected{};
-    probes.Project(peer.peer_index, 5'000'000'000, projected);
+    probes.Project(peer.peer_index.Value(), 5'000'000'000, projected);
     WGNX_TEST_REQUIRE(
         context,
         projected.debug_probe_action ==
@@ -1161,15 +1311,19 @@ void TestAuxiliaryRuntimeWorkflows(TestContext &context) {
         "network path observation sequencing or change detection diverged");
 
     UdpRebindQueue rebinds{};
-    const UdpRebindRequest rebind{.peer_index = 1, .activation_generation = 9};
-    UdpRebindRequest taken{};
+    const UdpRebindRequest rebind{.peer_index = PeerIndex{1}, .activation_generation = ActivationGeneration{9}};
+    const auto first_rebind = rebinds.Queue(rebind);
+    const auto replacement_rebind = rebinds.Queue(rebind);
+    const bool pending_before_take = rebinds.IsPending(rebind);
+    const auto taken = rebinds.Take();
     WGNX_TEST_REQUIRE(
         context,
-        rebinds.Queue(rebind) && !rebinds.Queue(rebind) &&
-            rebinds.IsPending(rebind) && rebinds.Take(taken) &&
-            taken.peer_index == rebind.peer_index &&
-            taken.activation_generation == rebind.activation_generation &&
-            !rebinds.Take(taken),
+        first_rebind == UdpRebindQueueResult::Scheduled &&
+            replacement_rebind == UdpRebindQueueResult::Replaced &&
+            pending_before_take && taken.has_value() &&
+            taken->peer_index == rebind.peer_index &&
+            taken->activation_generation == rebind.activation_generation &&
+            !rebinds.Take().has_value(),
         "UDP rebind request ownership or coalescing diverged");
 }
 
@@ -1222,11 +1376,39 @@ void TestRuntimeContracts(TestContext &context) {
 
     WGNX_TEST_REQUIRE(
         context,
-        IsCurrentGeneration(1, 1) &&
-            IsCurrentGeneration(0xffffffffU, 0xffffffffU) &&
-            !IsCurrentGeneration(0, 0) &&
-            !IsCurrentGeneration(1, 2),
+        IsCurrentGeneration(
+            ActivationGeneration{1},
+            ActivationGeneration{1}) &&
+            IsCurrentGeneration(
+                ActivationGeneration{0xffffffffU},
+                ActivationGeneration{0xffffffffU}) &&
+            !IsCurrentGeneration(
+                ActivationGeneration{},
+                ActivationGeneration{}) &&
+            !IsCurrentGeneration(
+                ActivationGeneration{1},
+                ActivationGeneration{2}),
         "generation matching accepted an unallocated or stale generation");
+
+    static_assert(!std::equality_comparable_with<PeerIndex, ActivationGeneration>);
+    static_assert(!std::equality_comparable_with<SocketGeneration, DatagramGeneration>);
+    static_assert(!std::equality_comparable_with<PacketGeneration, PacketId>);
+    static_assert(!std::equality_comparable_with<PacketId, ProcessId>);
+
+    WGNX_TEST_REQUIRE(
+        context,
+        MaxEffectsForEvent<ActivationRequestedEvent>() == 5 &&
+            MaxEffectsForEvent<DeactivationRequestedEvent>() == 5 &&
+            MaxEffectsForEvent<TransportFailureEvent>() == 5 &&
+            MaxEffectsForEvent<EndpointResolvedEvent>() == 5 &&
+            MaxEffectsForEvent<UdpBindOpenedEvent>() == 7 &&
+            MaxEffectsForEvent<UdpRebindRequestedEvent>() == 1 &&
+            MaxEffectsForEvent<EncryptedDatagramReceivedEvent>() == 6 &&
+            MaxEffectsForEvent<PendingDatagramSentEvent>() == 5 &&
+            MaxEffectsForEvent<InnerPacketStagedEvent>() == 5 &&
+            MaxEffectsForEvent<ProcessOutboundQueueEvent>() == 5 &&
+            MaxEffectsForEvent<ProtocolTimerExpiredEvent>() == 6,
+        "peer event effect budgets no longer cover every closed event path");
 }
 
 void TestPeerRegistryOwnership(TestContext &context) {
@@ -1267,7 +1449,7 @@ void TestPeerRegistryOwnership(TestContext &context) {
             !coordinator.SetAutoStartPeerIndex(-2),
         "peer registry accepted an out-of-range selection");
     const auto first_activation = coordinator.Dispatch(ActivationRequestedEvent{
-        .peer_index = 0,
+        .peer_index = PeerIndex{0},
         .occurred_at = 6,
     });
     const auto second_activation = ActivateTestPeer(coordinator, 1, 41, 8);
@@ -1283,10 +1465,10 @@ void TestPeerRegistryOwnership(TestContext &context) {
             coordinator.ActivePeerIndex() == 1 &&
             coordinator.AutoStartPeerIndex() == 0 &&
             coordinator.Lifecycle(0)->state == wgnx::PeerRuntimeState::Error &&
-            coordinator.Lifecycle(0)->activation_generation == 0 &&
+            coordinator.Lifecycle(0)->activation_generation == ActivationGeneration{} &&
             !first_protocol.instantiated &&
             coordinator.Lifecycle(1)->state == wgnx::PeerRuntimeState::Handshaking &&
-            coordinator.Lifecycle(1)->activation_generation == 1 &&
+            coordinator.Lifecycle(1)->activation_generation == ActivationGeneration{1} &&
             second_protocol.instantiated &&
             coordinator.IsCurrentTimerEffect(*timer),
         "peer runtime slots did not isolate index-correlated mutable state");
@@ -1319,12 +1501,12 @@ void TestPeerRuntimeLifecycle(TestContext &context) {
         context,
         ConfigureTestPeers(coordinator, configured, 0, -1, 1'000) &&
             coordinator.Lifecycle(0)->state == wgnx::PeerRuntimeState::Inactive &&
-            coordinator.Lifecycle(0)->activation_generation == 0 &&
+            coordinator.Lifecycle(0)->activation_generation == ActivationGeneration{} &&
             coordinator.Lifecycle(0)->persistent_keepalive_interval == 25,
         "inactive lifecycle diverged");
 
     const auto activation = coordinator.Dispatch(ActivationRequestedEvent{
-        .peer_index = 0,
+        .peer_index = PeerIndex{0},
         .occurred_at = 3'000,
     });
     WGNX_TEST_REQUIRE(
@@ -1332,8 +1514,8 @@ void TestPeerRuntimeLifecycle(TestContext &context) {
         activation.Size() == 1 &&
             coordinator.Lifecycle(0)->state ==
                 wgnx::PeerRuntimeState::ResolvingEndpoint &&
-            coordinator.IsActiveIdentity({.peer_index = 0, .activation_generation = 1}) &&
-            !coordinator.IsActiveIdentity({.peer_index = 0, .activation_generation = 2}),
+            coordinator.IsActiveIdentity({.peer_index = PeerIndex{0}, .activation_generation = ActivationGeneration{1}}) &&
+            !coordinator.IsActiveIdentity({.peer_index = PeerIndex{0}, .activation_generation = ActivationGeneration{2}}),
         "activation start or generation ownership diverged");
 
     const auto *resolve = std::get_if<ResolveEndpointEffect>(activation.begin());
@@ -1349,7 +1531,7 @@ void TestPeerRuntimeLifecycle(TestContext &context) {
         "activation did not enter peer-owned handshaking state");
 
     const auto failure = coordinator.Dispatch(TransportFailureEvent{
-        .peer = {.peer_index = 0, .activation_generation = 2},
+        .peer = {.peer_index = PeerIndex{0}, .activation_generation = ActivationGeneration{2}},
         .socket = binding.socket,
         .socket_generation = binding.generation,
         .error = wgnx::platform::socket_error::open_failed,
@@ -1357,7 +1539,7 @@ void TestPeerRuntimeLifecycle(TestContext &context) {
     });
     WGNX_TEST_REQUIRE(context, failure.Empty(), "stale failure mutated lifecycle state");
     const auto fatal = coordinator.Dispatch(TransportFailureEvent{
-        .peer = {.peer_index = 0, .activation_generation = 1},
+        .peer = {.peer_index = PeerIndex{0}, .activation_generation = ActivationGeneration{1}},
         .socket = binding.socket,
         .socket_generation = binding.generation,
         .error = wgnx::platform::socket_error::open_failed,
@@ -1376,13 +1558,13 @@ void TestPeerRuntimeLifecycle(TestContext &context) {
         "error status snapshot diverged from lifecycle state");
 
     static_cast<void>(coordinator.Dispatch(DeactivationRequestedEvent{
-        .peer = {.peer_index = 0, .activation_generation = 1},
+        .peer = {.peer_index = PeerIndex{0}, .activation_generation = ActivationGeneration{1}},
         .occurred_at = 12'000,
     }));
     WGNX_TEST_REQUIRE(
         context,
         coordinator.Lifecycle(0)->state == wgnx::PeerRuntimeState::Inactive &&
-            coordinator.Lifecycle(0)->activation_generation == 0 &&
+            coordinator.Lifecycle(0)->activation_generation == ActivationGeneration{} &&
             coordinator.Lifecycle(0)->rx_bytes == 0 &&
             coordinator.Lifecycle(0)->tx_bytes == 0,
         "deactivation retained activation or metrics");
@@ -1407,22 +1589,22 @@ void TestRuntimeCoordinatorDispatch(TestContext &context) {
         "coordinator test could not establish handshaking state");
 
     const auto out_of_range = coordinator.Dispatch(EncryptedDatagramReceivedEvent{
-        .peer = {.peer_index = 1, .activation_generation = 1},
+        .peer = {.peer_index = PeerIndex{1}, .activation_generation = ActivationGeneration{1}},
         .occurred_at = 3'000,
     });
     const auto stale = coordinator.Dispatch(EncryptedDatagramReceivedEvent{
-        .peer = {.peer_index = 0, .activation_generation = 2},
+        .peer = {.peer_index = PeerIndex{0}, .activation_generation = ActivationGeneration{2}},
         .occurred_at = 3'000,
     });
     WGNX_TEST_REQUIRE(
         context,
         out_of_range.Empty() && stale.Empty() &&
             coordinator.Lifecycle(0)->state == wgnx::PeerRuntimeState::Handshaking &&
-            coordinator.Lifecycle(0)->activation_generation == 1,
+            coordinator.Lifecycle(0)->activation_generation == ActivationGeneration{1},
         "coordinator accepted an out-of-range or stale event");
 
     const auto effects = coordinator.Dispatch(EncryptedDatagramReceivedEvent{
-        .peer = {.peer_index = 0, .activation_generation = 1},
+        .peer = {.peer_index = PeerIndex{0}, .activation_generation = ActivationGeneration{1}},
         .occurred_at = 4'000,
     });
     WGNX_TEST_REQUIRE(
@@ -1433,14 +1615,14 @@ void TestRuntimeCoordinatorDispatch(TestContext &context) {
 
     const auto binding = coordinator.BindingSnapshot(0);
     const auto stale_failure = coordinator.Dispatch(TransportFailureEvent{
-        .peer = {.peer_index = 0, .activation_generation = 2},
+        .peer = {.peer_index = PeerIndex{0}, .activation_generation = ActivationGeneration{2}},
         .socket = binding.socket,
         .socket_generation = binding.generation,
         .error = wgnx::platform::socket_error::receive_failed,
         .occurred_at = 4'500,
     });
     const auto failure = coordinator.Dispatch(TransportFailureEvent{
-        .peer = {.peer_index = 0, .activation_generation = 1},
+        .peer = {.peer_index = PeerIndex{0}, .activation_generation = ActivationGeneration{1}},
         .socket = binding.socket,
         .socket_generation = binding.generation,
         .error = wgnx::platform::socket_error::receive_failed,
@@ -1453,7 +1635,7 @@ void TestRuntimeCoordinatorDispatch(TestContext &context) {
         "receive failure event did not reject staleness or preserve nonterminal state");
 
     const auto fatal = coordinator.Dispatch(TransportFailureEvent{
-        .peer = {.peer_index = 0, .activation_generation = 1},
+        .peer = {.peer_index = PeerIndex{0}, .activation_generation = ActivationGeneration{1}},
         .socket = binding.socket,
         .socket_generation = binding.generation,
         .error = wgnx::platform::socket_error::transport_init_failed,
@@ -1468,48 +1650,57 @@ void TestRuntimeCoordinatorDispatch(TestContext &context) {
         "terminal transport failure did not enter peer-owned error state");
 
     static_cast<void>(coordinator.Dispatch(DeactivationRequestedEvent{
-        .peer = {.peer_index = 0, .activation_generation = 1},
+        .peer = {.peer_index = PeerIndex{0}, .activation_generation = ActivationGeneration{1}},
         .occurred_at = 6'000,
     }));
     WGNX_TEST_REQUIRE(
         context,
         coordinator.Lifecycle(0)->state == wgnx::PeerRuntimeState::Inactive &&
-            coordinator.Lifecycle(0)->activation_generation == 0,
+            coordinator.Lifecycle(0)->activation_generation == ActivationGeneration{},
         "deactivation event did not retire peer-owned lifecycle state");
 
     EffectBatch bounded{};
     const RuntimeEffect effect = QueueInnerPacketSubmissionEffect{
-        .peer = {.peer_index = 0, .activation_generation = 1},
+        .peer = {.peer_index = PeerIndex{0}, .activation_generation = ActivationGeneration{1}},
     };
     bool filled = true;
     for (std::size_t index = 0; index < EffectBatch::Capacity; ++index) {
-        filled = filled && bounded.Push(effect);
+        filled =
+            filled &&
+            bounded.TryAdd(effect) == EffectBatch::InsertionResult::Inserted;
     }
     WGNX_TEST_REQUIRE(
         context,
-        filled && bounded.Size() == EffectBatch::Capacity && !bounded.Push(effect),
+        filled && bounded.Size() == EffectBatch::Capacity &&
+            bounded.TryAdd(effect) ==
+                EffectBatch::InsertionResult::CapacityExhausted,
         "runtime effect batch did not enforce fixed capacity");
 
     EffectBatch first{};
     EffectBatch second{};
     WGNX_TEST_REQUIRE(
         context,
-        first.Push(QueueReceiveEffect{
-            .peer = {.peer_index = 0, .activation_generation = 1},
-        }) &&
-            second.Push(SendPendingDatagramEffect{
-                .peer = {.peer_index = 0, .activation_generation = 1},
-                .datagram_generation = 7,
-            }) &&
-            first.Append(second) && first.Size() == 2 &&
+        first.TryAdd(QueueReceiveEffect{
+            .peer = {.peer_index = PeerIndex{0}, .activation_generation = ActivationGeneration{1}},
+        }) == EffectBatch::InsertionResult::Inserted &&
+            second.TryAdd(SendPendingDatagramEffect{
+                .peer = {.peer_index = PeerIndex{0}, .activation_generation = ActivationGeneration{1}},
+                .datagram_generation = DatagramGeneration{7},
+            }) == EffectBatch::InsertionResult::Inserted &&
+            first.TryAppend(second) == EffectBatch::InsertionResult::Inserted &&
+            first.Size() == 2 &&
             std::holds_alternative<QueueReceiveEffect>(*first.begin()) &&
             std::holds_alternative<SendPendingDatagramEffect>(*(first.begin() + 1)) &&
-            !bounded.Append(second) && bounded.Size() == EffectBatch::Capacity,
+            bounded.TryAppend(second) ==
+                EffectBatch::InsertionResult::CapacityExhausted &&
+            bounded.Size() == EffectBatch::Capacity,
         "runtime effect batch append lost ordering or violated bounded capacity");
     bounded.Clear();
     WGNX_TEST_REQUIRE(
         context,
-        bounded.Empty() && bounded.Push(effect) && bounded.Size() == 1,
+        bounded.Empty() &&
+            bounded.TryAdd(effect) == EffectBatch::InsertionResult::Inserted &&
+            bounded.Size() == 1,
         "runtime effect batch could not be reused by the ordered receive worker");
 }
 
@@ -1533,13 +1724,13 @@ void TestRuntimePeerActivation(TestContext &context) {
         ConfigureTestPeers(coordinator, configured, 0),
         "activation test registry initialization failed");
     const auto activation = coordinator.Dispatch(ActivationRequestedEvent{
-        .peer_index = 0,
+        .peer_index = PeerIndex{0},
         .occurred_at = 1'000,
     });
     const auto *resolve = activation.Size() == 1
         ? std::get_if<ResolveEndpointEffect>(activation.begin())
         : nullptr;
-    const PeerIdentity expected_activation{.peer_index = 0, .activation_generation = 1};
+    const PeerIdentity expected_activation{.peer_index = PeerIndex{0}, .activation_generation = ActivationGeneration{1}};
     WGNX_TEST_REQUIRE(
         context,
         resolve != nullptr && resolve->peer == expected_activation &&
@@ -1551,20 +1742,21 @@ void TestRuntimePeerActivation(TestContext &context) {
 
     EndpointResolver resolver{};
     ResolveEndpointEffect replacement = *resolve;
-    replacement.peer.activation_generation = 2;
-    const bool first_resolve_scheduled = resolver.Queue(*resolve);
-    const bool replacement_resolve_scheduled = resolver.Queue(replacement);
+    replacement.peer.activation_generation = ActivationGeneration{2};
+    const auto first_resolve = resolver.Queue(*resolve);
+    const auto replacement_resolve = resolver.Queue(replacement);
     const auto latest_resolve = resolver.Take();
     WGNX_TEST_REQUIRE(
         context,
-        first_resolve_scheduled && !replacement_resolve_scheduled &&
+        first_resolve == EndpointQueueResult::Scheduled &&
+            replacement_resolve == EndpointQueueResult::Coalesced &&
             latest_resolve.has_value() && latest_resolve->peer == replacement.peer &&
             !resolver.Take().has_value(),
         "endpoint resolver did not coalesce pending work under one scheduled worker");
     resolver.MarkWorkerIdle();
     WGNX_TEST_REQUIRE(
         context,
-        resolver.Queue(*resolve),
+        resolver.Queue(*resolve) == EndpointQueueResult::Scheduled,
         "idle endpoint resolver did not request worker scheduling");
 
     wgnx::platform::endpoint_resolution_result resolved{
@@ -1577,7 +1769,7 @@ void TestRuntimePeerActivation(TestContext &context) {
     };
     std::snprintf(resolved.text.data(), resolved.text.size(), "192.0.2.1:51820");
     const auto stale_resolution = coordinator.Dispatch(EndpointResolvedEvent{
-        .peer = {.peer_index = 0, .activation_generation = 2},
+        .peer = {.peer_index = PeerIndex{0}, .activation_generation = ActivationGeneration{2}},
         .result = resolved,
         .occurred_at = 2'000,
     });
@@ -1587,7 +1779,7 @@ void TestRuntimePeerActivation(TestContext &context) {
         "stale endpoint completion mutated protocol state");
 
     const auto resolution = coordinator.Dispatch(EndpointResolvedEvent{
-        .peer = {.peer_index = 0, .activation_generation = 1},
+        .peer = {.peer_index = PeerIndex{0}, .activation_generation = ActivationGeneration{1}},
         .result = resolved,
         .occurred_at = 2'000,
     });
@@ -1596,7 +1788,7 @@ void TestRuntimePeerActivation(TestContext &context) {
         : nullptr;
     WGNX_TEST_REQUIRE(
         context,
-        open != nullptr && open->socket_generation != 0 &&
+        open != nullptr && !open->socket_generation.IsZero() &&
             !coordinator.ProtocolSnapshot(0).instantiated &&
             coordinator.BindingSnapshot(0).has_endpoint,
         "resolution did not request a UDP bind before protocol instantiation");
@@ -1658,7 +1850,7 @@ void TestRuntimePeerActivation(TestContext &context) {
         ConfigureTestPeers(failed_coordinator, invalid, 0),
         "failure-path registry initialization failed");
     const auto invalid_effects = failed_coordinator.Dispatch(ActivationRequestedEvent{
-        .peer_index = 0,
+        .peer_index = PeerIndex{0},
         .occurred_at = 5'000,
     });
     WGNX_TEST_REQUIRE(
@@ -1693,12 +1885,12 @@ void TestRuntimeOutboundLifecycle(TestContext &context) {
         0x45, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00, 0x00, 0x40, 0x11,
         0x00, 0x00, 0x0A, 0x42, 0x42, 0x02, 0x0A, 0x42, 0x42, 0x01,
     };
-    const PeerIdentity identity{.peer_index = 0, .activation_generation = 1};
+    const PeerIdentity identity{.peer_index = PeerIndex{0}, .activation_generation = ActivationGeneration{1}};
     const auto retry_deadline = TimerDeadlineFromJiffies(500);
     const auto staged = coordinator.Dispatch(InnerPacketStagedEvent{
         .peer = identity,
         .packet = FirstPacket,
-        .packet_id = 61,
+        .packet_id = PacketId{61},
         .retry_deadline = retry_deadline,
         .occurred_at = 3'000,
     });
@@ -1806,7 +1998,7 @@ void TestRuntimeOutboundLifecycle(TestContext &context) {
     effects = coordinator.Dispatch(InnerPacketStagedEvent{
         .peer = identity,
         .packet = RecoveryPacket,
-        .packet_id = 62,
+        .packet_id = PacketId{62},
         .retry_deadline = retry_deadline,
         .occurred_at = 8'000,
     });

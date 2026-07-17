@@ -452,7 +452,10 @@ bool LoadConnectionFile(wgnx::PeerConfigEntry *out, const ConfigFileCandidate &c
     }
 
     std::snprintf(out->name.data(), out->name.size(), "%s", candidate.peer_name);
-    logger::Log("Loaded connection '%s' from '%s'", out->name, resolved_path.data());
+    logger::Log(
+        "Loaded connection '%s' from '%s'",
+        out->name.data(),
+        resolved_path.data());
     return true;
 }
 

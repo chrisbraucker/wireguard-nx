@@ -6,10 +6,15 @@
 
 namespace wgnx::sysmodule::runtime {
 
+enum class EndpointQueueResult : std::uint8_t {
+    Scheduled = 0,
+    Coalesced,
+};
+
 class EndpointResolver {
 public:
-    bool Queue(const ResolveEndpointEffect &request);
-    std::optional<ResolveEndpointEffect> Take();
+    [[nodiscard]] EndpointQueueResult Queue(const ResolveEndpointEffect &request);
+    [[nodiscard]] std::optional<ResolveEndpointEffect> Take();
     void MarkWorkerIdle();
     void Cancel(const PeerIdentity &peer);
 

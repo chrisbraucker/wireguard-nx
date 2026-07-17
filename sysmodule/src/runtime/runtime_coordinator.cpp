@@ -22,7 +22,7 @@ bool RuntimeCoordinator::Configure(
     m_peers.m_count = static_cast<std::uint32_t>(configured_peers.size());
     for (std::size_t index = 0; index < configured_peers.size(); ++index) {
         m_peers.m_peers[index].Configure(
-            static_cast<std::uint32_t>(index),
+            PeerIndex{static_cast<std::uint32_t>(index)},
             configured_peers[index],
             std::move(derived[index]),
             now);
@@ -73,38 +73,42 @@ bool RuntimeCoordinator::IsValidSelection(std::int32_t peer_index) const {
     return IsValidPeerSelection(peer_index, m_peers.m_count);
 }
 
-const PeerRuntime *RuntimeCoordinator::PeerAt(std::size_t peer_index) const {
-    return peer_index < m_peers.m_count ? std::addressof(m_peers.m_peers[peer_index]) : nullptr;
+const PeerRuntime *RuntimeCoordinator::PeerAt(PeerIndex peer_index) const {
+    return peer_index.Value() < m_peers.m_count
+        ? std::addressof(m_peers.m_peers[peer_index.Value()])
+        : nullptr;
 }
 
-PeerRuntime *RuntimeCoordinator::MutablePeerAt(std::size_t peer_index) {
-    return peer_index < m_peers.m_count ? std::addressof(m_peers.m_peers[peer_index]) : nullptr;
+PeerRuntime *RuntimeCoordinator::MutablePeerAt(PeerIndex peer_index) {
+    return peer_index.Value() < m_peers.m_count
+        ? std::addressof(m_peers.m_peers[peer_index.Value()])
+        : nullptr;
 }
 
 const PeerRuntimeInfo *RuntimeCoordinator::Lifecycle(std::size_t peer_index) const {
-    const auto *peer = PeerAt(peer_index);
+    const auto *peer = PeerAt(PeerIndex{static_cast<std::uint32_t>(peer_index)});
     return peer != nullptr ? std::addressof(peer->Lifecycle()) : nullptr;
 }
 
 const wgnx::PeerConfigEntry *RuntimeCoordinator::Configuration(std::size_t peer_index) const {
-    const auto *peer = PeerAt(peer_index);
+    const auto *peer = PeerAt(PeerIndex{static_cast<std::uint32_t>(peer_index)});
     return peer != nullptr ? std::addressof(peer->Configuration()) : nullptr;
 }
 
 UdpBinding::Snapshot RuntimeCoordinator::BindingSnapshot(std::size_t peer_index) const {
-    const auto *peer = PeerAt(peer_index);
+    const auto *peer = PeerAt(PeerIndex{static_cast<std::uint32_t>(peer_index)});
     return peer != nullptr ? peer->BindingSnapshot() : UdpBinding::Snapshot{};
 }
 
 PeerProtocolSnapshot RuntimeCoordinator::ProtocolSnapshot(std::size_t peer_index) const {
-    const auto *peer = PeerAt(peer_index);
+    const auto *peer = PeerAt(PeerIndex{static_cast<std::uint32_t>(peer_index)});
     return peer != nullptr ? peer->ProtocolSnapshot() : PeerProtocolSnapshot{};
 }
 
 wgnx::PeerInfo RuntimeCoordinator::BuildPeerInfo(
     std::size_t peer_index,
     wgnx::platform::ktime_t now) const {
-    const auto *peer = PeerAt(peer_index);
+    const auto *peer = PeerAt(PeerIndex{static_cast<std::uint32_t>(peer_index)});
     return peer != nullptr
         ? peer->BuildInfo(
               now,
@@ -125,7 +129,7 @@ bool RuntimeCoordinator::HasRuntimeErrors() const {
 bool RuntimeCoordinator::IsActiveIdentity(const PeerIdentity &identity) const {
     const auto *peer = PeerAt(identity.peer_index);
     return peer != nullptr &&
-           m_peers.m_active_peer_index == static_cast<std::int32_t>(identity.peer_index) &&
+           m_peers.m_active_peer_index == static_cast<std::int32_t>(identity.peer_index.Value()) &&
            peer->IsCurrentActivation(identity.activation_generation);
 }
 
@@ -144,7 +148,8 @@ bool RuntimeCoordinator::SnapshotReceiveRuntime(ReceiveRuntimeSnapshot &out) con
     if (m_peers.m_active_peer_index < 0) {
         return false;
     }
-    const auto peer_index = static_cast<std::uint32_t>(m_peers.m_active_peer_index);
+    const auto peer_index = PeerIndex{
+        static_cast<std::uint32_t>(m_peers.m_active_peer_index)};
     const auto *peer = PeerAt(peer_index);
     if (peer == nullptr || !peer->IsInTransportState()) {
         return false;
@@ -168,7 +173,8 @@ bool RuntimeCoordinator::SnapshotDebugPeer(DebugPeerSnapshot &out) const {
     if (m_peers.m_active_peer_index < 0) {
         return false;
     }
-    const auto peer_index = static_cast<std::uint32_t>(m_peers.m_active_peer_index);
+    const auto peer_index = PeerIndex{
+        static_cast<std::uint32_t>(m_peers.m_active_peer_index)};
     const auto *peer = PeerAt(peer_index);
     if (peer == nullptr || peer->Lifecycle().state != wgnx::PeerRuntimeState::Active ||
         !peer->BindingSnapshot().IsOpen() || !peer->CanSendTransportNow()) {
@@ -186,7 +192,8 @@ bool RuntimeCoordinator::SnapshotPacketState(PeerPacketStateSnapshot &out) const
     if (m_peers.m_active_peer_index < 0) {
         return false;
     }
-    const auto peer_index = static_cast<std::uint32_t>(m_peers.m_active_peer_index);
+    const auto peer_index = PeerIndex{
+        static_cast<std::uint32_t>(m_peers.m_active_peer_index)};
     const auto *peer = PeerAt(peer_index);
     if (peer == nullptr) {
         return false;
@@ -207,7 +214,7 @@ bool RuntimeCoordinator::SnapshotPacketState(PeerPacketStateSnapshot &out) const
 
 bool RuntimeCoordinator::SnapshotPendingDatagram(
     const PeerIdentity &identity,
-    std::uint32_t datagram_generation,
+    DatagramGeneration datagram_generation,
     PendingDatagramSnapshot &out) const {
     const auto *peer = PeerAt(identity.peer_index);
     return IsActiveIdentity(identity) && peer->SnapshotPendingDatagram(
@@ -218,7 +225,7 @@ bool RuntimeCoordinator::SnapshotPendingDatagram(
 
 bool RuntimeCoordinator::ViewDecryptedPacket(
     const PeerIdentity &identity,
-    std::uint32_t packet_generation,
+    PacketGeneration packet_generation,
     DecryptedPacketView &out) const {
     const auto *peer = PeerAt(identity.peer_index);
     return IsActiveIdentity(identity) && peer->ViewDecryptedPacket(
@@ -234,8 +241,8 @@ bool RuntimeCoordinator::IsCurrentTimerEffect(const ArmProtocolTimerEffect &effe
     }
     const auto *protocol_peer = peer->ProtocolPeer();
     const wgnx::wireguard::TimerOwner owner{
-        .peer_index = effect.peer.peer_index,
-        .activation_generation = effect.peer.activation_generation,
+        .peer_index = effect.peer.peer_index.Value(),
+        .activation_generation = effect.peer.activation_generation.Value(),
         .protocol_sequence =
             effect.hook == wgnx::wireguard::TimerHook::RetransmitHandshake &&
                     protocol_peer != nullptr
@@ -245,7 +252,7 @@ bool RuntimeCoordinator::IsCurrentTimerEffect(const ArmProtocolTimerEffect &effe
     return peer->IsTimerCurrent(effect.token, owner);
 }
 
-std::size_t RuntimeCoordinator::ClearStagedInnerPackets(std::uint32_t peer_index) {
+std::size_t RuntimeCoordinator::ClearStagedInnerPackets(PeerIndex peer_index) {
     auto *peer = MutablePeerAt(peer_index);
     return peer != nullptr ? peer->ClearStagedInnerPackets() : 0;
 }

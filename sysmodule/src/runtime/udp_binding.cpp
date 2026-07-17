@@ -28,7 +28,7 @@ void UdpBinding::Reset() {
     m_suspended = false;
 }
 
-wgnx::platform::socket_error UdpBinding::Open(std::uint32_t generation) {
+wgnx::platform::socket_error UdpBinding::Open(SocketGeneration generation) {
     Close();
     if (!m_has_endpoint) {
         return wgnx::platform::socket_error::invalid_endpoint;
@@ -47,7 +47,7 @@ wgnx::platform::socket_error UdpBinding::Open(std::uint32_t generation) {
 void UdpBinding::AdoptOpenSocket(
     const wgnx::platform::endpoint &endpoint,
     const char *text,
-    std::uint32_t generation,
+    SocketGeneration generation,
     wgnx::platform::socket_handle socket) {
     Close();
     SetEndpoint(endpoint, text);
@@ -61,7 +61,7 @@ void UdpBinding::Close() {
         wgnx::platform::udp_close(m_socket);
     }
     m_socket = wgnx::platform::InvalidSocket;
-    m_generation = 0;
+    m_generation = SocketGeneration{};
 }
 
 void UdpBinding::Suspend() {
@@ -77,7 +77,7 @@ wgnx::platform::socket_handle UdpBinding::ReleaseAndSuspend() {
 wgnx::platform::socket_handle UdpBinding::ReleaseSocket() {
     const auto socket = m_socket;
     m_socket = wgnx::platform::InvalidSocket;
-    m_generation = 0;
+    m_generation = SocketGeneration{};
     return socket;
 }
 

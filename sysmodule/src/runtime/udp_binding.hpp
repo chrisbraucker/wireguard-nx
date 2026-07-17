@@ -1,35 +1,43 @@
 #pragma once
 
+#include "runtime/domain_types.hpp"
 #include "wgnx/platform/udp.hpp"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 
 namespace wgnx::sysmodule::runtime {
 
 struct UdpRebindRequest {
-    std::size_t peer_index{0};
-    std::uint32_t activation_generation{0};
+    PeerIndex peer_index{};
+    ActivationGeneration activation_generation{};
+};
+
+enum class UdpRebindQueueResult : std::uint8_t {
+    Scheduled = 0,
+    Replaced,
 };
 
 class UdpRebindQueue {
 public:
-    bool Queue(const UdpRebindRequest &request) {
+    [[nodiscard]] UdpRebindQueueResult Queue(const UdpRebindRequest &request) {
         const bool scheduled = !m_pending;
         m_request = request;
         m_pending = true;
-        return scheduled;
+        return scheduled
+            ? UdpRebindQueueResult::Scheduled
+            : UdpRebindQueueResult::Replaced;
     }
 
-    bool Take(UdpRebindRequest &out) {
+    [[nodiscard]] std::optional<UdpRebindRequest> Take() {
         if (!m_pending) {
-            return false;
+            return std::nullopt;
         }
-        out = m_request;
         m_pending = false;
-        return true;
+        return m_request;
     }
 
     bool IsPending(const UdpRebindRequest &request) const {
@@ -48,13 +56,13 @@ public:
         wgnx::platform::endpoint endpoint{};
         std::array<char, 64> endpoint_text{};
         wgnx::platform::socket_handle socket{wgnx::platform::InvalidSocket};
-        std::uint32_t generation{0};
+        SocketGeneration generation{};
         bool has_endpoint{false};
         bool suspended{false};
 
         bool IsOpen() const { return socket != wgnx::platform::InvalidSocket; }
         bool Matches(
-            std::uint32_t expected_generation,
+            SocketGeneration expected_generation,
             wgnx::platform::socket_handle expected_socket) const {
             return generation == expected_generation && socket == expected_socket;
         }
@@ -72,11 +80,11 @@ public:
     void ClearEndpoint();
     void Reset();
 
-    wgnx::platform::socket_error Open(std::uint32_t generation);
+    wgnx::platform::socket_error Open(SocketGeneration generation);
     void AdoptOpenSocket(
         const wgnx::platform::endpoint &endpoint,
         const char *text,
-        std::uint32_t generation,
+        SocketGeneration generation,
         wgnx::platform::socket_handle socket);
     void Close();
     void Suspend();
@@ -90,29 +98,29 @@ public:
     bool HasEndpoint() const { return m_has_endpoint; }
     bool IsOpen() const { return m_socket != wgnx::platform::InvalidSocket; }
     bool IsSuspended() const { return m_suspended; }
-    bool Matches(std::uint32_t generation, wgnx::platform::socket_handle socket) const {
+    bool Matches(SocketGeneration generation, wgnx::platform::socket_handle socket) const {
         return m_generation == generation && m_socket == socket;
     }
 
     const wgnx::platform::endpoint &Endpoint() const { return m_endpoint; }
     const char *EndpointText() const { return m_endpoint_text; }
     wgnx::platform::socket_handle Socket() const { return m_socket; }
-    std::uint32_t Generation() const { return m_generation; }
+    SocketGeneration Generation() const { return m_generation; }
 
     struct SendSnapshot {
         wgnx::platform::endpoint endpoint{};
         wgnx::platform::socket_handle socket{wgnx::platform::InvalidSocket};
-        std::uint32_t generation{0};
+        SocketGeneration generation{};
     };
 
-    bool SnapshotForSend(SendSnapshot &out) const;
+    [[nodiscard]] bool SnapshotForSend(SendSnapshot &out) const;
     Snapshot StateSnapshot() const;
 
 private:
     wgnx::platform::endpoint m_endpoint{};
     char m_endpoint_text[64]{};
     wgnx::platform::socket_handle m_socket{wgnx::platform::InvalidSocket};
-    std::uint32_t m_generation{0};
+    SocketGeneration m_generation{};
     bool m_has_endpoint{false};
     bool m_suspended{false};
 };

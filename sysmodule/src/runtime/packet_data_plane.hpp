@@ -27,7 +27,7 @@ struct PacketSubmissionOutcome {
     wireguard::InnerIpValidationError validation{
         wireguard::InnerIpValidationError::None};
     PeerIdentity peer{};
-    std::uint64_t packet_id{0};
+    PacketId packet_id{};
     std::size_t packet_size{0};
     std::size_t queue_depth{0};
     std::size_t discarded_outbound{0};
@@ -51,7 +51,7 @@ struct PacketDeliveryOutcome {
     wireguard::InnerIpValidationError validation{
         wireguard::InnerIpValidationError::None};
     wireguard::InnerIpVersion version{wireguard::InnerIpVersion::Unknown};
-    std::uint64_t packet_id{0};
+    PacketId packet_id{};
     std::size_t packet_size{0};
     std::size_t queue_depth{0};
     std::size_t queue_capacity{0};
@@ -68,7 +68,7 @@ enum class PacketReceiveStatus : std::uint8_t {
 struct PacketReceiveOutcome {
     PacketReceiveStatus status{PacketReceiveStatus::QueueEmpty};
     PeerIdentity peer{};
-    std::uint64_t packet_id{0};
+    PacketId packet_id{};
     std::size_t packet_size{0};
     std::size_t queue_depth{0};
 };
@@ -85,46 +85,46 @@ public:
         PacketTransport &transport)
         : m_coordinator(coordinator), m_transport(transport) {}
 
-    PacketSubmissionOutcome SubmitIpPacket(
+    [[nodiscard]] PacketSubmissionOutcome SubmitIpPacket(
         std::span<const std::uint8_t> packet,
-        PacketConsumerId consumer_id,
+        ProcessId consumer_id,
         wireguard::TimerDeadline retry_deadline,
         wgnx::platform::ktime_t occurred_at,
         EffectBatch &out_effects);
-    PacketSubmissionOutcome SubmitIpv4Packet(
+    [[nodiscard]] PacketSubmissionOutcome SubmitIpv4Packet(
         std::span<const std::uint8_t> packet,
-        PacketConsumerId consumer_id,
+        ProcessId consumer_id,
         wireguard::TimerDeadline retry_deadline,
         wgnx::platform::ktime_t occurred_at,
         EffectBatch &out_effects);
-    PacketSubmissionOutcome SubmitInternalIpPacket(
+    [[nodiscard]] PacketSubmissionOutcome SubmitInternalIpPacket(
         std::span<const std::uint8_t> packet,
         wireguard::TimerDeadline retry_deadline,
         wgnx::platform::ktime_t occurred_at,
         EffectBatch &out_effects);
 
-    PacketDeliveryOutcome DeliverDecryptedPacket(
+    [[nodiscard]] PacketDeliveryOutcome DeliverDecryptedPacket(
         const PeerIdentity &peer,
         std::span<const std::uint8_t> packet);
-    PacketReceiveOutcome ReceivePacket(
+    [[nodiscard]] PacketReceiveOutcome ReceivePacket(
         std::span<std::uint8_t> packet,
-        PacketConsumerId consumer_id);
-    PacketClearOutcome Clear();
+        ProcessId consumer_id);
+    [[nodiscard]] PacketClearOutcome Clear();
 
 private:
     PacketSubmissionOutcome SubmitValidatedPacket(
         std::span<const std::uint8_t> packet,
-        PacketConsumerId consumer_id,
+        ProcessId consumer_id,
         wireguard::TimerDeadline retry_deadline,
         wgnx::platform::ktime_t occurred_at,
         wireguard::InnerIpValidationError validation,
         bool claim_transport,
         EffectBatch &out_effects);
-    std::uint64_t AllocatePacketId();
+    PacketId AllocatePacketId();
 
     RuntimeCoordinator &m_coordinator;
     PacketTransport &m_transport;
-    std::uint64_t m_next_packet_id{1};
+    PacketId m_next_packet_id{1};
 };
 
 } // namespace wgnx::sysmodule::runtime

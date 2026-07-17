@@ -26,28 +26,39 @@ struct DebugProbeReplyOutcome {
     wgnx::wireguard::DebugProbeReplyInfo info{};
 };
 
+enum class DebugProbeQueueResult : std::uint8_t {
+    Queued = 0,
+    Busy,
+    UnsupportedAction,
+    InvalidSource,
+    InvalidTransition,
+    NoActivePeer,
+};
+
 class DebugProbeRunner {
 public:
-    bool Queue(
+    [[nodiscard]] DebugProbeQueueResult Queue(
         const PeerIdentity &peer,
         std::string_view source_address,
         wgnx::DebugTriggerAction action,
         wgnx::platform::ktime_t now);
-    bool TakePending(DebugProbeRequest &out);
-    std::size_t BuildPacket(
+    [[nodiscard]] bool TakePending(DebugProbeRequest &out);
+    [[nodiscard]] std::size_t BuildPacket(
         const DebugProbeRequest &request,
         std::span<std::uint8_t> packet,
         std::uint32_t random_seed);
-    bool MarkSent(const DebugProbeRequest &request, wgnx::platform::ktime_t now);
-    bool MarkFailed(
+    [[nodiscard]] bool MarkSent(
+        const DebugProbeRequest &request,
+        wgnx::platform::ktime_t now);
+    [[nodiscard]] bool MarkFailed(
         const DebugProbeRequest &request,
         wgnx::DebugProbeStatus status,
         wgnx::platform::ktime_t now);
-    DebugProbeReplyOutcome HandleDecryptedPacket(
+    [[nodiscard]] DebugProbeReplyOutcome HandleDecryptedPacket(
         const PeerIdentity &peer,
         std::span<const std::uint8_t> packet,
         wgnx::platform::ktime_t now);
-    bool HandleTimeout(wgnx::platform::ktime_t now);
+    [[nodiscard]] bool HandleTimeout(wgnx::platform::ktime_t now);
     void Cancel(const PeerIdentity *peer = nullptr);
     void Project(std::uint32_t peer_index, wgnx::platform::ktime_t now, wgnx::PeerInfo &info) const;
 

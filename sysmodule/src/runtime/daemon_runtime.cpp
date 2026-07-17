@@ -50,10 +50,10 @@ public:
     ams::Result BumpUdpBinding();
     wgnx::PacketSubmissionResult SubmitInnerIpv4Packet(
         std::span<const std::uint8_t> packet,
-        std::uint64_t process_id);
+        runtime::ProcessId process_id);
     wgnx::PacketReceiveResult ReceiveInnerIpv4Packet(
         std::span<std::uint8_t> packet,
-        std::uint64_t process_id);
+        runtime::ProcessId process_id);
 
 private:
     static void ResolverWorkCallback(wgnx::platform::work_struct *work);
@@ -69,7 +69,8 @@ private:
     void ClearInnerPacketStateLocked(const char *reason);
     runtime::EffectBatch SetPeerInactive(std::size_t peer_index);
     void QueuePayloadSubmissionWork();
-    bool QueuePayloadSubmissionRequestLocked(wgnx::DebugTriggerAction action);
+    runtime::DebugProbeQueueResult QueuePayloadSubmissionRequestLocked(
+        wgnx::DebugTriggerAction action);
     wgnx::PeerInfo BuildPeerInfo(std::size_t peer_index);
     bool HasRuntimeErrors();
     void InitializeState();
@@ -138,7 +139,8 @@ runtime::EffectBatch DaemonRuntime::SetPeerInactive(std::size_t peer_index) {
     const auto *lifecycle = m_runtime_coordinator.Lifecycle(peer_index);
     AMS_ABORT_UNLESS(lifecycle != nullptr);
     const runtime::PeerIdentity peer{
-        .peer_index = static_cast<std::uint32_t>(peer_index),
+        .peer_index = runtime::PeerIndex{
+            static_cast<std::uint32_t>(peer_index)},
         .activation_generation = lifecycle->activation_generation,
     };
     m_debug_probe_runner.Cancel(&peer);
@@ -153,10 +155,12 @@ runtime::EffectBatch DaemonRuntime::SetPeerInactive(std::size_t peer_index) {
     m_horizon_dispatcher.QueueDebugPayloadSubmission();
 }
 
-[[maybe_unused]] bool DaemonRuntime::QueuePayloadSubmissionRequestLocked(wgnx::DebugTriggerAction action) {
+[[maybe_unused]] runtime::DebugProbeQueueResult
+DaemonRuntime::QueuePayloadSubmissionRequestLocked(
+    wgnx::DebugTriggerAction action) {
     runtime::DebugPeerSnapshot peer{};
     if (!m_runtime_coordinator.SnapshotDebugPeer(peer)) {
-        return false;
+        return runtime::DebugProbeQueueResult::NoActivePeer;
     }
     return m_debug_probe_runner.Queue(
         peer.peer,
@@ -336,10 +340,11 @@ ams::Result DaemonRuntime::SetActivePeer(std::int32_t peer_index) {
     AMS_ABORT_UNLESS(m_runtime_coordinator.SetActivePeerIndex(peer_index));
     if (peer_index >= 0) {
         const auto activation_effects = m_runtime_coordinator.Dispatch(runtime::ActivationRequestedEvent{
-            .peer_index = static_cast<std::uint32_t>(peer_index),
+            .peer_index = runtime::PeerIndex{
+                static_cast<std::uint32_t>(peer_index)},
             .occurred_at = GetRuntimeNowNs(),
         });
-        AMS_ABORT_UNLESS(effects.Append(activation_effects));
+        effects.Append(activation_effects);
     }
     logger::Log("SetActivePeer(%d)", peer_index);
     lock.unlock();
@@ -378,10 +383,12 @@ ams::Result DaemonRuntime::TriggerDebugPayload(wgnx::DebugTriggerAction action) 
     std::scoped_lock lock(m_state_mutex);
     InitializeState();
 
-    if (!QueuePayloadSubmissionRequestLocked(action)) {
+    const auto queue_result = QueuePayloadSubmissionRequestLocked(action);
+    if (queue_result != runtime::DebugProbeQueueResult::Queued) {
         logger::Log(
-            "Rejected TriggerDebugPayload(action=%u): no active session, invalid action, or queue busy",
-            static_cast<unsigned int>(action));
+            "Rejected TriggerDebugPayload(action=%u): reason=%u",
+            static_cast<unsigned int>(action),
+            static_cast<unsigned int>(queue_result));
         R_THROW(ams::fs::ResultInvalidArgument());
     }
 
@@ -400,14 +407,15 @@ ams::Result DaemonRuntime::BumpUdpBinding() {
             R_THROW(ams::fs::ResultInvalidArgument());
         }
 
-        const std::size_t peer_index = peer.identity.peer_index;
-        const auto binding = m_runtime_coordinator.BindingSnapshot(peer_index);
+        const auto peer_index = peer.identity.peer_index;
+        const auto binding =
+            m_runtime_coordinator.BindingSnapshot(peer_index.Value());
         if ((peer.state != wgnx::PeerRuntimeState::Handshaking &&
              peer.state != wgnx::PeerRuntimeState::Active) ||
             !binding.has_endpoint) {
             logger::Log(
                 "Rejected BumpUdpBinding: peer=%zu state=%s resolved=%u",
-                peer_index,
+                static_cast<std::size_t>(peer_index.Value()),
                 wgnx::GetPeerRuntimeStateName(peer.state),
                 binding.has_endpoint ? 1U : 0U);
             R_THROW(ams::fs::ResultInvalidArgument());
@@ -417,17 +425,18 @@ ams::Result DaemonRuntime::BumpUdpBinding() {
             .peer_index = peer_index,
             .activation_generation = peer.identity.activation_generation,
         };
-        if (!m_receive_pump.QueueRebindLocked(request)) {
+        const auto queue_result = m_receive_pump.QueueRebindLocked(request);
+        if (queue_result == runtime::UdpRebindQueueResult::Replaced) {
             logger::Log(
                 "Coalesced UDP bind bump peer=%zu activation=%u",
-                peer_index,
-                peer.identity.activation_generation);
+                static_cast<std::size_t>(peer_index.Value()),
+                peer.identity.activation_generation.Value());
         } else {
             logger::Log(
                 "Queued UDP bind bump peer=%zu activation=%u socket_generation=%u socket=%d",
-                peer_index,
-                peer.identity.activation_generation,
-                binding.generation,
+                static_cast<std::size_t>(peer_index.Value()),
+                peer.identity.activation_generation.Value(),
+                binding.generation.Value(),
                 static_cast<int>(binding.socket));
         }
     }
@@ -438,7 +447,7 @@ ams::Result DaemonRuntime::BumpUdpBinding() {
 
 wgnx::PacketSubmissionResult DaemonRuntime::SubmitInnerIpv4Packet(
     std::span<const std::uint8_t> packet_bytes,
-    std::uint64_t process_id) {
+    runtime::ProcessId process_id) {
     wgnx::PacketSubmissionResult result = {
         .packet_id = 0,
         .status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::InternalError),
@@ -465,28 +474,28 @@ wgnx::PacketSubmissionResult DaemonRuntime::SubmitInnerIpv4Packet(
         if (outcome.ownership_transferred) {
             logger::Log(
                 "Transferred packet API ownership pid=%llu discarded_tx=%zu discarded_rx=%zu",
-                static_cast<unsigned long long>(process_id),
+                static_cast<unsigned long long>(process_id.Value()),
                 outcome.discarded_outbound,
                 outcome.discarded_inbound);
         }
     }
 
-    result.packet_id = outcome.packet_id;
+    result.packet_id = outcome.packet_id.Value();
     result.activation_generation = outcome.has_peer
-        ? outcome.peer.activation_generation
+        ? outcome.peer.activation_generation.Value()
         : 0;
     result.peer_index = outcome.has_peer
-        ? static_cast<std::int32_t>(outcome.peer.peer_index)
+        ? static_cast<std::int32_t>(outcome.peer.peer_index.Value())
         : -1;
     switch (outcome.status) {
         case runtime::PacketSubmissionStatus::Queued:
             result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::Queued);
             logger::Log(
                 "Queued packet API submission id=%llu pid=%llu peer=%u activation=%u bytes=%zu depth=%zu state=%s",
-                static_cast<unsigned long long>(outcome.packet_id),
-                static_cast<unsigned long long>(process_id),
-                outcome.peer.peer_index,
-                outcome.peer.activation_generation,
+                static_cast<unsigned long long>(outcome.packet_id.Value()),
+                static_cast<unsigned long long>(process_id.Value()),
+                outcome.peer.peer_index.Value(),
+                outcome.peer.activation_generation.Value(),
                 packet_bytes.size(),
                 outcome.queue_depth,
                 wgnx::GetPeerRuntimeStateName(outcome.peer_state));
@@ -495,7 +504,7 @@ wgnx::PacketSubmissionResult DaemonRuntime::SubmitInnerIpv4Packet(
             result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::MalformedPacket);
             logger::Log(
                 "Rejected packet API submission pid=%llu bytes=%zu validation=%s",
-                static_cast<unsigned long long>(process_id),
+                static_cast<unsigned long long>(process_id.Value()),
                 packet_bytes.size(),
                 wgnx::wireguard::GetInnerIpValidationErrorName(outcome.validation));
             break;
@@ -506,7 +515,7 @@ wgnx::PacketSubmissionResult DaemonRuntime::SubmitInnerIpv4Packet(
             result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::QueueFull);
             logger::Log(
                 "Rejected packet API submission pid=%llu reason=tx_queue_full",
-                static_cast<unsigned long long>(process_id));
+                static_cast<unsigned long long>(process_id.Value()));
             break;
         case runtime::PacketSubmissionStatus::InternalError:
             result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::InternalError);
@@ -519,7 +528,7 @@ wgnx::PacketSubmissionResult DaemonRuntime::SubmitInnerIpv4Packet(
 
 wgnx::PacketReceiveResult DaemonRuntime::ReceiveInnerIpv4Packet(
     std::span<std::uint8_t> packet,
-    std::uint64_t process_id) {
+    runtime::ProcessId process_id) {
     wgnx::PacketReceiveResult result = {
         .packet_id = 0,
         .status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::QueueEmpty),
@@ -534,21 +543,21 @@ wgnx::PacketReceiveResult DaemonRuntime::ReceiveInnerIpv4Packet(
         InitializeState();
         outcome = m_packet_data_plane.ReceivePacket(packet, process_id);
     }
-    result.packet_id = outcome.packet_id;
+    result.packet_id = outcome.packet_id.Value();
     result.packet_size = static_cast<std::uint32_t>(outcome.packet_size);
-    result.activation_generation = outcome.peer.activation_generation;
-    result.peer_index = outcome.packet_id != 0
-        ? static_cast<std::int32_t>(outcome.peer.peer_index)
+    result.activation_generation = outcome.peer.activation_generation.Value();
+    result.peer_index = !outcome.packet_id.IsZero()
+        ? static_cast<std::int32_t>(outcome.peer.peer_index.Value())
         : -1;
     switch (outcome.status) {
         case runtime::PacketReceiveStatus::Success:
             result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::Success);
             logger::Log(
                 "Delivered packet API receive id=%llu pid=%llu peer=%u activation=%u bytes=%zu remaining=%zu",
-                static_cast<unsigned long long>(outcome.packet_id),
-                static_cast<unsigned long long>(process_id),
-                outcome.peer.peer_index,
-                outcome.peer.activation_generation,
+                static_cast<unsigned long long>(outcome.packet_id.Value()),
+                static_cast<unsigned long long>(process_id.Value()),
+                outcome.peer.peer_index.Value(),
+                outcome.peer.activation_generation.Value(),
                 outcome.packet_size,
                 outcome.queue_depth);
             break;
@@ -564,7 +573,7 @@ wgnx::PacketReceiveResult DaemonRuntime::ReceiveInnerIpv4Packet(
             result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::StaleActivation);
             logger::Log(
                 "Discarded packet API receive id=%llu reason=stale_activation",
-                static_cast<unsigned long long>(outcome.packet_id));
+                static_cast<unsigned long long>(outcome.packet_id.Value()));
             break;
     }
     return result;
@@ -615,13 +624,17 @@ ams::Result BumpUdpBinding() {
 wgnx::PacketSubmissionResult SubmitInnerIpv4Packet(
     std::span<const std::uint8_t> packet,
     std::uint64_t process_id) {
-    return g_daemon_runtime.SubmitInnerIpv4Packet(packet, process_id);
+    return g_daemon_runtime.SubmitInnerIpv4Packet(
+        packet,
+        runtime::ProcessId{process_id});
 }
 
 wgnx::PacketReceiveResult ReceiveInnerIpv4Packet(
     std::span<std::uint8_t> packet,
     std::uint64_t process_id) {
-    return g_daemon_runtime.ReceiveInnerIpv4Packet(packet, process_id);
+    return g_daemon_runtime.ReceiveInnerIpv4Packet(
+        packet,
+        runtime::ProcessId{process_id});
 }
 
 } // namespace runtime

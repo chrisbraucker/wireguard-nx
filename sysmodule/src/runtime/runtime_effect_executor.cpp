@@ -60,9 +60,9 @@ NOINLINE void RuntimeEffectExecutor::ExecuteOpenUdpBind(
         effect.endpoint.family);
     logger::Log(
         "UDP bind open completion peer=%u activation=%u socket_generation=%u socket=%d endpoint=%s error=%u",
-        effect.peer.peer_index,
-        effect.peer.activation_generation,
-        effect.socket_generation,
+        effect.peer.peer_index.Value(),
+        effect.peer.activation_generation.Value(),
+        effect.socket_generation.Value(),
         static_cast<int>(socket),
         effect.endpoint_text.data(),
         static_cast<unsigned int>(error));
@@ -82,7 +82,7 @@ NOINLINE void RuntimeEffectExecutor::ExecuteOpenUdpBind(
             .occurred_at = GetRuntimeNowNs(),
         });
     }
-    AMS_ABORT_UNLESS(generated.Append(completion));
+    generated.Append(completion);
 }
 
 NOINLINE void RuntimeEffectExecutor::ExecutePendingDatagramSend(
@@ -107,14 +107,14 @@ NOINLINE void RuntimeEffectExecutor::ExecutePendingDatagramSend(
         std::addressof(sent));
     logger::Log(
         "Encrypted datagram send completion peer=%u activation=%u datagram_generation=%u kind=%s packet_id=%llu bytes=%zu sent=%zu socket_generation=%u socket=%d error=%u",
-        effect.peer.peer_index,
-        effect.peer.activation_generation,
-        effect.datagram_generation,
+        effect.peer.peer_index.Value(),
+        effect.peer.activation_generation.Value(),
+        effect.datagram_generation.Value(),
         GetPendingDatagramKindName(snapshot.kind),
-        static_cast<unsigned long long>(snapshot.inner_packet_id),
+        static_cast<unsigned long long>(snapshot.inner_packet_id.Value()),
         snapshot.size,
         sent,
-        snapshot.binding.generation,
+        snapshot.binding.generation.Value(),
         static_cast<int>(snapshot.binding.socket),
         static_cast<unsigned int>(error));
 
@@ -129,7 +129,7 @@ NOINLINE void RuntimeEffectExecutor::ExecutePendingDatagramSend(
             .occurred_at = GetRuntimeNowNs(),
         });
     }
-    AMS_ABORT_UNLESS(generated.Append(completion));
+    generated.Append(completion);
 }
 
 NOINLINE void RuntimeEffectExecutor::ExecutePublishDecryptedPacket(
@@ -159,14 +159,16 @@ void RuntimeEffectExecutor::Execute(const EffectBatch &effects) {
                             std::scoped_lock lock(m_state_mutex);
                             current = m_coordinator.IsActiveIdentity(value.peer);
                             if (current) {
-                                schedule = m_endpoint_resolver.Queue(value);
+                                schedule =
+                                    m_endpoint_resolver.Queue(value) ==
+                                    EndpointQueueResult::Scheduled;
                             }
                         }
                         if (current) {
                             logger::Log(
                                 "Queued endpoint resolution for peer %u activation=%u endpoint='%s' schedule=%u",
-                                value.peer.peer_index,
-                                value.peer.activation_generation,
+                                value.peer.peer_index.Value(),
+                                value.peer.activation_generation.Value(),
                                 value.endpoint.data(),
                                 schedule ? 1U : 0U);
                         }
@@ -246,7 +248,7 @@ void RuntimeEffectExecutor::PublishDecryptedPacketLocked(
             sizeof(inner_destination));
         logger::Log(
             "Validated debug ICMP reply for peer %u action=%s source=%s destination=%s seq=%u activation=%u",
-            peer.peer_index,
+            peer.peer_index.Value(),
             wgnx::GetDebugTriggerActionName(probe.info.action),
             inner_source,
             inner_destination,
@@ -258,7 +260,7 @@ void RuntimeEffectExecutor::PublishDecryptedPacketLocked(
     if (probe.consumed) {
         logger::Log(
             "Rejected debug ICMP reply metadata for peer %u validation=%s payload=%zu",
-            peer.peer_index,
+            peer.peer_index.Value(),
             wgnx::wireguard::GetDebugProbeReplyValidationName(probe.validation),
             inner_packet.size());
         return;
@@ -269,40 +271,40 @@ void RuntimeEffectExecutor::PublishDecryptedPacketLocked(
         case PacketDeliveryStatus::Queued:
             logger::Log(
                 "Queued decrypted inner packet id=%llu peer=%u activation=%u bytes=%zu depth=%zu",
-                static_cast<unsigned long long>(delivery.packet_id),
-                peer.peer_index,
-                peer.activation_generation,
+                static_cast<unsigned long long>(delivery.packet_id.Value()),
+                peer.peer_index.Value(),
+                peer.activation_generation.Value(),
                 inner_packet.size(),
                 delivery.queue_depth);
             break;
         case PacketDeliveryStatus::NoConsumer:
             logger::Log(
                 "Dropped decrypted inner packet peer=%u activation=%u bytes=%zu reason=no_consumer",
-                peer.peer_index,
-                peer.activation_generation,
+                peer.peer_index.Value(),
+                peer.activation_generation.Value(),
                 inner_packet.size());
             break;
         case PacketDeliveryStatus::MalformedPacket:
             logger::Log(
                 "Dropped decrypted inner packet peer=%u activation=%u bytes=%zu validation=%s",
-                peer.peer_index,
-                peer.activation_generation,
+                peer.peer_index.Value(),
+                peer.activation_generation.Value(),
                 inner_packet.size(),
                 wgnx::wireguard::GetInnerIpValidationErrorName(delivery.validation));
             break;
         case PacketDeliveryStatus::UnsupportedPacket:
             logger::Log(
                 "Dropped decrypted inner packet peer=%u activation=%u bytes=%zu reason=unsupported_transport_ip_version version=%u",
-                peer.peer_index,
-                peer.activation_generation,
+                peer.peer_index.Value(),
+                peer.activation_generation.Value(),
                 inner_packet.size(),
                 static_cast<unsigned int>(delivery.version));
             break;
         case PacketDeliveryStatus::QueueFull:
             logger::Log(
                 "Dropped decrypted inner packet peer=%u activation=%u bytes=%zu reason=rx_queue_full capacity=%zu",
-                peer.peer_index,
-                peer.activation_generation,
+                peer.peer_index.Value(),
+                peer.activation_generation.Value(),
                 inner_packet.size(),
                 delivery.queue_capacity);
             break;
@@ -328,13 +330,15 @@ void RuntimeEffectExecutor::CommitDebugPayloadSubmission(
             GetRuntimeNowNs()));
         logger::Log(
             "Discarded queued payload submission for stale peer %u activation=%u",
-            request.peer.peer_index,
-            request.peer.activation_generation);
+            request.peer.peer_index.Value(),
+            request.peer.activation_generation.Value());
         return;
     }
 
-    const auto *lifecycle = m_coordinator.Lifecycle(request.peer.peer_index);
-    const auto binding = m_coordinator.BindingSnapshot(request.peer.peer_index);
+    const auto *lifecycle =
+        m_coordinator.Lifecycle(request.peer.peer_index.Value());
+    const auto binding =
+        m_coordinator.BindingSnapshot(request.peer.peer_index.Value());
     AMS_ABORT_UNLESS(lifecycle != nullptr);
     if (!m_coordinator.IsActiveEstablishedIdentity(request.peer) ||
         !binding.IsOpen()) {
@@ -346,10 +350,10 @@ void RuntimeEffectExecutor::CommitDebugPayloadSubmission(
             GetRuntimeNowNs()));
         logger::Log(
             "Discarded queued payload submission for peer %u state=%s activation=%u current_activation=%u",
-            request.peer.peer_index,
+            request.peer.peer_index.Value(),
             wgnx::GetPeerRuntimeStateName(lifecycle->state),
-            request.peer.activation_generation,
-            lifecycle->activation_generation);
+            request.peer.activation_generation.Value(),
+            lifecycle->activation_generation.Value());
         return;
     }
 
@@ -373,8 +377,8 @@ void RuntimeEffectExecutor::CommitDebugPayloadSubmission(
             GetRuntimeNowNs()));
         logger::Log(
             "Failed to build debug ICMP packet for peer %u activation=%u action=%s source=%s target=%s",
-            request.peer.peer_index,
-            request.peer.activation_generation,
+            request.peer.peer_index.Value(),
+            request.peer.activation_generation.Value(),
             wgnx::GetDebugTriggerActionName(request.action),
             request.source_address.data(),
             target_text);
@@ -390,8 +394,8 @@ void RuntimeEffectExecutor::CommitDebugPayloadSubmission(
         sizeof(target_text));
     logger::Log(
         "Built debug ICMP packet for peer %u activation=%u action=%s source=%s target=%s bytes=%zu",
-        request.peer.peer_index,
-        request.peer.activation_generation,
+        request.peer.peer_index.Value(),
+        request.peer.activation_generation.Value(),
         wgnx::GetDebugTriggerActionName(request.action),
         request.source_address.data(),
         target_text,
@@ -408,8 +412,8 @@ void RuntimeEffectExecutor::CommitDebugPayloadSubmission(
             GetRuntimeNowNs()));
         logger::Log(
             "Failed to stage debug payload peer=%u activation=%u status=%u",
-            request.peer.peer_index,
-            request.peer.activation_generation,
+            request.peer.peer_index.Value(),
+            request.peer.activation_generation.Value(),
             static_cast<unsigned int>(submission.status));
         return;
     }
@@ -463,8 +467,8 @@ void RuntimeEffectExecutor::RunEndpointResolver() {
             wgnx::platform::resolve_endpoint(request->endpoint.data());
         logger::Log(
             "Endpoint resolution completion peer=%u activation=%u endpoint='%s' success=%u stage=%s code=%s resolved=%s",
-            request->peer.peer_index,
-            request->peer.activation_generation,
+            request->peer.peer_index.Value(),
+            request->peer.activation_generation.Value(),
             request->endpoint.data(),
             result.success ? 1U : 0U,
             wgnx::GetPeerErrorStageName(result.error_stage),
@@ -499,8 +503,9 @@ void RuntimeEffectExecutor::RunProtocolTimer(
     const EffectBatch effects = m_coordinator.Dispatch(
         ProtocolTimerExpiredEvent{
             .peer = {
-                .peer_index = token.owner.peer_index,
-                .activation_generation = token.owner.activation_generation,
+                .peer_index = PeerIndex{token.owner.peer_index},
+                .activation_generation =
+                    ActivationGeneration{token.owner.activation_generation},
             },
             .hook = hook,
             .token = token,
@@ -530,9 +535,9 @@ void RuntimeEffectExecutor::RunDebugProbeTimeout() {
     }
     logger::Log(
         "Debug payload probe timed out for peer %u action=%s activation=%u",
-        peer.peer_index,
+        peer.peer_index.Value(),
         wgnx::GetDebugTriggerActionName(action),
-        peer.activation_generation);
+        peer.activation_generation.Value());
 }
 
 void RuntimeEffectExecutor::RunNetworkPathObservation() {

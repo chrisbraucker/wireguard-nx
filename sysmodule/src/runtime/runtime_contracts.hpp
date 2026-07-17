@@ -1,5 +1,6 @@
 #pragma once
 
+#include "runtime/domain_types.hpp"
 #include "wgnx/protocol.hpp"
 
 #include <cstdint>
@@ -33,8 +34,9 @@ constexpr std::uint8_t BuildPeerFlags(
         (has_resolved_endpoint ? flag(wgnx::PeerFlag_HasResolvedEndpoint) : 0U));
 }
 
-constexpr bool IsCurrentGeneration(std::uint32_t expected, std::uint32_t observed) {
-    return expected != 0 && expected == observed;
+template<DomainIdentity Generation>
+constexpr bool IsCurrentGeneration(Generation expected, Generation observed) {
+    return !expected.IsZero() && expected == observed;
 }
 
 } // namespace wgnx::sysmodule::runtime

@@ -27,7 +27,8 @@ public:
           m_coordinator(coordinator),
           m_dispatcher(dispatcher) {}
 
-    bool QueueRebindLocked(const UdpRebindRequest &request);
+    [[nodiscard]] UdpRebindQueueResult QueueRebindLocked(
+        const UdpRebindRequest &request);
     void Queue();
     void Run(RuntimeEffectExecutor &effect_executor);
 

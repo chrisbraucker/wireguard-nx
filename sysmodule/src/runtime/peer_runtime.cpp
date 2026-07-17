@@ -65,7 +65,7 @@ wgnx::PeerErrorCode MapSocketError(wgnx::platform::socket_error error) {
 } // namespace
 
 void PeerRuntime::Configure(
-    std::uint32_t peer_index,
+    PeerIndex peer_index,
     const wgnx::PeerConfigEntry &config,
     PeerConfigDerivedInfo derived,
     wgnx::platform::ktime_t now) {
@@ -74,7 +74,7 @@ void PeerRuntime::Configure(
     m_peer_index = peer_index;
     m_config = config;
     m_derived = std::move(derived);
-    ResetLifecycle(wgnx::PeerRuntimeState::Inactive, 0, now);
+    ResetLifecycle(wgnx::PeerRuntimeState::Inactive, ActivationGeneration{}, now);
 }
 
 PeerProtocolSnapshot PeerRuntime::ProtocolSnapshot() const {
@@ -107,7 +107,7 @@ bool PeerRuntime::IsTimerCurrent(
 
 void PeerRuntime::ResetLifecycle(
     wgnx::PeerRuntimeState state,
-    std::uint32_t activation_generation,
+    ActivationGeneration activation_generation,
     wgnx::platform::ktime_t now) {
     m_lifecycle = {};
     m_lifecycle.state = state;
@@ -118,20 +118,17 @@ void PeerRuntime::ResetLifecycle(
 
 void PeerRuntime::Deactivate(wgnx::platform::ktime_t now) {
     m_pending_datagram = {};
-    m_pending_socket_generation = 0;
+    m_pending_socket_generation = SocketGeneration{};
     std::ranges::fill(m_decrypted_packet.bytes, 0);
     m_decrypted_packet.size = 0;
-    m_decrypted_packet.generation = 0;
+    m_decrypted_packet.generation = PacketGeneration{};
     m_controller.Timers().CancelAll();
     ResetProtocol();
-    ResetLifecycle(wgnx::PeerRuntimeState::Inactive, 0, now);
+    ResetLifecycle(wgnx::PeerRuntimeState::Inactive, ActivationGeneration{}, now);
 }
 
-std::uint32_t PeerRuntime::BeginActivation(wgnx::platform::ktime_t now) {
-    const std::uint32_t activation_generation = m_next_activation_generation++;
-    if (m_next_activation_generation == 0) {
-        m_next_activation_generation = 1;
-    }
+ActivationGeneration PeerRuntime::BeginActivation(wgnx::platform::ktime_t now) {
+    const auto activation_generation = AllocateGeneration(m_next_activation_generation);
     ResetLifecycle(
         wgnx::PeerRuntimeState::ResolvingEndpoint,
         activation_generation,
@@ -140,7 +137,7 @@ std::uint32_t PeerRuntime::BeginActivation(wgnx::platform::ktime_t now) {
 }
 
 bool PeerRuntime::EnterHandshaking(
-    std::uint32_t activation_generation,
+    ActivationGeneration activation_generation,
     wgnx::platform::ktime_t now) {
     if (!IsCurrentActivation(activation_generation) ||
         m_lifecycle.state != wgnx::PeerRuntimeState::ResolvingEndpoint) {
@@ -155,7 +152,7 @@ bool PeerRuntime::EnterHandshaking(
 }
 
 bool PeerRuntime::EnterActive(
-    std::uint32_t activation_generation,
+    ActivationGeneration activation_generation,
     wgnx::platform::ktime_t now) {
     if (!IsCurrentActivation(activation_generation) ||
         m_lifecycle.state != wgnx::PeerRuntimeState::Handshaking) {
@@ -183,7 +180,7 @@ void PeerRuntime::EnterError(
     m_lifecycle.state_changed_ns = now;
 }
 
-bool PeerRuntime::IsCurrentActivation(std::uint32_t activation_generation) const {
+bool PeerRuntime::IsCurrentActivation(ActivationGeneration activation_generation) const {
     return IsCurrentGeneration(m_lifecycle.activation_generation, activation_generation);
 }
 
@@ -243,28 +240,16 @@ const wgnx::wireguard::wg_peer *PeerRuntime::ProtocolPeer() const {
         : nullptr;
 }
 
-std::uint32_t PeerRuntime::AllocateSocketGeneration() {
-    const std::uint32_t generation = m_next_socket_generation++;
-    if (m_next_socket_generation == 0) {
-        m_next_socket_generation = 1;
-    }
-    return generation;
+SocketGeneration PeerRuntime::AllocateSocketGeneration() {
+    return AllocateGeneration(m_next_socket_generation);
 }
 
-std::uint32_t PeerRuntime::AllocateDatagramGeneration() {
-    const std::uint32_t generation = m_next_datagram_generation++;
-    if (m_next_datagram_generation == 0) {
-        m_next_datagram_generation = 1;
-    }
-    return generation;
+DatagramGeneration PeerRuntime::AllocateDatagramGeneration() {
+    return AllocateGeneration(m_next_datagram_generation);
 }
 
-std::uint32_t PeerRuntime::AllocateDecryptedPacketGeneration() {
-    const std::uint32_t generation = m_next_decrypted_packet_generation++;
-    if (m_next_decrypted_packet_generation == 0) {
-        m_next_decrypted_packet_generation = 1;
-    }
-    return generation;
+PacketGeneration PeerRuntime::AllocateDecryptedPacketGeneration() {
+    return AllocateGeneration(m_next_decrypted_packet_generation);
 }
 
 bool PeerRuntime::PrepareHandshakeInitiation(PendingDatagramKind kind) {
@@ -316,7 +301,7 @@ bool PeerRuntime::PrepareHandshakeResponse() {
 bool PeerRuntime::PrepareTransportDatagram(
     std::span<const std::uint8_t> payload,
     PendingDatagramKind kind,
-    std::uint64_t inner_packet_id,
+    PacketId inner_packet_id,
     wgnx::wireguard::TransportDataError &out_error) {
     auto *peer = ProtocolPeer();
     if (peer == nullptr || m_pending_datagram.IsPending()) {
@@ -360,15 +345,15 @@ bool PeerRuntime::StartHandshake(
         !PrepareHandshakeInitiation(PendingDatagramKind::HandshakeInitiation)) {
         return false;
     }
-    static_cast<void>(effects.Push(ArmProtocolTimerEffect{
+    effects.Add(ArmProtocolTimerEffect{
         .peer = identity,
         .hook = wgnx::wireguard::TimerHook::RetransmitHandshake,
         .deadline = retry_deadline,
-    }));
-    static_cast<void>(effects.Push(SendPendingDatagramEffect{
+    });
+    effects.Add(SendPendingDatagramEffect{
         .peer = identity,
         .datagram_generation = m_pending_datagram.generation,
-    }));
+    });
     return true;
 }
 
@@ -402,8 +387,8 @@ void PeerRuntime::ProcessOutboundQueue(
     }
 
     while (const auto *front = peer->staged_outbound_packets.Front()) {
-        if (front->peer_index != identity.peer_index ||
-            front->activation_generation != identity.activation_generation) {
+        if (PeerIndex{front->peer_index} != identity.peer_index ||
+            ActivationGeneration{front->activation_generation} != identity.activation_generation) {
             static_cast<void>(peer->staged_outbound_packets.Pop(
                 nullptr,
                 wgnx::wireguard::QueueDisposition::Stale));
@@ -440,12 +425,12 @@ void PeerRuntime::ProcessOutboundQueue(
         if (PrepareTransportDatagram(
                 std::span<const std::uint8_t>(front->bytes.data(), front->size),
                 PendingDatagramKind::TransportData,
-                front->packet_id,
+                PacketId{front->packet_id},
                 build_error)) {
-            static_cast<void>(effects.Push(SendPendingDatagramEffect{
+            effects.Add(SendPendingDatagramEffect{
                 .peer = identity,
                 .datagram_generation = m_pending_datagram.generation,
-            }));
+            });
             return;
         }
 
@@ -491,9 +476,9 @@ void PeerRuntime::HandlePendingDatagramCompletion(
             static_cast<void>(m_controller.ApplyStagedSendOutcome(
                 *peer,
                 wgnx::wireguard::OutboundSendOutcome::Sent()));
-            static_cast<void>(effects.Push(QueueInnerPacketSubmissionEffect{
+            effects.Add(QueueInnerPacketSubmissionEffect{
                 .peer = event.peer,
-            }));
+            });
         }
         return;
     }
@@ -506,8 +491,8 @@ void PeerRuntime::HandlePendingDatagramCompletion(
     if (event.error == wgnx::platform::socket_error::send_failed) {
         logger::Log(
             "Nonterminal WG transport I/O failure peer=%u activation=%u state=%s operation=datagram send error=%s",
-            event.peer.peer_index,
-            event.peer.activation_generation,
+            event.peer.peer_index.Value(),
+            event.peer.activation_generation.Value(),
             wgnx::GetPeerRuntimeStateName(m_lifecycle.state),
             wgnx::GetPeerErrorCodeName(wgnx::PeerErrorCode::TransportSendFailed));
         if constexpr (development_config::SuspendUdpTransportOnFirstSendFailure) {
@@ -528,10 +513,10 @@ void PeerRuntime::EnterActivationError(
     wgnx::platform::ktime_t now,
     EffectBatch *effects) {
     m_pending_datagram = {};
-    m_pending_socket_generation = 0;
+    m_pending_socket_generation = SocketGeneration{};
     std::ranges::fill(m_decrypted_packet.bytes, 0);
     m_decrypted_packet.size = 0;
-    m_decrypted_packet.generation = 0;
+    m_decrypted_packet.generation = PacketGeneration{};
     ClearStagedInnerPackets();
     if (auto *peer = ProtocolPeer()) {
         wgnx::wireguard::wg_peer_scrub_transient_state(peer);
@@ -547,11 +532,11 @@ void PeerRuntime::EnterActivationError(
         .activation_generation = m_lifecycle.activation_generation,
     };
     if (m_binding.IsOpen()) {
-        static_cast<void>(effects->Push(CloseUdpSocketEffect{
+        effects->Add(CloseUdpSocketEffect{
             .socket = m_binding.ReleaseSocket(),
-        }));
+        });
     }
-    if (identity.activation_generation == 0) {
+    if (identity.activation_generation.IsZero()) {
         return;
     }
     for (const auto hook : {
@@ -560,10 +545,10 @@ void PeerRuntime::EnterActivationError(
              wgnx::wireguard::TimerHook::Rekey,
              wgnx::wireguard::TimerHook::ZeroKeyMaterial,
          }) {
-        static_cast<void>(effects->Push(CancelProtocolTimerEffect{
+        effects->Add(CancelProtocolTimerEffect{
             .peer = identity,
             .hook = hook,
-        }));
+        });
     }
 }
 
@@ -593,8 +578,9 @@ void PeerRuntime::FinalizeTimerEffects(EffectBatch &effects) {
                     value.token = m_controller.Timers().Arm(
                         value.hook,
                         {
-                            .peer_index = value.peer.peer_index,
-                            .activation_generation = value.peer.activation_generation,
+                            .peer_index = value.peer.peer_index.Value(),
+                            .activation_generation =
+                                value.peer.activation_generation.Value(),
                             .protocol_sequence =
                                 value.hook ==
                                         wgnx::wireguard::TimerHook::RetransmitHandshake
@@ -626,37 +612,37 @@ void PeerRuntime::SuspendTransport(
     if (m_binding.IsSuspended()) {
         logger::Log(
             "UDP transport already suspended peer=%u activation=%u",
-            identity.peer_index,
-            identity.activation_generation);
+            identity.peer_index.Value(),
+            identity.activation_generation.Value());
         return;
     }
 
     const auto binding = m_binding.StateSnapshot();
     logger::Log(
         "EXPERIMENT suspending UDP transport after send failure peer=%u activation=%u socket_generation=%u socket=%d; preserving peer and protocol state",
-        identity.peer_index,
-        identity.activation_generation,
-        binding.generation,
+        identity.peer_index.Value(),
+        identity.activation_generation.Value(),
+        binding.generation.Value(),
         static_cast<int>(binding.socket));
     for (const auto hook : {
              wgnx::wireguard::TimerHook::RetransmitHandshake,
              wgnx::wireguard::TimerHook::SendKeepalive,
              wgnx::wireguard::TimerHook::Rekey,
          }) {
-        static_cast<void>(effects.Push(CancelProtocolTimerEffect{
+        effects.Add(CancelProtocolTimerEffect{
             .peer = identity,
             .hook = hook,
-        }));
+        });
     }
     const auto socket = m_binding.ReleaseAndSuspend();
     if (socket != wgnx::platform::InvalidSocket) {
-        static_cast<void>(effects.Push(CloseUdpSocketEffect{.socket = socket}));
+        effects.Add(CloseUdpSocketEffect{.socket = socket});
     }
     logger::Log(
         "EXPERIMENT UDP transport suspended peer=%u activation=%u old_socket_generation=%u old_socket=%d state=%s",
-        identity.peer_index,
-        identity.activation_generation,
-        binding.generation,
+        identity.peer_index.Value(),
+        identity.activation_generation.Value(),
+        binding.generation.Value(),
         static_cast<int>(socket),
         wgnx::GetPeerRuntimeStateName(m_lifecycle.state));
 }
@@ -679,7 +665,7 @@ void PeerRuntime::RecoverTransport(
         if (!PrepareTransportDatagram(
                 {},
                 PendingDatagramKind::Keepalive,
-                0,
+                PacketId{},
                 build_error)) {
             EnterActivationError(
                 wgnx::PeerErrorStage::Internal,
@@ -688,10 +674,10 @@ void PeerRuntime::RecoverTransport(
                 &effects);
             return;
         }
-        static_cast<void>(effects.Push(SendPendingDatagramEffect{
+        effects.Add(SendPendingDatagramEffect{
             .peer = identity,
             .datagram_generation = m_pending_datagram.generation,
-        }));
+        });
     } else if (!StartHandshake(identity, retry_deadline, effects, false)) {
         EnterActivationError(
             wgnx::PeerErrorStage::Handshake,
@@ -702,8 +688,8 @@ void PeerRuntime::RecoverTransport(
 }
 
 bool PeerRuntime::SnapshotPendingDatagram(
-    std::uint32_t activation_generation,
-    std::uint32_t datagram_generation,
+    ActivationGeneration activation_generation,
+    DatagramGeneration datagram_generation,
     PendingDatagramSnapshot &out) const {
     if (!IsCurrentActivation(activation_generation) ||
         !m_pending_datagram.IsPending() ||
@@ -719,11 +705,11 @@ bool PeerRuntime::SnapshotPendingDatagram(
 }
 
 bool PeerRuntime::ViewDecryptedPacket(
-    std::uint32_t activation_generation,
-    std::uint32_t packet_generation,
+    ActivationGeneration activation_generation,
+    PacketGeneration packet_generation,
     DecryptedPacketView &out) const {
     if (!IsCurrentActivation(activation_generation) ||
-        packet_generation == 0 ||
+        packet_generation.IsZero() ||
         m_decrypted_packet.generation != packet_generation ||
         m_decrypted_packet.size == 0) {
         return false;
@@ -752,13 +738,14 @@ void PeerRuntime::CompleteInitiatorSession(
     if (peer == nullptr || !m_controller.CompleteSession(m_protocol.device, *peer)) {
         logger::Log(
             "Rejected WG handshake response peer=%u activation=%u reason=session_derivation_failed",
-            event.peer.peer_index,
-            event.peer.activation_generation);
+            event.peer.peer_index.Value(),
+            event.peer.activation_generation.Value());
         return;
     }
 
     UpdateEndpointFromAuthenticatedPacket(event);
-    RecordReceivedBytes(event.packet.size(), event.occurred_at);
+    const auto packet = event.packet.Bytes();
+    RecordReceivedBytes(packet.size(), event.occurred_at);
     if (m_lifecycle.state == wgnx::PeerRuntimeState::Handshaking) {
         if (!EnterActive(event.peer.activation_generation, event.occurred_at)) {
             return;
@@ -772,7 +759,7 @@ void PeerRuntime::CompleteInitiatorSession(
     if (!PrepareTransportDatagram(
             {},
             PendingDatagramKind::Keepalive,
-            0,
+            PacketId{},
             build_error)) {
         EnterActivationError(
             wgnx::PeerErrorStage::Internal,
@@ -782,32 +769,32 @@ void PeerRuntime::CompleteInitiatorSession(
         return;
     }
 
-    static_cast<void>(effects.Push(CancelProtocolTimerEffect{
+    effects.Add(CancelProtocolTimerEffect{
         .peer = event.peer,
         .hook = wgnx::wireguard::TimerHook::RetransmitHandshake,
-    }));
+    });
     if (peer->persistent_keepalive_interval > 0) {
-        static_cast<void>(effects.Push(ArmProtocolTimerEffect{
+        effects.Add(ArmProtocolTimerEffect{
             .peer = event.peer,
             .hook = wgnx::wireguard::TimerHook::SendKeepalive,
             .deadline = event.keepalive_deadline,
-        }));
+        });
     }
-    static_cast<void>(effects.Push(ArmProtocolTimerEffect{
+    effects.Add(ArmProtocolTimerEffect{
         .peer = event.peer,
         .hook = wgnx::wireguard::TimerHook::Rekey,
         .deadline = event.rekey_deadline,
-    }));
-    static_cast<void>(effects.Push(ArmProtocolTimerEffect{
+    });
+    effects.Add(ArmProtocolTimerEffect{
         .peer = event.peer,
         .hook = wgnx::wireguard::TimerHook::ZeroKeyMaterial,
         .deadline = event.zero_key_material_deadline,
-    }));
-    static_cast<void>(effects.Push(SendPendingDatagramEffect{
+    });
+    effects.Add(SendPendingDatagramEffect{
         .peer = event.peer,
         .datagram_generation = m_pending_datagram.generation,
-    }));
-    static_cast<void>(effects.Push(QueueInnerPacketSubmissionEffect{.peer = event.peer}));
+    });
+    effects.Add(QueueInnerPacketSubmissionEffect{.peer = event.peer});
 }
 
 void PeerRuntime::HandleTransportData(
@@ -820,9 +807,9 @@ void PeerRuntime::HandleTransportData(
 
     wgnx::wireguard::IncomingTransportDataResult result{};
     m_decrypted_packet.size = 0;
-    m_decrypted_packet.generation = 0;
+    m_decrypted_packet.generation = PacketGeneration{};
     const auto error = wgnx::wireguard::noise_consume_incoming_transport_data_packet(
-        event.packet,
+        event.packet.Bytes(),
         m_protocol.device,
         *peer,
         m_decrypted_packet.bytes,
@@ -830,9 +817,9 @@ void PeerRuntime::HandleTransportData(
     if (error != wgnx::wireguard::TransportDataError::None) {
         logger::Log(
             "Rejected WG transport data peer=%u activation=%u bytes=%zu source=%s slot=%s err=%s",
-            event.peer.peer_index,
-            event.peer.activation_generation,
-            event.packet.size(),
+            event.peer.peer_index.Value(),
+            event.peer.activation_generation.Value(),
+            event.packet.Bytes().size(),
             event.source_text.data(),
             GetIndexSlotName(result.slot),
             wgnx::wireguard::GetTransportDataErrorName(error));
@@ -840,12 +827,12 @@ void PeerRuntime::HandleTransportData(
     }
 
     UpdateEndpointFromAuthenticatedPacket(event);
-    RecordReceivedBytes(event.packet.size(), event.occurred_at);
+    RecordReceivedBytes(event.packet.Bytes().size(), event.occurred_at);
     logger::Log(
         "Accepted WG transport data peer=%u activation=%u bytes=%zu payload=%zu source=%s slot=%s counter=%llu promoted=%u",
-        event.peer.peer_index,
-        event.peer.activation_generation,
-        event.packet.size(),
+        event.peer.peer_index.Value(),
+        event.peer.activation_generation.Value(),
+        event.packet.Bytes().size(),
         result.decrypt.payload_size,
         event.source_text.data(),
         GetIndexSlotName(result.slot),
@@ -862,35 +849,35 @@ void PeerRuntime::HandleTransportData(
             m_lifecycle.last_handshake_ns = event.occurred_at;
             m_lifecycle.established = true;
         }
-        static_cast<void>(effects.Push(CancelProtocolTimerEffect{
+        effects.Add(CancelProtocolTimerEffect{
             .peer = event.peer,
             .hook = wgnx::wireguard::TimerHook::RetransmitHandshake,
-        }));
-        static_cast<void>(effects.Push(ArmProtocolTimerEffect{
+        });
+        effects.Add(ArmProtocolTimerEffect{
             .peer = event.peer,
             .hook = wgnx::wireguard::TimerHook::Rekey,
             .deadline = event.rekey_deadline,
-        }));
-        static_cast<void>(effects.Push(ArmProtocolTimerEffect{
+        });
+        effects.Add(ArmProtocolTimerEffect{
             .peer = event.peer,
             .hook = wgnx::wireguard::TimerHook::ZeroKeyMaterial,
             .deadline = event.zero_key_material_deadline,
-        }));
-        static_cast<void>(effects.Push(QueueInnerPacketSubmissionEffect{.peer = event.peer}));
+        });
+        effects.Add(QueueInnerPacketSubmissionEffect{.peer = event.peer});
     }
     if (peer->persistent_keepalive_interval > 0) {
-        static_cast<void>(effects.Push(ArmProtocolTimerEffect{
+        effects.Add(ArmProtocolTimerEffect{
             .peer = event.peer,
             .hook = wgnx::wireguard::TimerHook::SendKeepalive,
             .deadline = event.keepalive_deadline,
-        }));
+        });
     }
 
     if (result.decrypt.payload_size == 0) {
         logger::Log(
             "Accepted WG keepalive payload peer=%u activation=%u",
-            event.peer.peer_index,
-            event.peer.activation_generation);
+            event.peer.peer_index.Value(),
+            event.peer.activation_generation.Value());
         return;
     }
 
@@ -904,8 +891,8 @@ void PeerRuntime::HandleTransportData(
     if (validation != wgnx::wireguard::InnerIpValidationError::None) {
         logger::Log(
             "Dropped decrypted inner packet peer=%u activation=%u bytes=%zu validation=%s",
-            event.peer.peer_index,
-            event.peer.activation_generation,
+            event.peer.peer_index.Value(),
+            event.peer.activation_generation.Value(),
             padded_payload.size(),
             wgnx::wireguard::GetInnerIpValidationErrorName(validation));
         return;
@@ -913,28 +900,29 @@ void PeerRuntime::HandleTransportData(
 
     m_decrypted_packet.size = inner_packet_size;
     m_decrypted_packet.generation = AllocateDecryptedPacketGeneration();
-    static_cast<void>(effects.Push(PublishDecryptedPacketEffect{
+    effects.Add(PublishDecryptedPacketEffect{
         .peer = event.peer,
         .packet_generation = m_decrypted_packet.generation,
-    }));
+    });
 }
 
 void PeerRuntime::HandleEncryptedDatagram(
     const EncryptedDatagramReceivedEvent &event,
     EffectBatch &effects) {
     auto *peer = ProtocolPeer();
+    const auto packet = event.packet.Bytes();
     if (!IsCurrentActivation(event.peer.activation_generation) ||
-        !IsInTransportState() || peer == nullptr || event.packet.empty()) {
+        !IsInTransportState() || peer == nullptr || packet.empty()) {
         return;
     }
 
-    const auto type = wgnx::wireguard::InspectMessageType(event.packet);
+    const auto type = wgnx::wireguard::InspectMessageType(packet);
     if (!type.success) {
         logger::Log(
             "Rejected WG datagram peer=%u activation=%u bytes=%zu source=%s inspect_err=%s",
-            event.peer.peer_index,
-            event.peer.activation_generation,
-            event.packet.size(),
+            event.peer.peer_index.Value(),
+            event.peer.activation_generation.Value(),
+            packet.size(),
             event.source_text.data(),
             wgnx::wireguard::GetParseErrorName(type.error));
         return;
@@ -946,28 +934,28 @@ void PeerRuntime::HandleEncryptedDatagram(
     if (m_pending_datagram.IsPending()) {
         logger::Log(
             "Dropped WG handshake datagram peer=%u activation=%u type=%s reason=send_pending",
-            event.peer.peer_index,
-            event.peer.activation_generation,
+            event.peer.peer_index.Value(),
+            event.peer.activation_generation.Value(),
             wgnx::wireguard::GetMessageTypeName(type.type));
         return;
     }
 
     const auto outcome = wgnx::wireguard::noise_handshake_consume_incoming_packet(
-        event.packet,
+        packet,
         std::addressof(m_protocol.device),
         peer);
     logger::Log(
         "Processed WG handshake datagram peer=%u activation=%u bytes=%zu source=%s outcome=%s",
-        event.peer.peer_index,
-        event.peer.activation_generation,
-        event.packet.size(),
+            event.peer.peer_index.Value(),
+            event.peer.activation_generation.Value(),
+        packet.size(),
         event.source_text.data(),
         wgnx::wireguard::GetHandshakePacketOutcomeName(outcome));
     switch (outcome) {
         case wgnx::wireguard::HandshakePacketOutcome::Invalid:
             return;
         case wgnx::wireguard::HandshakePacketOutcome::CookieReplyConsumed:
-            RecordReceivedBytes(event.packet.size(), event.occurred_at);
+            RecordReceivedBytes(packet.size(), event.occurred_at);
             return;
         case wgnx::wireguard::HandshakePacketOutcome::ResponseConsumed:
             CompleteInitiatorSession(event, effects);
@@ -976,28 +964,28 @@ void PeerRuntime::HandleEncryptedDatagram(
             if (!PrepareHandshakeResponse()) {
                 logger::Log(
                     "Failed WG handshake response peer=%u activation=%u reason=response_or_session_build",
-                    event.peer.peer_index,
-                    event.peer.activation_generation);
+                    event.peer.peer_index.Value(),
+                    event.peer.activation_generation.Value());
                 return;
             }
             UpdateEndpointFromAuthenticatedPacket(event);
-            RecordReceivedBytes(event.packet.size(), event.occurred_at);
+            RecordReceivedBytes(packet.size(), event.occurred_at);
             if (peer->persistent_keepalive_interval > 0) {
-                static_cast<void>(effects.Push(ArmProtocolTimerEffect{
+                effects.Add(ArmProtocolTimerEffect{
                     .peer = event.peer,
                     .hook = wgnx::wireguard::TimerHook::SendKeepalive,
                     .deadline = event.keepalive_deadline,
-                }));
+                });
             }
-            static_cast<void>(effects.Push(ArmProtocolTimerEffect{
+            effects.Add(ArmProtocolTimerEffect{
                 .peer = event.peer,
                 .hook = wgnx::wireguard::TimerHook::ZeroKeyMaterial,
                 .deadline = event.zero_key_material_deadline,
-            }));
-            static_cast<void>(effects.Push(SendPendingDatagramEffect{
+            });
+            effects.Add(SendPendingDatagramEffect{
                 .peer = event.peer,
                 .datagram_generation = m_pending_datagram.generation,
-            }));
+            });
             return;
     }
 }
@@ -1074,10 +1062,10 @@ EffectBatch PeerRuntime::Handle(const PeerEvent &event) {
 
                 m_binding.ClearEndpoint();
                 m_pending_datagram = {};
-                m_pending_socket_generation = 0;
+                m_pending_socket_generation = SocketGeneration{};
                 std::ranges::fill(m_decrypted_packet.bytes, 0);
                 m_decrypted_packet.size = 0;
-                m_decrypted_packet.generation = 0;
+                m_decrypted_packet.generation = PacketGeneration{};
                 ResetProtocol();
                 const PeerIdentity identity{
                     .peer_index = value.peer_index,
@@ -1089,15 +1077,15 @@ EffectBatch PeerRuntime::Handle(const PeerEvent &event) {
                     resolve.endpoint.size(),
                     "%s",
                     m_config.endpoint.data());
-                static_cast<void>(effects.Push(resolve));
+                effects.Add(resolve);
             } else if constexpr (std::is_same_v<Event, DeactivationRequestedEvent>) {
                 if (!IsCurrentActivation(value.peer.activation_generation)) {
                     return effects;
                 }
                 if (m_binding.IsOpen()) {
-                    static_cast<void>(effects.Push(CloseUdpSocketEffect{
+                    effects.Add(CloseUdpSocketEffect{
                         .socket = m_binding.ReleaseSocket(),
-                    }));
+                    });
                 }
                 if (auto *peer = ProtocolPeer()) {
                     for (const auto hook : {
@@ -1108,11 +1096,11 @@ EffectBatch PeerRuntime::Handle(const PeerEvent &event) {
                          }) {
                         wgnx::wireguard::wg_timers_cancel(
                             std::addressof(peer->timers), hook, peer->name);
-                        static_cast<void>(effects.Push(CancelProtocolTimerEffect{
+                        effects.Add(CancelProtocolTimerEffect{
                             .peer = value.peer,
                             .hook = hook,
                             .token = m_controller.Timers().Cancel(hook),
-                        }));
+                        });
                     }
                 }
                 Deactivate(value.occurred_at);
@@ -1130,8 +1118,8 @@ EffectBatch PeerRuntime::Handle(const PeerEvent &event) {
                     code == wgnx::PeerErrorCode::TransportReceiveFailed) {
                     logger::Log(
                         "Nonterminal WG transport I/O failure peer=%u activation=%u state=%s operation=%s error=%s",
-                        value.peer.peer_index,
-                        value.peer.activation_generation,
+                        value.peer.peer_index.Value(),
+                        value.peer.activation_generation.Value(),
                         wgnx::GetPeerRuntimeStateName(m_lifecycle.state),
                         value.operation == TransportIoOperation::Receive
                             ? "receive worker"
@@ -1170,37 +1158,37 @@ EffectBatch PeerRuntime::Handle(const PeerEvent &event) {
                     open.endpoint_text.size(),
                     "%s",
                     value.result.text.data());
-                static_cast<void>(effects.Push(open));
+                effects.Add(open);
             } else if constexpr (std::is_same_v<Event, UdpBindOpenedEvent>) {
-                if (value.socket_generation == 0 ||
+                if (value.socket_generation.IsZero() ||
                     value.socket_generation != m_pending_socket_generation ||
                     value.purpose != m_pending_bind_purpose) {
                     if (value.socket != wgnx::platform::InvalidSocket) {
-                        static_cast<void>(effects.Push(
-                            CloseUdpSocketEffect{.socket = value.socket}));
+                        effects.Add(
+                            CloseUdpSocketEffect{.socket = value.socket});
                     }
                     return effects;
                 }
-                m_pending_socket_generation = 0;
+                m_pending_socket_generation = SocketGeneration{};
                 if (value.purpose == UdpBindPurpose::Rebind) {
                     if (!IsCurrentActivation(value.peer.activation_generation) ||
                         !IsInTransportState() || !m_binding.HasEndpoint()) {
                         if (value.socket != wgnx::platform::InvalidSocket) {
-                            static_cast<void>(effects.Push(
-                                CloseUdpSocketEffect{.socket = value.socket}));
+                            effects.Add(
+                                CloseUdpSocketEffect{.socket = value.socket});
                         }
                         return effects;
                     }
                     if (value.error != wgnx::platform::socket_error::none ||
                         value.socket == wgnx::platform::InvalidSocket) {
                         if (value.socket != wgnx::platform::InvalidSocket) {
-                            static_cast<void>(effects.Push(
-                                CloseUdpSocketEffect{.socket = value.socket}));
+                            effects.Add(
+                                CloseUdpSocketEffect{.socket = value.socket});
                         }
                         logger::Log(
                             "UDP bind bump open failed peer=%u activation=%u error=%u; peer state preserved",
-                            value.peer.peer_index,
-                            value.peer.activation_generation,
+                            value.peer.peer_index.Value(),
+                            value.peer.activation_generation.Value(),
                             static_cast<unsigned int>(value.error));
                         return effects;
                     }
@@ -1212,14 +1200,14 @@ EffectBatch PeerRuntime::Handle(const PeerEvent &event) {
                         value.socket_generation,
                         value.socket);
                     if (old_socket != wgnx::platform::InvalidSocket) {
-                        static_cast<void>(effects.Push(
-                            CloseUdpSocketEffect{.socket = old_socket}));
+                        effects.Add(
+                            CloseUdpSocketEffect{.socket = old_socket});
                     }
                     logger::Log(
                         "Completed UDP bind bump peer=%u activation=%u socket_generation=%u socket=%d old_socket=%d",
-                        value.peer.peer_index,
-                        value.peer.activation_generation,
-                        value.socket_generation,
+                        value.peer.peer_index.Value(),
+                        value.peer.activation_generation.Value(),
+                        value.socket_generation.Value(),
                         static_cast<int>(value.socket),
                         static_cast<int>(old_socket));
                     RecoverTransport(
@@ -1227,20 +1215,20 @@ EffectBatch PeerRuntime::Handle(const PeerEvent &event) {
                         value.retry_deadline,
                         value.occurred_at,
                         effects);
-                    static_cast<void>(effects.Push(QueueReceiveEffect{.peer = value.peer}));
+                    effects.Add(QueueReceiveEffect{.peer = value.peer});
                     return effects;
                 }
                 if (!IsCurrentActivation(value.peer.activation_generation) ||
                     m_lifecycle.state != wgnx::PeerRuntimeState::ResolvingEndpoint) {
                     if (value.socket != wgnx::platform::InvalidSocket) {
-                        static_cast<void>(effects.Push(CloseUdpSocketEffect{.socket = value.socket}));
+                        effects.Add(CloseUdpSocketEffect{.socket = value.socket});
                     }
                     return effects;
                 }
                 if (value.error != wgnx::platform::socket_error::none ||
                     value.socket == wgnx::platform::InvalidSocket) {
                     if (value.socket != wgnx::platform::InvalidSocket) {
-                        static_cast<void>(effects.Push(CloseUdpSocketEffect{.socket = value.socket}));
+                        effects.Add(CloseUdpSocketEffect{.socket = value.socket});
                     }
                     EnterActivationError(
                         wgnx::PeerErrorStage::Transport,
@@ -1264,9 +1252,9 @@ EffectBatch PeerRuntime::Handle(const PeerEvent &event) {
                     return effects;
                 }
                 if (!EnterHandshaking(value.peer.activation_generation, value.occurred_at)) {
-                    static_cast<void>(effects.Push(CloseUdpSocketEffect{
+                    effects.Add(CloseUdpSocketEffect{
                         .socket = m_binding.ReleaseSocket(),
-                    }));
+                    });
                     return effects;
                 }
                 auto *peer = ProtocolPeer();
@@ -1283,16 +1271,16 @@ EffectBatch PeerRuntime::Handle(const PeerEvent &event) {
                         &effects);
                     return effects;
                 }
-                static_cast<void>(effects.Push(ArmProtocolTimerEffect{
+                effects.Add(ArmProtocolTimerEffect{
                     .peer = value.peer,
                     .hook = wgnx::wireguard::TimerHook::RetransmitHandshake,
                     .deadline = value.retry_deadline,
-                }));
-                static_cast<void>(effects.Push(SendPendingDatagramEffect{
+                });
+                effects.Add(SendPendingDatagramEffect{
                     .peer = value.peer,
                     .datagram_generation = m_pending_datagram.generation,
-                }));
-                static_cast<void>(effects.Push(QueueReceiveEffect{.peer = value.peer}));
+                });
+                effects.Add(QueueReceiveEffect{.peer = value.peer});
             } else if constexpr (std::is_same_v<Event, UdpRebindRequestedEvent>) {
                 if (!IsCurrentActivation(value.peer.activation_generation) ||
                     !IsInTransportState() || !m_binding.HasEndpoint()) {
@@ -1312,7 +1300,7 @@ EffectBatch PeerRuntime::Handle(const PeerEvent &event) {
                     open.endpoint_text.size(),
                     "%s",
                     binding.endpoint_text.data());
-                static_cast<void>(effects.Push(open));
+                effects.Add(open);
             } else if constexpr (std::is_same_v<Event, EncryptedDatagramReceivedEvent>) {
                 HandleEncryptedDatagram(value, effects);
             } else if constexpr (std::is_same_v<Event, PendingDatagramSentEvent>) {
@@ -1321,16 +1309,18 @@ EffectBatch PeerRuntime::Handle(const PeerEvent &event) {
                 auto *peer = ProtocolPeer();
                 if (!IsCurrentActivation(value.peer.activation_generation) ||
                     !AcceptsInnerPacketSubmission() || peer == nullptr ||
-                    value.packet.empty() ||
-                    value.packet.size() > m_staging_record.bytes.size()) {
+                    value.packet.Bytes().empty() ||
+                    value.packet.Bytes().size() > m_staging_record.bytes.size()) {
                     return effects;
                 }
                 m_staging_record = {};
-                m_staging_record.packet_id = value.packet_id;
-                m_staging_record.activation_generation = value.peer.activation_generation;
-                m_staging_record.peer_index = value.peer.peer_index;
-                m_staging_record.size = static_cast<std::uint16_t>(value.packet.size());
-                std::copy(value.packet.begin(), value.packet.end(), m_staging_record.bytes.begin());
+                m_staging_record.packet_id = value.packet_id.Value();
+                m_staging_record.activation_generation =
+                    value.peer.activation_generation.Value();
+                m_staging_record.peer_index = value.peer.peer_index.Value();
+                m_staging_record.size =
+                    static_cast<std::uint16_t>(value.packet.Bytes().size());
+                std::ranges::copy(value.packet.Bytes(), m_staging_record.bytes.begin());
                 if (peer->staged_outbound_packets.Push(m_staging_record) ==
                         wgnx::wireguard::QueuePushResult::Full) {
                     return effects;
@@ -1353,9 +1343,9 @@ EffectBatch PeerRuntime::Handle(const PeerEvent &event) {
             } else if constexpr (std::is_same_v<Event, ProtocolTimerExpiredEvent>) {
                 if (!IsCurrentActivation(value.peer.activation_generation) ||
                     value.token.hook != value.hook ||
-                    value.token.owner.peer_index != value.peer.peer_index ||
+                    value.token.owner.peer_index != value.peer.peer_index.Value() ||
                     value.token.owner.activation_generation !=
-                        value.peer.activation_generation) {
+                        value.peer.activation_generation.Value()) {
                     return effects;
                 }
                 auto *peer = ProtocolPeer();
@@ -1363,8 +1353,8 @@ EffectBatch PeerRuntime::Handle(const PeerEvent &event) {
                     return effects;
                 }
                 const wgnx::wireguard::TimerOwner current_owner{
-                    .peer_index = value.peer.peer_index,
-                    .activation_generation = value.peer.activation_generation,
+                    .peer_index = value.peer.peer_index.Value(),
+                    .activation_generation = value.peer.activation_generation.Value(),
                     .protocol_sequence =
                         value.hook == wgnx::wireguard::TimerHook::RetransmitHandshake
                             ? peer->handshake_retry.sequence_count
@@ -1375,9 +1365,9 @@ EffectBatch PeerRuntime::Handle(const PeerEvent &event) {
                         "Ignored stale WG timer event hook=%s token_peer=%u current_peer=%u token_activation=%u current_activation=%u token_sequence=%u current_sequence=%u generation=%u",
                         wgnx::wireguard::GetTimerHookName(value.hook),
                         value.token.owner.peer_index,
-                        value.peer.peer_index,
+                        value.peer.peer_index.Value(),
                         value.token.owner.activation_generation,
-                        value.peer.activation_generation,
+                        value.peer.activation_generation.Value(),
                         value.token.owner.protocol_sequence,
                         current_owner.protocol_sequence,
                         value.token.generation);
@@ -1390,14 +1380,14 @@ EffectBatch PeerRuntime::Handle(const PeerEvent &event) {
                     value.token.generation);
                 if (m_binding.IsSuspended() &&
                     value.hook != wgnx::wireguard::TimerHook::ZeroKeyMaterial) {
-                    static_cast<void>(effects.Push(CancelProtocolTimerEffect{
+                    effects.Add(CancelProtocolTimerEffect{
                         .peer = value.peer,
                         .hook = value.hook,
-                    }));
+                    });
                     logger::Log(
                         "WG timer canceled for suspended UDP transport peer=%u activation=%u hook=%s",
-                        value.peer.peer_index,
-                        value.peer.activation_generation,
+                        value.peer.peer_index.Value(),
+                        value.peer.activation_generation.Value(),
                         wgnx::wireguard::GetTimerHookName(value.hook));
                     return effects;
                 }
@@ -1407,21 +1397,21 @@ EffectBatch PeerRuntime::Handle(const PeerEvent &event) {
                 }
                 switch (value.hook) {
                     case wgnx::wireguard::TimerHook::RetransmitHandshake: {
-                        static_cast<void>(effects.Push(CancelProtocolTimerEffect{
+                        effects.Add(CancelProtocolTimerEffect{
                             .peer = value.peer,
                             .hook = value.hook,
-                        }));
+                        });
                         const auto transition = m_controller.HandleHandshakeRetryTimer(
                             m_protocol.device,
                             *peer);
                         if (transition.action ==
                             wgnx::wireguard::HandshakeTransitionAction::Exhausted) {
                             if (!peer->timers.zero_key_material.pending) {
-                                static_cast<void>(effects.Push(ArmProtocolTimerEffect{
+                                effects.Add(ArmProtocolTimerEffect{
                                     .peer = value.peer,
                                     .hook = wgnx::wireguard::TimerHook::ZeroKeyMaterial,
                                     .deadline = value.zero_key_material_deadline,
-                                }));
+                                });
                             }
                             return effects;
                         }
@@ -1429,15 +1419,15 @@ EffectBatch PeerRuntime::Handle(const PeerEvent &event) {
                                 wgnx::wireguard::HandshakeTransitionAction::SendInitiation &&
                             PrepareHandshakeInitiation(
                                 PendingDatagramKind::HandshakeInitiation)) {
-                            static_cast<void>(effects.Push(ArmProtocolTimerEffect{
+                            effects.Add(ArmProtocolTimerEffect{
                                 .peer = value.peer,
                                 .hook = value.hook,
                                 .deadline = value.retry_deadline,
-                            }));
-                            static_cast<void>(effects.Push(SendPendingDatagramEffect{
+                            });
+                            effects.Add(SendPendingDatagramEffect{
                                 .peer = value.peer,
                                 .datagram_generation = m_pending_datagram.generation,
-                            }));
+                            });
                         } else if (transition.action !=
                                    wgnx::wireguard::HandshakeTransitionAction::Ignore) {
                             EnterActivationError(
@@ -1471,7 +1461,7 @@ EffectBatch PeerRuntime::Handle(const PeerEvent &event) {
                         if (!PrepareTransportDatagram(
                                 {},
                                 PendingDatagramKind::Keepalive,
-                                0,
+                                PacketId{},
                                 build_error)) {
                             EnterActivationError(
                                 wgnx::PeerErrorStage::Internal,
@@ -1481,16 +1471,16 @@ EffectBatch PeerRuntime::Handle(const PeerEvent &event) {
                             return effects;
                         }
                         if (peer->persistent_keepalive_interval > 0) {
-                            static_cast<void>(effects.Push(ArmProtocolTimerEffect{
+                            effects.Add(ArmProtocolTimerEffect{
                                 .peer = value.peer,
                                 .hook = value.hook,
                                 .deadline = value.keepalive_deadline,
-                            }));
+                            });
                         }
-                        static_cast<void>(effects.Push(SendPendingDatagramEffect{
+                        effects.Add(SendPendingDatagramEffect{
                             .peer = value.peer,
                             .datagram_generation = m_pending_datagram.generation,
-                        }));
+                        });
                         return effects;
                     }
                     case wgnx::wireguard::TimerHook::Rekey:
@@ -1508,17 +1498,17 @@ EffectBatch PeerRuntime::Handle(const PeerEvent &event) {
                         }
                         return effects;
                     case wgnx::wireguard::TimerHook::ZeroKeyMaterial:
-                        static_cast<void>(effects.Push(CancelProtocolTimerEffect{
+                        effects.Add(CancelProtocolTimerEffect{
                             .peer = value.peer,
                             .hook = value.hook,
-                        }));
+                        });
                         wgnx::wireguard::wg_peer_zero_key_material(peer);
                         wgnx::wireguard::wg_device_clear_index_registry(
                             std::addressof(m_protocol.device));
                         logger::Log(
                             "WG zeroed stale handshake and keypair material peer=%u activation=%u; peer and UDP binding preserved",
-                            value.peer.peer_index,
-                            value.peer.activation_generation);
+                            value.peer.peer_index.Value(),
+                            value.peer.activation_generation.Value());
                         return effects;
                 }
             }
@@ -1526,6 +1516,9 @@ EffectBatch PeerRuntime::Handle(const PeerEvent &event) {
         },
         event);
     FinalizeTimerEffects(effects);
+    if (effects.Size() > GetEventEffectBudget(event)) {
+        std::abort();
+    }
     return effects;
 }
 

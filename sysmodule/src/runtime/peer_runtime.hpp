@@ -34,7 +34,7 @@ struct PeerRuntimeInfo {
     std::uint32_t last_error_code{0};
     std::uint16_t persistent_keepalive_interval{0};
     std::uint32_t state_ticks{0};
-    std::uint32_t activation_generation{0};
+    ActivationGeneration activation_generation{};
     wgnx::platform::ktime_t state_changed_ns{0};
     wgnx::platform::ktime_t last_handshake_ns{0};
     wgnx::platform::ktime_t last_rx_ns{0};
@@ -85,8 +85,8 @@ constexpr const char *GetPendingDatagramKindName(PendingDatagramKind kind) {
 struct PendingDatagram {
     std::array<std::uint8_t, MaxEncryptedDatagramSize> bytes{};
     std::size_t size{0};
-    std::uint32_t generation{0};
-    std::uint64_t inner_packet_id{0};
+    DatagramGeneration generation{};
+    PacketId inner_packet_id{};
     PendingDatagramKind kind{PendingDatagramKind::None};
 
     bool IsPending() const { return kind != PendingDatagramKind::None; }
@@ -95,14 +95,14 @@ struct PendingDatagram {
 struct PendingDatagramSnapshot {
     std::array<std::uint8_t, MaxEncryptedDatagramSize> bytes{};
     std::size_t size{0};
-    std::uint64_t inner_packet_id{0};
+    PacketId inner_packet_id{};
     PendingDatagramKind kind{PendingDatagramKind::None};
     UdpBinding::SendSnapshot binding{};
 };
 
 struct DecryptedPacketView {
     std::span<const std::uint8_t> packet{};
-    std::uint32_t generation{0};
+    PacketGeneration generation{};
 };
 
 constexpr inline std::size_t MaxDecryptedPayloadSize =
@@ -112,7 +112,7 @@ constexpr inline std::size_t MaxDecryptedPayloadSize =
 struct DecryptedPacketSlot {
     std::array<std::uint8_t, MaxDecryptedPayloadSize> bytes{};
     std::size_t size{0};
-    std::uint32_t generation{0};
+    PacketGeneration generation{};
 };
 
 class RuntimeCoordinator;
@@ -123,7 +123,7 @@ public:
     const wgnx::PeerConfigEntry &Configuration() const { return m_config; }
     UdpBinding::Snapshot BindingSnapshot() const { return m_binding.StateSnapshot(); }
     PeerProtocolSnapshot ProtocolSnapshot() const;
-    bool IsCurrentActivation(std::uint32_t activation_generation) const;
+    bool IsCurrentActivation(ActivationGeneration activation_generation) const;
     bool IsInTransportState() const;
     bool AcceptsInnerPacketSubmission() const;
     bool CanSendTransportNow() const;
@@ -135,12 +135,12 @@ public:
         bool is_active,
         bool is_auto_start) const;
     bool SnapshotPendingDatagram(
-        std::uint32_t activation_generation,
-        std::uint32_t datagram_generation,
+        ActivationGeneration activation_generation,
+        DatagramGeneration datagram_generation,
         PendingDatagramSnapshot &out) const;
     bool ViewDecryptedPacket(
-        std::uint32_t activation_generation,
-        std::uint32_t packet_generation,
+        ActivationGeneration activation_generation,
+        PacketGeneration packet_generation,
         DecryptedPacketView &out) const;
     bool CanStageInnerPacket() const;
     std::size_t StagedInnerPacketCount() const;
@@ -149,14 +149,14 @@ private:
     friend class RuntimeCoordinator;
 
     void Configure(
-        std::uint32_t peer_index,
+        PeerIndex peer_index,
         const wgnx::PeerConfigEntry &config,
         PeerConfigDerivedInfo derived,
         wgnx::platform::ktime_t now);
     void Deactivate(wgnx::platform::ktime_t now);
-    std::uint32_t BeginActivation(wgnx::platform::ktime_t now);
-    bool EnterHandshaking(std::uint32_t activation_generation, wgnx::platform::ktime_t now);
-    bool EnterActive(std::uint32_t activation_generation, wgnx::platform::ktime_t now);
+    ActivationGeneration BeginActivation(wgnx::platform::ktime_t now);
+    bool EnterHandshaking(ActivationGeneration activation_generation, wgnx::platform::ktime_t now);
+    bool EnterActive(ActivationGeneration activation_generation, wgnx::platform::ktime_t now);
     void EnterError(
         wgnx::PeerErrorStage stage,
         wgnx::PeerErrorCode code,
@@ -167,7 +167,7 @@ private:
     std::size_t ClearStagedInnerPackets();
     void ResetLifecycle(
         wgnx::PeerRuntimeState state,
-        std::uint32_t activation_generation,
+        ActivationGeneration activation_generation,
         wgnx::platform::ktime_t now);
     wgnx::PeerErrorCode ValidateConfiguration() const;
     bool InstantiateProtocol();
@@ -179,7 +179,7 @@ private:
     bool PrepareTransportDatagram(
         std::span<const std::uint8_t> payload,
         PendingDatagramKind kind,
-        std::uint64_t inner_packet_id,
+        PacketId inner_packet_id,
         wgnx::wireguard::TransportDataError &out_error);
     bool StartHandshake(
         const PeerIdentity &identity,
@@ -205,9 +205,9 @@ private:
         EffectBatch &effects);
     void UpdateEndpointFromAuthenticatedPacket(
         const EncryptedDatagramReceivedEvent &event);
-    std::uint32_t AllocateSocketGeneration();
-    std::uint32_t AllocateDatagramGeneration();
-    std::uint32_t AllocateDecryptedPacketGeneration();
+    SocketGeneration AllocateSocketGeneration();
+    DatagramGeneration AllocateDatagramGeneration();
+    PacketGeneration AllocateDecryptedPacketGeneration();
     void EnterActivationError(
         wgnx::PeerErrorStage stage,
         wgnx::PeerErrorCode code,
@@ -227,16 +227,16 @@ private:
     PeerProtocolInfo m_protocol{};
     wgnx::wireguard::PeerController m_controller{};
     PeerRuntimeInfo m_lifecycle{};
-    std::uint32_t m_next_activation_generation{1};
-    std::uint32_t m_next_socket_generation{1};
-    std::uint32_t m_pending_socket_generation{0};
+    ActivationGeneration m_next_activation_generation{1};
+    SocketGeneration m_next_socket_generation{1};
+    SocketGeneration m_pending_socket_generation{};
     UdpBindPurpose m_pending_bind_purpose{UdpBindPurpose::Activation};
-    std::uint32_t m_next_datagram_generation{1};
+    DatagramGeneration m_next_datagram_generation{1};
     PendingDatagram m_pending_datagram{};
     wgnx::wireguard::InnerPacketRecord m_staging_record{};
     DecryptedPacketSlot m_decrypted_packet{};
-    std::uint32_t m_next_decrypted_packet_generation{1};
-    std::uint32_t m_peer_index{0};
+    PacketGeneration m_next_decrypted_packet_generation{1};
+    PeerIndex m_peer_index{};
 };
 
 class PeerRegistry {

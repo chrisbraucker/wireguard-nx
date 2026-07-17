@@ -23,14 +23,22 @@ std::int32_t ElapsedSeconds(
 
 } // namespace
 
-bool DebugProbeRunner::Queue(
+DebugProbeQueueResult DebugProbeRunner::Queue(
     const PeerIdentity &peer,
     std::string_view source_address,
     wgnx::DebugTriggerAction action,
     wgnx::platform::ktime_t now) {
-    if (IsPending() || !wgnx::wireguard::IsSupportedDebugTriggerAction(action) ||
-        source_address.empty() || source_address.size() >= m_source_address.size()) {
-        return false;
+    if (IsPending()) {
+        return DebugProbeQueueResult::Busy;
+    }
+    if (!wgnx::wireguard::IsSupportedDebugTriggerAction(action)) {
+        return DebugProbeQueueResult::UnsupportedAction;
+    }
+    if (source_address.empty() || source_address.size() >= m_source_address.size()) {
+        return DebugProbeQueueResult::InvalidSource;
+    }
+    if (!Transition(wgnx::DebugProbeStatus::Queued, now)) {
+        return DebugProbeQueueResult::InvalidTransition;
     }
 
     m_peer = peer;
@@ -38,7 +46,7 @@ bool DebugProbeRunner::Queue(
     std::ranges::fill(m_source_address, '\0');
     std::memcpy(m_source_address.data(), source_address.data(), source_address.size());
     m_request_pending = true;
-    return Transition(wgnx::DebugProbeStatus::Queued, now);
+    return DebugProbeQueueResult::Queued;
 }
 
 bool DebugProbeRunner::TakePending(DebugProbeRequest &out) {
@@ -65,8 +73,8 @@ std::size_t DebugProbeRunner::BuildPacket(
         packet,
         request.source_address.data(),
         request.action,
-        request.peer.activation_generation,
-        request.peer.peer_index,
+        request.peer.activation_generation.Value(),
+        request.peer.peer_index.Value(),
         random_seed);
 }
 
@@ -95,8 +103,8 @@ DebugProbeReplyOutcome DebugProbeRunner::HandleDecryptedPacket(
     outcome.validation = wgnx::wireguard::ValidateDebugIcmpEchoReply(
         packet,
         m_source_address.data(),
-        m_peer.peer_index,
-        m_peer.activation_generation,
+        m_peer.peer_index.Value(),
+        m_peer.activation_generation.Value(),
         &outcome.info);
     if (outcome.validation == wgnx::wireguard::DebugProbeReplyValidation::NotDebugReply) {
         return outcome;
@@ -135,7 +143,8 @@ void DebugProbeRunner::Project(
     std::uint32_t peer_index,
     wgnx::platform::ktime_t now,
     wgnx::PeerInfo &info) const {
-    if (m_status == wgnx::DebugProbeStatus::None || m_peer.peer_index != peer_index) {
+    if (m_status == wgnx::DebugProbeStatus::None ||
+        m_peer.peer_index != PeerIndex{peer_index}) {
         return;
     }
     info.debug_probe_action = static_cast<std::uint32_t>(m_action);

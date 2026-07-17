@@ -16,7 +16,7 @@ struct PeerPacketStateSnapshot {
 struct ReceiveRuntimeSnapshot {
     PeerIdentity peer{};
     wgnx::platform::socket_handle socket{wgnx::platform::InvalidSocket};
-    std::uint32_t socket_generation{0};
+    SocketGeneration socket_generation{};
 };
 
 struct DebugPeerSnapshot {
@@ -28,16 +28,16 @@ class RuntimeCoordinator {
 public:
     explicit constexpr RuntimeCoordinator(PeerRegistry &peers) : m_peers(peers) {}
 
-    bool Configure(
+    [[nodiscard]] bool Configure(
         std::span<const wgnx::PeerConfigEntry> configured_peers,
         std::span<PeerConfigDerivedInfo> derived,
         std::int32_t auto_start_peer_index,
         wgnx::platform::ktime_t now);
     void ClearConfiguration(wgnx::platform::ktime_t now);
-    bool SetActivePeerIndex(std::int32_t peer_index);
-    bool SetAutoStartPeerIndex(std::int32_t peer_index);
+    [[nodiscard]] bool SetActivePeerIndex(std::int32_t peer_index);
+    [[nodiscard]] bool SetAutoStartPeerIndex(std::int32_t peer_index);
 
-    EffectBatch Dispatch(const PeerEvent &event);
+    [[nodiscard]] EffectBatch Dispatch(const PeerEvent &event);
 
     std::uint32_t PeerCount() const { return m_peers.m_count; }
     bool Empty() const { return m_peers.m_count == 0; }
@@ -55,24 +55,24 @@ public:
     bool IsActiveIdentity(const PeerIdentity &peer) const;
     bool IsActiveTransportIdentity(const PeerIdentity &peer) const;
     bool IsActiveEstablishedIdentity(const PeerIdentity &peer) const;
-    bool SnapshotReceiveRuntime(ReceiveRuntimeSnapshot &out) const;
-    bool SnapshotDebugPeer(DebugPeerSnapshot &out) const;
-    bool SnapshotPacketState(PeerPacketStateSnapshot &out) const;
-    bool SnapshotPendingDatagram(
+    [[nodiscard]] bool SnapshotReceiveRuntime(ReceiveRuntimeSnapshot &out) const;
+    [[nodiscard]] bool SnapshotDebugPeer(DebugPeerSnapshot &out) const;
+    [[nodiscard]] bool SnapshotPacketState(PeerPacketStateSnapshot &out) const;
+    [[nodiscard]] bool SnapshotPendingDatagram(
         const PeerIdentity &peer,
-        std::uint32_t datagram_generation,
+        DatagramGeneration datagram_generation,
         PendingDatagramSnapshot &out) const;
-    bool ViewDecryptedPacket(
+    [[nodiscard]] bool ViewDecryptedPacket(
         const PeerIdentity &peer,
-        std::uint32_t packet_generation,
+        PacketGeneration packet_generation,
         DecryptedPacketView &out) const;
     bool IsCurrentTimerEffect(const ArmProtocolTimerEffect &effect) const;
-    std::size_t ClearStagedInnerPackets(std::uint32_t peer_index);
+    std::size_t ClearStagedInnerPackets(PeerIndex peer_index);
     std::size_t ClearAllStagedInnerPackets();
 
 private:
-    const PeerRuntime *PeerAt(std::size_t peer_index) const;
-    PeerRuntime *MutablePeerAt(std::size_t peer_index);
+    const PeerRuntime *PeerAt(PeerIndex peer_index) const;
+    PeerRuntime *MutablePeerAt(PeerIndex peer_index);
 
     PeerRegistry &m_peers;
 };

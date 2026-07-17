@@ -572,7 +572,7 @@ pre-refactor limitation and did not expose a Chunk 12 regression.
 
 ### Chunk 13: Strengthen Domain Contracts
 
-**Status:** In progress.
+**Status:** Complete locally; focused real-peer on-device regression pending.
 
 Replace interchangeable integer identities with small, trivially copyable
 domain types for peer indices, activation generations, socket generations,
@@ -599,6 +599,31 @@ a terminal platform failure. The Horizon adapter normalizes `EAGAIN`,
 `RecvFrom`/`ESuccess` anomaly while retaining the raw native result and error for
 diagnostics. Retry outcomes do not publish peer transport failures; terminal
 outcomes retain the existing generation-checked failure path.
+
+The completed chunk adds compiler-distinct `PeerIndex`,
+`ActivationGeneration`, `SocketGeneration`, `DatagramGeneration`,
+`PacketGeneration`, `PacketId`, and `ProcessId` values. Raw fixed-width values
+are converted explicitly at CMIF, platform, WireGuard-record, timer, status,
+and logging boundaries. Cross-domain comparisons and implicit raw conversions
+are rejected by the compiler, while every domain value remains trivially
+copyable and the same size as its representation.
+
+`EffectBatch` now separates invariant insertion (`Add`/`Append`, which terminate
+on a violated capacity invariant) from recoverable insertion
+(`TryAdd`/`TryAppend`, which returns a closed capacity result). Every peer event
+declares a compile-time maximum effect count, each maximum fits the fixed
+eight-effect batch, and coordinator dispatch checks the declared event budget.
+Endpoint resolution, manual rebind, debug-probe admission, packet submission,
+delivery, and receive surfaces expose closed outcomes rather than ambiguous
+booleans.
+
+Borrowed packet bytes are represented by `SynchronousPacketView` only on
+synchronous event paths. Effects cannot be constructed from the borrowed view;
+work that crosses an asynchronous boundary is copied into existing bounded,
+identity-tagged peer or data-plane storage before the event returns. The target
+standard library does not require a project-local `expected` for this chunk:
+the closed enums, variants, and `optional` results express all current
+value-or-error contracts without additional storage or machinery.
 
 **Definition of done:** the compiler rejects cross-domain identity comparisons;
 no fallible effect insertion is ignored; tests exercise each typed rejection
@@ -702,7 +727,7 @@ Every chunk must pass:
 - review that `common/include/wgnx/protocol.hpp` and the CMIF contract remain
   unchanged unless an API change is intentional
 
-The current local gate contains 29 deterministic host cases, the same 29 cases
+The current local gate contains 30 deterministic host cases, the same 30 cases
 under ASan/UBSan, the devkitA64 target build, the 8 KiB frame guard, and
 `git diff --check`. IPC API v4 and `common/include/wgnx/protocol.hpp` are
 unchanged.
@@ -724,6 +749,7 @@ on-device measurement.
 | After Chunk 11 | 296,714 | 50,088 | 712,912 | 1,059,714 | 202,979 |
 | After Chunk 12 | 304,960 | 50,776 | 713,304 | 1,069,040 | 206,979 |
 | Chunk 13 receive contract | 304,992 | 50,776 | 713,304 | 1,069,072 | 207,141 |
+| After Chunk 13 correction | 305,152 | 50,776 | 713,304 | 1,069,232 | 207,203 |
 
 The data-to-BSS shift after Chunk 8 is caused primarily by composing prior
 independent globals into the zero-initialized `DaemonRuntime`; compare
@@ -751,13 +777,38 @@ the receive-loop frame from 144 to 208 bytes; the UDP receive adapter remains
 failure completion starts only after the adapter returns, so these frames do
 not accumulate.
 
-Run focused on-device regressions after chunks 4, 5, 6, 7, 10, 12, 14, and 15.
+The corrected Chunk 13 contract work adds 160 bytes to the static image and
+62 bytes to the compressed NSO over the receive-contract slice; initialized
+data and BSS are unchanged. Generated target frames remain within the proven
+shape: 208 bytes for receive scheduling, 2,752 bytes for receive commit,
+4,752 bytes for receive failure publication, 16 bytes for coordinator dispatch,
+2,560 bytes for bind opening, 4,064 bytes for datagram send, and
+4,448 bytes for effect execution.
+
+The first Chunk 13 device activation overflowed the 16 KiB resolver worker
+during handshake-transition logging. The failure chain was endpoint resolution
+-> effect execution -> UDP bind completion -> coordinator dispatch -> peer bind
+handling -> handshake creation -> logging. The new event-budget assertion had
+changed coordinator dispatch from a direct return into a named `EffectBatch`,
+materializing another 2,240-byte frame in that already constrained chain.
+Budget validation now runs in `PeerRuntime::Handle` after timer-effect
+finalization, where the returned batch already exists, and coordinator dispatch
+again uses a direct return. Target disassembly confirms its frame is 16 bytes
+while the peer handler remains 80 bytes, removing 2,224 bytes from the crashing
+chain without weakening the effect-count invariant. The corrected build then
+sustained one real-peer connection for more than 15 minutes and completed
+several requester round trips without instability, satisfying the focused
+Chunk 13 device regression.
+
+Run focused on-device regressions after chunks 4, 5, 6, 7, 10, 12, 13, 14, and 15.
 At minimum, these runs should cover tunnel activation against a known-good
 peer, repeated requester round trips under one continuously active sysmodule,
 clean teardown, and the path-outage scenario applicable to the migrated
 lifecycle. Chunk 12 specifically revalidates activation and encrypted receive
-execution; Chunk 14 additionally requires a long-lived session and network-path
-transition; Chunk 15 is the final refactor acceptance run.
+execution; Chunk 13 revalidates typed identity conversion and packet ownership
+across repeated requester processes; Chunk 14 additionally requires a
+long-lived session and network-path transition; Chunk 15 is the final refactor
+acceptance run.
 
 ## Completion Criteria
 

@@ -2,11 +2,13 @@
 
 namespace wgnx::sysmodule::runtime {
 
-bool EndpointResolver::Queue(const ResolveEndpointEffect &request) {
+EndpointQueueResult EndpointResolver::Queue(const ResolveEndpointEffect &request) {
     m_pending = request;
     const bool should_schedule = !m_worker_scheduled;
     m_worker_scheduled = true;
-    return should_schedule;
+    return should_schedule
+        ? EndpointQueueResult::Scheduled
+        : EndpointQueueResult::Coalesced;
 }
 
 void EndpointResolver::MarkWorkerIdle() {

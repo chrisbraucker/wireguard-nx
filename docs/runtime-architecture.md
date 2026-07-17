@@ -53,6 +53,11 @@ IPC and WireGuard wire contracts remain unchanged; the separation is internal.
   and generation: failed opens preserve the old socket, stale completions close
   only their candidate, and successful completion atomically adopts the
   replacement before recovery effects are emitted.
+- `runtime/domain_types.hpp` defines compiler-distinct peer, activation,
+  socket, datagram, packet-generation, packet, and process identities. Runtime
+  components retain these types internally and convert to fixed-width CMIF,
+  platform, WireGuard-record, timer, status, and diagnostic values only at
+  those boundaries.
 - `runtime/endpoint_resolver.*` owns the bounded pending endpoint-resolution
   request. Resolution runs on its Horizon work queue and returns a typed,
   activation-tagged completion instead of mutating daemon-owned request state.
@@ -149,6 +154,20 @@ native result and errno value for diagnostics. The receive pump continues on a
 retry and publishes a generation-tagged transport failure only for a terminal
 outcome, preserving peer recovery policy outside the platform adapter.
 
+Every peer event declares its maximum effect count. The coordinator checks the
+actual count against that event budget, and all budgets fit the fixed
+eight-effect batch. Peer policy uses invariant `Add`/`Append` operations, which
+terminate if the declared bound is violated; capacity-sensitive callers use
+the `[[nodiscard]]` `TryAdd`/`TryAppend` operations and handle the closed
+capacity result.
+
+Packet views carried by peer events are explicitly synchronous borrows. A
+`SynchronousPacketView` cannot be retained in a runtime effect, and any packet
+that survives event dispatch is copied into existing bounded peer or
+data-plane storage with its generation or packet identity before dispatch
+returns. Asynchronous queues therefore own packet bytes rather than retaining
+caller memory.
+
 The single mutex is intentionally retained through the first post-refactor
 on-device regression. Narrower locks can be considered later from
 measured contention, without weakening generation-checked commits.
@@ -159,12 +178,14 @@ The host suite links the production `PeerRegistry`, `PeerRuntime`,
 `RuntimeCoordinator`, `EndpointResolver`, `UdpBinding`, `PeerController`,
 `TimerCoordinator`, `TimerSchedule`, `PacketDataPlane`, `PacketChannel`,
 `DebugProbeRunner`, `NetworkPathObserver`, and `UdpRebindQueue`.
-Its 29 deterministic cases characterize UDP receive outcomes, selection,
+Its 30 deterministic cases characterize UDP receive outcomes, selection,
 activation, lifecycle transitions, status projection, stale event rejection,
 timer arming/replacement/cancellation, queued stale delivery,
 bounded effects, generation matching, per-peer ownership, packet IDs, PID
 consumer transfer, IPv4/IPv6 envelope handling, packet queue overflow and
-staleness, and the outbound send lifecycle. Its production-runtime recovery
+staleness, closed endpoint/rebind/probe admission, typed packet rejection, and
+the outbound send lifecycle. Compile-time checks reject cross-domain identity
+comparisons and verify every event effect budget. Its production-runtime recovery
 workflow drives:
 
 `stage -> 20 fresh unanswered sends -> exhaust/drop -> stage later packet ->
@@ -237,3 +258,16 @@ The typed UDP receive result grows the receive loop to 208 bytes while retaining
 the 192-byte UDP adapter frame. Terminal receive completion uses a 4,752-byte
 frame only after the adapter has returned, keeping the receive failure path
 inside the existing 16 KiB worker budget.
+
+The first Chunk 13 device activation exposed a compiler-materialized
+`EffectBatch` in `RuntimeCoordinator::Dispatch`. A coordinator-local batch used
+only to validate the event effect budget added 2,240 bytes to the resolver ->
+executor -> bind completion -> peer handshake chain and overflowed during
+handshake-transition logging. The invariant check now runs after timer-effect
+finalization in `PeerRuntime::Handle`, where the returned batch already exists,
+and coordinator dispatch directly returns the peer result. Target frames are
+16 bytes for coordinator dispatch and 80 bytes for the peer handler, removing
+2,224 bytes from the failed chain without changing event budgets or storage
+capacity. The corrected path subsequently sustained a real-peer connection for
+more than 15 minutes and completed several requester round trips without
+instability.

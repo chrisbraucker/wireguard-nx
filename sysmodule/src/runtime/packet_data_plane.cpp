@@ -10,7 +10,7 @@ namespace wgnx::sysmodule::runtime {
 
 PacketSubmissionOutcome PacketDataPlane::SubmitIpPacket(
     std::span<const std::uint8_t> packet,
-    PacketConsumerId consumer_id,
+    ProcessId consumer_id,
     wireguard::TimerDeadline retry_deadline,
     wgnx::platform::ktime_t occurred_at,
     EffectBatch &out_effects) {
@@ -26,7 +26,7 @@ PacketSubmissionOutcome PacketDataPlane::SubmitIpPacket(
 
 PacketSubmissionOutcome PacketDataPlane::SubmitIpv4Packet(
     std::span<const std::uint8_t> packet,
-    PacketConsumerId consumer_id,
+    ProcessId consumer_id,
     wireguard::TimerDeadline retry_deadline,
     wgnx::platform::ktime_t occurred_at,
     EffectBatch &out_effects) {
@@ -47,7 +47,7 @@ PacketSubmissionOutcome PacketDataPlane::SubmitInternalIpPacket(
     EffectBatch &out_effects) {
     return SubmitValidatedPacket(
         packet,
-        0,
+        ProcessId{},
         retry_deadline,
         occurred_at,
         wireguard::ValidateInnerIpPacket(packet),
@@ -57,7 +57,7 @@ PacketSubmissionOutcome PacketDataPlane::SubmitInternalIpPacket(
 
 PacketSubmissionOutcome PacketDataPlane::SubmitValidatedPacket(
     std::span<const std::uint8_t> packet,
-    PacketConsumerId consumer_id,
+    ProcessId consumer_id,
     wireguard::TimerDeadline retry_deadline,
     wgnx::platform::ktime_t occurred_at,
     wireguard::InnerIpValidationError validation,
@@ -114,7 +114,7 @@ PacketSubmissionOutcome PacketDataPlane::SubmitValidatedPacket(
     outcome.packet_id = AllocatePacketId();
     out_effects = m_coordinator.Dispatch(InnerPacketStagedEvent{
         .peer = outcome.peer,
-        .packet = packet,
+        .packet = SynchronousPacketView{packet},
         .packet_id = outcome.packet_id,
         .retry_deadline = retry_deadline,
         .occurred_at = occurred_at,
@@ -134,7 +134,7 @@ PacketDeliveryOutcome PacketDataPlane::DeliverDecryptedPacket(
     if (!m_coordinator.IsActiveIdentity(peer_identity)) {
         return outcome;
     }
-    if (m_transport.ConsumerId() == 0) {
+    if (m_transport.ConsumerId().IsZero()) {
         outcome.status = PacketDeliveryStatus::NoConsumer;
         return outcome;
     }
@@ -150,12 +150,13 @@ PacketDeliveryOutcome PacketDataPlane::DeliverDecryptedPacket(
     }
 
     wireguard::InnerPacketRecord record{};
-    record.packet_id = AllocatePacketId();
-    record.activation_generation = peer_identity.activation_generation;
-    record.peer_index = peer_identity.peer_index;
+    const auto packet_id = AllocatePacketId();
+    record.packet_id = packet_id.Value();
+    record.activation_generation = peer_identity.activation_generation.Value();
+    record.peer_index = peer_identity.peer_index.Value();
     record.size = static_cast<std::uint16_t>(packet.size());
     std::memcpy(record.bytes.data(), packet.data(), packet.size());
-    outcome.packet_id = record.packet_id;
+    outcome.packet_id = packet_id;
     if (m_transport.PushReceived(record) == wireguard::QueuePushResult::Full) {
         outcome.status = PacketDeliveryStatus::QueueFull;
         outcome.queue_depth = m_transport.ReceivedSize();
@@ -169,7 +170,7 @@ PacketDeliveryOutcome PacketDataPlane::DeliverDecryptedPacket(
 
 PacketReceiveOutcome PacketDataPlane::ReceivePacket(
     std::span<std::uint8_t> packet,
-    PacketConsumerId consumer_id) {
+    ProcessId consumer_id) {
     PacketReceiveOutcome outcome{};
     if (!m_transport.IsOwnedBy(consumer_id)) {
         outcome.status = PacketReceiveStatus::AccessDenied;
@@ -180,11 +181,11 @@ PacketReceiveOutcome PacketDataPlane::ReceivePacket(
     if (front == nullptr) {
         return outcome;
     }
-    outcome.packet_id = front->packet_id;
+    outcome.packet_id = PacketId{front->packet_id};
     outcome.packet_size = front->size;
     outcome.peer = {
-        .peer_index = front->peer_index,
-        .activation_generation = front->activation_generation,
+        .peer_index = PeerIndex{front->peer_index},
+        .activation_generation = ActivationGeneration{front->activation_generation},
     };
     if (!m_coordinator.IsActiveIdentity(outcome.peer)) {
         wireguard::InnerPacketRecord stale{};
@@ -218,12 +219,8 @@ PacketClearOutcome PacketDataPlane::Clear() {
     return outcome;
 }
 
-std::uint64_t PacketDataPlane::AllocatePacketId() {
-    const std::uint64_t packet_id = m_next_packet_id++;
-    if (m_next_packet_id == 0) {
-        m_next_packet_id = 1;
-    }
-    return packet_id;
+PacketId PacketDataPlane::AllocatePacketId() {
+    return AllocateGeneration(m_next_packet_id);
 }
 
 } // namespace wgnx::sysmodule::runtime

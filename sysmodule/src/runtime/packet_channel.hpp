@@ -11,15 +11,15 @@ class PacketChannel final : public PacketTransport {
 public:
     static constexpr std::size_t ReceiveCapacity = 8;
 
-    PacketConsumerId ConsumerId() const override { return m_owner_process_id; }
+    ProcessId ConsumerId() const override { return m_owner_process_id; }
     bool AcceptsDelivery(wireguard::InnerIpVersion version) const override {
         return version == wireguard::InnerIpVersion::Ipv4;
     }
-    bool IsOwnedBy(PacketConsumerId process_id) const override {
-        return m_owner_process_id != 0 && m_owner_process_id == process_id;
+    bool IsOwnedBy(ProcessId process_id) const override {
+        return !m_owner_process_id.IsZero() && m_owner_process_id == process_id;
     }
 
-    std::size_t Claim(PacketConsumerId process_id) override {
+    std::size_t Claim(ProcessId process_id) override {
         if (m_owner_process_id == process_id) {
             return 0;
         }
@@ -30,7 +30,7 @@ public:
 
     std::size_t Release() override {
         const std::size_t discarded = ClearReceived();
-        m_owner_process_id = 0;
+        m_owner_process_id = ProcessId{};
         return discarded;
     }
 
@@ -61,7 +61,7 @@ public:
 
 private:
     wireguard::InnerPacketQueue<ReceiveCapacity> m_received{};
-    std::uint64_t m_owner_process_id{0};
+    ProcessId m_owner_process_id{};
 };
 
 } // namespace wgnx::sysmodule::runtime
