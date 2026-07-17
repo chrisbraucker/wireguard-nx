@@ -9,8 +9,15 @@
 namespace wgnx::wireguard {
 
 constexpr inline std::size_t MaxInnerIpv4PacketSize = 1500;
+constexpr inline std::size_t MaxInnerIpPacketSize = MaxInnerIpv4PacketSize;
 
-enum class InnerIpv4ValidationError : std::uint8_t {
+enum class InnerIpVersion : std::uint8_t {
+    Unknown = 0,
+    Ipv4 = 4,
+    Ipv6 = 6,
+};
+
+enum class InnerIpValidationError : std::uint8_t {
     None = 0,
     TooShort,
     TooLarge,
@@ -21,16 +28,27 @@ enum class InnerIpv4ValidationError : std::uint8_t {
     InvalidPadding,
 };
 
+using InnerIpv4ValidationError = InnerIpValidationError;
+
 InnerIpv4ValidationError ValidateInnerIpv4Packet(std::span<const std::uint8_t> packet);
 InnerIpv4ValidationError ValidatePaddedInnerIpv4Packet(
     std::span<const std::uint8_t> payload,
     std::size_t *out_packet_size);
-const char *GetInnerIpv4ValidationErrorName(InnerIpv4ValidationError error);
+InnerIpValidationError ValidateInnerIpPacket(
+    std::span<const std::uint8_t> packet,
+    InnerIpVersion *out_version = nullptr);
+InnerIpValidationError ValidatePaddedInnerIpPacket(
+    std::span<const std::uint8_t> payload,
+    std::size_t *out_packet_size,
+    InnerIpVersion *out_version = nullptr);
+const char *GetInnerIpValidationErrorName(InnerIpValidationError error);
+inline const char *GetInnerIpv4ValidationErrorName(InnerIpv4ValidationError error) {
+    return GetInnerIpValidationErrorName(error);
+}
 
 struct InnerPacketRecord {
-    std::array<std::uint8_t, MaxInnerIpv4PacketSize> bytes{};
+    std::array<std::uint8_t, MaxInnerIpPacketSize> bytes{};
     std::uint64_t packet_id{0};
-    std::uint64_t owner_process_id{0};
     std::uint32_t activation_generation{0};
     std::uint32_t peer_index{0};
     std::uint16_t size{0};

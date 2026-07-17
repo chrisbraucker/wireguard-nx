@@ -1,22 +1,25 @@
 #pragma once
 
-#include "wireguard/inner_packet.hpp"
+#include "runtime/packet_transport.hpp"
 
 #include <cstddef>
 #include <cstdint>
 
 namespace wgnx::sysmodule::runtime {
 
-class PacketChannel {
+class PacketChannel final : public PacketTransport {
 public:
     static constexpr std::size_t ReceiveCapacity = 8;
 
-    std::uint64_t OwnerProcessId() const { return m_owner_process_id; }
-    bool IsOwnedBy(std::uint64_t process_id) const {
+    PacketConsumerId ConsumerId() const override { return m_owner_process_id; }
+    bool AcceptsDelivery(wireguard::InnerIpVersion version) const override {
+        return version == wireguard::InnerIpVersion::Ipv4;
+    }
+    bool IsOwnedBy(PacketConsumerId process_id) const override {
         return m_owner_process_id != 0 && m_owner_process_id == process_id;
     }
 
-    std::size_t Claim(std::uint64_t process_id) {
+    std::size_t Claim(PacketConsumerId process_id) override {
         if (m_owner_process_id == process_id) {
             return 0;
         }
@@ -25,31 +28,24 @@ public:
         return discarded;
     }
 
-    std::size_t Release() {
+    std::size_t Release() override {
         const std::size_t discarded = ClearReceived();
         m_owner_process_id = 0;
         return discarded;
     }
 
-    std::uint64_t AllocatePacketId() {
-        const std::uint64_t packet_id = m_next_packet_id++;
-        if (m_next_packet_id == 0) {
-            m_next_packet_id = 1;
-        }
-        return packet_id;
-    }
-
-    wireguard::QueuePushResult PushReceived(const wireguard::InnerPacketRecord &record) {
+    wireguard::QueuePushResult PushReceived(
+        const wireguard::InnerPacketRecord &record) override {
         return m_received.Push(record);
     }
 
-    const wireguard::InnerPacketRecord *FrontReceived() const {
+    const wireguard::InnerPacketRecord *FrontReceived() const override {
         return m_received.Front();
     }
 
     bool PopReceived(
         wireguard::InnerPacketRecord *out,
-        wireguard::QueueDisposition disposition) {
+        wireguard::QueueDisposition disposition) override {
         return m_received.Pop(out, disposition);
     }
 
@@ -57,14 +53,15 @@ public:
         return m_received.Clear(wireguard::QueueDisposition::Cleared);
     }
 
-    std::size_t ReceivedSize() const { return m_received.Size(); }
-    constexpr std::size_t ReceivedCapacity() const { return ReceiveCapacity; }
-    const wireguard::QueueStatistics &Statistics() const { return m_received.Statistics(); }
+    std::size_t ReceivedSize() const override { return m_received.Size(); }
+    std::size_t ReceivedCapacity() const override { return ReceiveCapacity; }
+    const wireguard::QueueStatistics &Statistics() const override {
+        return m_received.Statistics();
+    }
 
 private:
     wireguard::InnerPacketQueue<ReceiveCapacity> m_received{};
     std::uint64_t m_owner_process_id{0};
-    std::uint64_t m_next_packet_id{1};
 };
 
 } // namespace wgnx::sysmodule::runtime

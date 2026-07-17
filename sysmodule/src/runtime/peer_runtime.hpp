@@ -53,7 +53,7 @@ struct PeerProtocolInfo {
 
 constexpr inline std::size_t MaxEncryptedDatagramSize =
     wgnx::wireguard::TransportDataHeaderSize +
-    wgnx::wireguard::GetPaddedTransportPayloadSize(wgnx::MaxInnerIpv4PacketSize) +
+    wgnx::wireguard::GetPaddedTransportPayloadSize(wgnx::wireguard::MaxInnerIpPacketSize) +
     wgnx::wireguard::NoiseMacSize;
 
 enum class PendingDatagramKind : std::uint8_t {
@@ -100,7 +100,7 @@ struct DecryptedPacketView {
 
 constexpr inline std::size_t MaxDecryptedPayloadSize =
     wgnx::wireguard::GetPaddedTransportPayloadSize(
-        wgnx::wireguard::MaxInnerIpv4PacketSize);
+        wgnx::wireguard::MaxInnerIpPacketSize);
 
 struct DecryptedPacketSlot {
     std::array<std::uint8_t, MaxDecryptedPayloadSize> bytes{};
@@ -206,6 +206,7 @@ private:
         wgnx::PeerErrorCode code,
         wgnx::platform::ktime_t now,
         EffectBatch *effects);
+    void FinalizeTimerEffects(EffectBatch &effects);
 
     PeerRuntimeInfo m_lifecycle{};
     std::uint32_t m_next_activation_generation{1};

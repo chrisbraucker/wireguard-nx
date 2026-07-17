@@ -10,9 +10,9 @@ IPC and WireGuard wire contracts remain unchanged; the separation is internal.
   sockets, queues, or lifecycle policy.
 - `runtime/daemon_runtime.cpp` owns the single state mutex and executes
   generation-checked platform effects. Its receive worker adapts outer UDP
-  datagrams into typed events and publishes peer-validated plaintext to the
-  development packet channel. Concrete timer scheduling, debug probes, and
-  auxiliary path observation remain transitional procedures for later chunks.
+  datagrams into typed events. CMIF packet commands and peer-validated
+  plaintext delegate to the packet data plane. Debug probes and auxiliary
+  path-observation policy remain transitional procedures for later chunks.
 - `runtime/peer_runtime.hpp` defines the fixed-capacity `PeerRegistry`. Each
   `PeerRuntime` slot is the structural owner of one peer's configuration,
   derived secrets, lifecycle and metrics state, UDP binding, protocol device,
@@ -30,14 +30,30 @@ IPC and WireGuard wire contracts remain unchanged; the separation is internal.
 - `runtime/endpoint_resolver.*` owns the bounded pending endpoint-resolution
   request. Resolution runs on its Horizon work queue and returns a typed,
   activation-tagged completion instead of mutating daemon-owned request state.
-- `runtime/horizon_dispatcher.*` owns Atmosphere work queues and concrete timer
-  objects. It captures timer tokens and delivers typed callbacks; it does not
-  decide protocol transitions.
+- `runtime/horizon_dispatcher.*` owns Atmosphere ordered work queues only. It
+  executes work supplied by runtime components and contains no timer or peer
+  policy.
+- `runtime/timer_scheduler.*` owns concrete Horizon protocol and auxiliary
+  timers. `runtime/timer_schedule.*` tracks bounded physical arm and queued
+  delivery state independently of Horizon. Expirations retain their complete
+  token until delivered through the coordinator; the scheduler contains no
+  peer policy. Arm and cancellation effects likewise retain the token allocated
+  under the runtime lock, preventing delayed platform work from changing a
+  newer physical schedule.
 - `runtime/udp_binding.*` is the move-only owner of one resolved endpoint and
   UDP socket lifetime. It also owns socket generation and suspension state.
-- `runtime/packet_channel.hpp` owns development packet-API PID identity,
-  receive queueing, and packet IDs. Peer-owned outbound staging remains in the
-  protocol peer.
+- `runtime/packet_transport.hpp` defines the protocol-neutral complete-IP
+  packet boundary. It does not expose CMIF types or contained IP protocols.
+- `runtime/packet_data_plane.*` owns IPv4/IPv6 envelope validation, active-peer
+  routing, packet IDs, consumer transfer, outbound submission, decrypted
+  packet delivery, receive staleness, and queue disposition. The public API v4
+  adapter intentionally retains its IPv4-only contract.
+- `runtime/packet_channel.hpp` implements `PacketTransport` for the development
+  CMIF packet API. Its explicit IPv4-only capability preserves the API v4
+  receive contract while future transports can accept IPv6. PID ownership and
+  the bounded receive queue end at this adapter; PID identity does not enter
+  peer events or WireGuard packet records. Peer-owned outbound staging remains
+  in the protocol peer.
 - `wireguard/peer_controller.*` owns platform-independent staged-send,
   handshake retry, initiator/responder session derivation, responder-session
   confirmation, and timer-token transitions. Each `PeerRuntime` owns one
@@ -92,10 +108,14 @@ measured contention, without weakening generation-checked commits.
 
 The host suite links the production `PeerRegistry`, `PeerRuntime`,
 `RuntimeCoordinator`, `EndpointResolver`, `UdpBinding`, `PeerController`,
-`TimerCoordinator`, and `PacketChannel`. Its 25 deterministic cases characterize
-selection, activation, lifecycle transitions, status projection, stale event
-rejection, bounded effects, generation matching, per-peer ownership, and the
-outbound send lifecycle. Its production-runtime recovery workflow drives:
+`TimerCoordinator`, `TimerSchedule`, `PacketDataPlane`, and `PacketChannel`.
+Its 27 deterministic cases characterize selection, activation, lifecycle
+transitions, status projection, stale event rejection, timer
+arming/replacement/cancellation, queued stale delivery,
+bounded effects, generation matching, per-peer ownership, packet IDs, PID
+consumer transfer, IPv4/IPv6 envelope handling, packet queue overflow and
+staleness, and the outbound send lifecycle. Its production-runtime recovery
+workflow drives:
 
 `stage -> 20 fresh unanswered sends -> exhaust/drop -> stage later packet ->
 fresh handshake -> derive session -> release packet`
@@ -108,8 +128,9 @@ authenticated transport -> promote next/preserve previous -> publish plaintext`
 It also verifies initiation admission, malformed input, transport replay,
 unknown receiver indices, and unauthenticated endpoint-roaming rejection.
 
-Horizon work-queue scheduling, synchronous timer cancellation, BSD socket
-lifetime, and real callback races remain on-device validation responsibilities.
+Horizon work-queue execution, synchronous platform timer cancellation, BSD
+socket lifetime, and real callback races remain on-device validation
+responsibilities.
 
 ## Stack Budget
 

@@ -68,7 +68,6 @@ struct InnerPacketStagedEvent {
     PeerIdentity peer{};
     std::span<const std::uint8_t> packet{};
     std::uint64_t packet_id{0};
-    std::uint64_t owner_process_id{0};
     wgnx::wireguard::TimerDeadline retry_deadline{};
     wgnx::platform::ktime_t occurred_at{0};
 };
@@ -82,6 +81,7 @@ struct ProcessOutboundQueueEvent {
 struct ProtocolTimerExpiredEvent {
     PeerIdentity peer{};
     wgnx::wireguard::TimerHook hook{wgnx::wireguard::TimerHook::RetransmitHandshake};
+    wgnx::wireguard::TimerToken token{};
     wgnx::wireguard::TimerDeadline retry_deadline{};
     wgnx::wireguard::TimerDeadline keepalive_deadline{};
     wgnx::wireguard::TimerDeadline zero_key_material_deadline{};
@@ -133,12 +133,14 @@ struct QueueReceiveEffect {
 struct ArmProtocolTimerEffect {
     PeerIdentity peer{};
     wgnx::wireguard::TimerHook hook{wgnx::wireguard::TimerHook::RetransmitHandshake};
+    wgnx::wireguard::TimerToken token{};
     wgnx::wireguard::TimerDeadline deadline{};
 };
 
 struct CancelProtocolTimerEffect {
     PeerIdentity peer{};
     wgnx::wireguard::TimerHook hook{wgnx::wireguard::TimerHook::RetransmitHandshake};
+    wgnx::wireguard::TimerToken token{};
 };
 
 struct SuspendUdpTransportEffect {
@@ -193,6 +195,8 @@ public:
     constexpr void Clear() { m_size = 0; }
     constexpr const RuntimeEffect *begin() const { return m_effects.data(); }
     constexpr const RuntimeEffect *end() const { return m_effects.data() + m_size; }
+    constexpr RuntimeEffect *begin() { return m_effects.data(); }
+    constexpr RuntimeEffect *end() { return m_effects.data() + m_size; }
 
 private:
     std::array<RuntimeEffect, Capacity> m_effects{};

@@ -28,7 +28,7 @@ struct TimerToken {
 class TimerCoordinator {
 public:
     TimerToken Arm(TimerHook hook, TimerOwner owner);
-    void Cancel(TimerHook hook);
+    TimerToken Cancel(TimerHook hook);
     void CancelAll();
     bool IsCurrent(const TimerToken &token, TimerOwner current_owner) const;
     bool IsArmed(TimerHook hook) const;

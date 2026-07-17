@@ -325,10 +325,12 @@ passes.
 
 ### Chunk 6: Extract Inbound Lifecycle
 
-**Status:** Implementation complete; corrected real-peer on-device regression
-pending. The first Chunk 6 target reached peer activation but overflowed the
-16 KiB resolver-worker stack during initial handshake logging. Target
-disassembly traced this to inbound publication logic being inlined into the
+**Status:** Complete. The corrected implementation passed a long-running
+real-peer session with eleven successful requester round trips, local timer
+rekeys, peer-initiated replacement handshakes, authenticated key promotion,
+and clean teardown. The first Chunk 6 target reached peer activation but
+overflowed the 16 KiB resolver-worker stack during initial handshake logging.
+Target disassembly traced this to inbound publication logic being inlined into the
 shared effect executor even though that effect was not active. Publication now
 crosses a dedicated non-inlined adapter, restoring the executor's pre-Chunk-6
 frame size without changing protocol behavior.
@@ -367,10 +369,23 @@ decisions, and decrypted-packet publication behind the peer boundary.
 **Definition of done:** `WireGuardUdpBind` owns outer UDP sockets and datagrams
 only; all protocol and key decisions are peer-owned; malformed, replayed, and
 stale-session packets are covered; bidirectional real-peer traffic still
-passes. The implementation and deterministic portions are complete; the final
-real-peer condition remains the next on-device gate.
+passes. The implementation, deterministic coverage, and real-peer condition
+are complete.
 
 ### Chunk 7: Formalize Scheduling
+
+**Status:** Complete. `TimerScheduler` now owns every concrete Horizon protocol and
+auxiliary timer, while `HorizonDispatcher` owns ordered work execution only. A
+platform-independent `TimerSchedule` captures physical arm, replacement,
+cancellation, and queued-delivery state. Protocol expirations carry their full
+peer, activation, retry-sequence, and arm-generation token into
+`RuntimeCoordinator`; `PeerRuntime` is the final stale-delivery authority and
+owns zero-key-material expiry policy. Timer arm and cancellation effects retain
+the token allocated under the coordinator lock, so delayed platform work cannot
+replace or cancel a newer generation. All 26 host and ASan/UBSan cases and the
+target build pass. A sustained on-device session completed repeated packet
+round trips across keepalive, local rekey, peer-initiated rekey, and clean
+activation teardown and restart cycles.
 
 Reduce `HorizonDispatcher` to work execution and move timer ownership behind
 `TimerScheduler`. Every expiration enters the coordinator as a typed event with
@@ -381,6 +396,18 @@ timer arming, replacement, cancellation, and stale delivery have deterministic
 coverage; real timer callbacks pass an on-device regression.
 
 ### Chunk 8: Extract The Packet Data Plane
+
+**Status:** Implementation complete; focused real-peer on-device regression
+pending. `PacketDataPlane` now owns IP-envelope validation, active-peer
+selection, packet-ID allocation, PID consumer transfer, outbound staging,
+decrypted-packet delivery, receive staleness, and queue retirement.
+`PacketTransport` is the protocol-neutral inner-packet boundary, with explicit
+IP-version capabilities and the bounded, IPv4-only `PacketChannel` as its
+current CMIF adapter. The public API v4 remains IPv4-only, while the internal
+data plane and decrypted protocol path validate complete IPv4 and IPv6 packets
+without inspecting their contained protocol. PID identity no longer crosses
+into peer events or WireGuard queue records.
+All 27 host and ASan/UBSan cases and the target build pass.
 
 Introduce `PacketTransport` as the generic inner IPv4/IPv6 packet boundary.
 Move inner-packet validation, active-peer routing, outbound submission, and
@@ -450,8 +477,9 @@ generation checks, packet view, and publication path. Generated target code
 measures 3,168 bytes for resolver work, 4,560 bytes for effect iteration, 2,544
 bytes for bind opening, and 192 bytes for the publication adapter. This removes
 1,584 bytes from the crashing activation chain and keeps publication-only
-locals out of unrelated effects. The corrected target still requires the next
-real-peer device pass.
+locals out of unrelated effects. The corrected target passed a sustained
+real-peer session with repeated packet traffic and both local and
+peer-initiated session rotation.
 
 Every chunk must pass:
 

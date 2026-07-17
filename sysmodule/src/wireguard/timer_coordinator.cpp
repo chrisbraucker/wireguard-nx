@@ -34,10 +34,12 @@ TimerToken TimerCoordinator::Arm(TimerHook hook, TimerOwner owner) {
     return state.token;
 }
 
-void TimerCoordinator::Cancel(TimerHook hook) {
+TimerToken TimerCoordinator::Cancel(TimerHook hook) {
     HookState &state = m_hooks[HookIndex(hook)];
+    const TimerToken canceled = state.armed ? state.token : TimerToken{};
     state = {};
     static_cast<void>(NextGeneration());
+    return canceled;
 }
 
 void TimerCoordinator::CancelAll() {

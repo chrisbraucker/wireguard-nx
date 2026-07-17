@@ -4,10 +4,12 @@
 #include "test_runtime.hpp"
 
 #include "runtime/packet_channel.hpp"
+#include "runtime/packet_data_plane.hpp"
 #include "runtime/endpoint_resolver.hpp"
 #include "runtime/peer_runtime.hpp"
 #include "runtime/runtime_coordinator.hpp"
 #include "runtime/runtime_contracts.hpp"
+#include "runtime/timer_schedule.hpp"
 #include "wireguard/data.hpp"
 #include "wireguard/device.hpp"
 #include "wireguard/handshake.hpp"
@@ -845,11 +847,10 @@ void TestPacketChannelOwnership(TestContext &context) {
     PacketChannel channel{};
     WGNX_TEST_REQUIRE(
         context,
-        channel.Claim(100) == 0 && channel.IsOwnedBy(100) &&
-            channel.AllocatePacketId() == 1 && channel.AllocatePacketId() == 2,
-        "packet channel did not establish ownership or monotonic packet IDs");
+        channel.Claim(100) == 0 && channel.IsOwnedBy(100),
+        "packet channel did not establish ownership");
 
-    InnerPacketRecord received{.packet_id = 3, .owner_process_id = 100};
+    InnerPacketRecord received{.packet_id = 3};
     WGNX_TEST_REQUIRE(
         context,
         channel.PushReceived(received) == QueuePushResult::Pushed &&
@@ -863,8 +864,150 @@ void TestPacketChannelOwnership(TestContext &context) {
         "packet channel ownership transfer retained the previous consumer's packets");
     WGNX_TEST_REQUIRE(
         context,
-        channel.Release() == 0 && channel.OwnerProcessId() == 0,
+        channel.Release() == 0 && channel.ConsumerId() == 0,
         "packet channel release retained its consumer identity");
+}
+
+void TestPacketDataPlane(TestContext &context) {
+    using namespace wgnx::sysmodule::runtime;
+    using namespace wgnx::wireguard;
+
+    runtime::Reset(InitialRuntimeState);
+    std::array<wgnx::PeerConfigEntry, 1> configured{};
+    FillConfig(
+        &configured[0],
+        "data-plane",
+        "10.66.66.2/32",
+        InitiatorPrivateKey,
+        ResponderPublicKey);
+    PeerRegistry registry{};
+    WGNX_TEST_REQUIRE(
+        context,
+        registry.Assign(configured) && registry.SetActivePeerIndex(0),
+        "packet data plane registry initialization failed");
+    auto &peer = registry[0];
+    WGNX_TEST_REQUIRE(
+        context,
+        wg_device_init_from_config_entry(&peer.protocol.device, peer.config),
+        "packet data plane protocol initialization failed");
+    peer.protocol.instantiated = true;
+    WGNX_TEST_REQUIRE(
+        context,
+        peer.BeginActivation(1'000) == 1 && peer.EnterHandshaking(1, 2'000),
+        "packet data plane lifecycle initialization failed");
+
+    RuntimeCoordinator coordinator{registry};
+    PacketChannel channel{};
+    PacketDataPlane data_plane{registry, coordinator, channel};
+    EffectBatch effects{};
+    constexpr std::array<std::uint8_t, 20> Ipv4Packet = {
+        0x45, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00, 0x00, 0x40, 0x11,
+        0xE2, 0x52, 0x0A, 0x42, 0x42, 0x02, 0x0A, 0x42, 0x42, 0x01,
+    };
+    constexpr std::array<std::uint8_t, 40> Ipv6Packet = {
+        0x60, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFD, 0x40,
+        0x20, 0x01, 0x0D, 0xB8, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
+        0x20, 0x01, 0x0D, 0xB8, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+    };
+    const PeerIdentity identity{.peer_index = 0, .activation_generation = 1};
+    const auto retry_deadline = TimerDeadlineFromJiffies(500);
+
+    const auto first = data_plane.SubmitIpv4Packet(
+        Ipv4Packet,
+        100,
+        retry_deadline,
+        3'000,
+        effects);
+    WGNX_TEST_REQUIRE(
+        context,
+        first.status == PacketSubmissionStatus::Queued && first.packet_id == 1 &&
+            first.peer == identity && first.ownership_transferred &&
+            channel.IsOwnedBy(100) && peer.StagedInnerPacketCount() == 1,
+        "packet data plane did not claim and route the first IPv4 packet");
+
+    const auto ipv4_only = data_plane.SubmitIpv4Packet(
+        Ipv6Packet,
+        100,
+        retry_deadline,
+        3'100,
+        effects);
+    const auto generic = data_plane.SubmitIpPacket(
+        Ipv6Packet,
+        100,
+        retry_deadline,
+        3'200,
+        effects);
+    WGNX_TEST_REQUIRE(
+        context,
+        ipv4_only.status == PacketSubmissionStatus::MalformedPacket &&
+            ipv4_only.validation == InnerIpv4ValidationError::InvalidVersion &&
+            generic.status == PacketSubmissionStatus::Queued && generic.packet_id == 2 &&
+            peer.StagedInnerPacketCount() == 2,
+        "packet data plane did not preserve IPv4 IPC policy over the generic IP boundary");
+
+    const auto unsupported = data_plane.DeliverDecryptedPacket(identity, Ipv6Packet);
+    const auto delivered = data_plane.DeliverDecryptedPacket(identity, Ipv4Packet);
+    std::array<std::uint8_t, MaxInnerIpPacketSize> output{};
+    const auto denied = data_plane.ReceivePacket(output, 101);
+    const auto too_small = data_plane.ReceivePacket(
+        std::span<std::uint8_t>(output).first(Ipv4Packet.size() - 1),
+        100);
+    const auto received = data_plane.ReceivePacket(output, 100);
+    WGNX_TEST_REQUIRE(
+        context,
+        unsupported.status == PacketDeliveryStatus::UnsupportedPacket &&
+            unsupported.version == InnerIpVersion::Ipv6 &&
+            delivered.status == PacketDeliveryStatus::Queued && delivered.packet_id == 3 &&
+            denied.status == PacketReceiveStatus::AccessDenied &&
+            too_small.status == PacketReceiveStatus::OutputBufferTooSmall &&
+            received.status == PacketReceiveStatus::Success &&
+            received.packet_id == delivered.packet_id &&
+            std::equal(Ipv4Packet.begin(), Ipv4Packet.end(), output.begin()),
+        "packet data plane delivery lost adapter capability, PID ownership, capacity, or bytes");
+
+    for (std::size_t index = 0; index < PacketChannel::ReceiveCapacity; ++index) {
+        WGNX_TEST_REQUIRE(
+            context,
+            data_plane.DeliverDecryptedPacket(identity, Ipv4Packet).status ==
+                PacketDeliveryStatus::Queued,
+            "packet data plane receive queue filled before its declared capacity");
+    }
+    const auto overflow = data_plane.DeliverDecryptedPacket(identity, Ipv4Packet);
+    WGNX_TEST_REQUIRE(
+        context,
+        overflow.status == PacketDeliveryStatus::QueueFull &&
+            overflow.queue_depth == PacketChannel::ReceiveCapacity &&
+            channel.Statistics().rejected_full == 1,
+        "packet data plane did not retain reject-new receive overflow behavior");
+
+    const auto transfer = data_plane.SubmitIpPacket(
+        Ipv6Packet,
+        200,
+        retry_deadline,
+        4'000,
+        effects);
+    WGNX_TEST_REQUIRE(
+        context,
+        transfer.status == PacketSubmissionStatus::Queued &&
+            transfer.ownership_transferred && transfer.discarded_outbound == 2 &&
+            transfer.discarded_inbound == PacketChannel::ReceiveCapacity &&
+            channel.IsOwnedBy(200) && channel.ReceivedSize() == 0,
+        "packet data plane ownership transfer did not clear both traffic directions");
+
+    const auto stale_packet = data_plane.DeliverDecryptedPacket(identity, Ipv4Packet);
+    WGNX_TEST_REQUIRE(
+        context,
+        stale_packet.status == PacketDeliveryStatus::Queued &&
+            registry.SetActivePeerIndex(-1),
+        "packet data plane stale-delivery setup failed");
+    const auto stale = data_plane.ReceivePacket(output, 200);
+    WGNX_TEST_REQUIRE(
+        context,
+        stale.status == PacketReceiveStatus::StaleActivation &&
+            channel.Statistics().stale == 1 && channel.ReceivedSize() == 0,
+        "packet data plane did not reject a queued packet from a stale activation");
 }
 
 void TestRuntimeContracts(TestContext &context) {
@@ -1367,18 +1510,46 @@ void TestRuntimeOutboundLifecycle(TestContext &context) {
         .peer = identity,
         .packet = FirstPacket,
         .packet_id = 61,
-        .owner_process_id = 7,
         .retry_deadline = retry_deadline,
         .occurred_at = 3'000,
     });
-    auto *send = effects.Size() > 1
+    const auto *send = effects.Size() > 1
         ? std::get_if<SendPendingDatagramEffect>(effects.begin() + 1)
+        : nullptr;
+    const auto *initial_arm = effects.Size() > 0
+        ? std::get_if<ArmProtocolTimerEffect>(effects.begin())
         : nullptr;
     WGNX_TEST_REQUIRE(
         context,
-        effects.Size() == 2 && send != nullptr &&
+        effects.Size() == 2 && initial_arm != nullptr &&
+            initial_arm->token.IsValid() && send != nullptr &&
             runtime_peer.StagedInnerPacketCount() == 1,
         "staged packet did not start the production handshake path");
+
+    const auto stale_timer_token = initial_arm->token;
+    auto timer_token = runtime_peer.controller.Timers().Arm(
+        TimerHook::RetransmitHandshake,
+        stale_timer_token.owner);
+    const auto stale_timer_effects = coordinator.Dispatch(ProtocolTimerExpiredEvent{
+        .peer = identity,
+        .hook = TimerHook::RetransmitHandshake,
+        .token = stale_timer_token,
+        .retry_deadline = retry_deadline,
+        .zero_key_material_deadline = TimerDeadlineFromJiffies(5'000),
+        .occurred_at = 3'500,
+    });
+    const TimerOwner current_timer_owner{
+        .peer_index = identity.peer_index,
+        .activation_generation = identity.activation_generation,
+        .protocol_sequence = timer_token.owner.protocol_sequence,
+    };
+    WGNX_TEST_REQUIRE(
+        context,
+        stale_timer_effects.Empty() &&
+            runtime_peer.controller.Timers().IsCurrent(
+                timer_token,
+                current_timer_owner),
+        "stale queued timer delivery mutated the peer runtime");
 
     PendingDatagramSnapshot snapshot{};
     constexpr std::uint32_t MaxSendAttempts = MaxTimerHandshakes + 2;
@@ -1407,6 +1578,7 @@ void TestRuntimeOutboundLifecycle(TestContext &context) {
         effects = coordinator.Dispatch(ProtocolTimerExpiredEvent{
             .peer = identity,
             .hook = TimerHook::RetransmitHandshake,
+            .token = timer_token,
             .retry_deadline = retry_deadline,
             .zero_key_material_deadline = TimerDeadlineFromJiffies(5'000),
             .occurred_at = 5'000 + attempt,
@@ -1414,18 +1586,23 @@ void TestRuntimeOutboundLifecycle(TestContext &context) {
         send = effects.Size() > 2
             ? std::get_if<SendPendingDatagramEffect>(effects.begin() + 2)
             : nullptr;
+        const auto *retry_arm = effects.Size() > 1
+            ? std::get_if<ArmProtocolTimerEffect>(effects.begin() + 1)
+            : nullptr;
         WGNX_TEST_REQUIRE(
             context,
             effects.Size() == 3 &&
                 std::get_if<CancelProtocolTimerEffect>(effects.begin()) != nullptr &&
-                std::get_if<ArmProtocolTimerEffect>(effects.begin() + 1) != nullptr &&
+                retry_arm != nullptr && retry_arm->token.IsValid() &&
                 send != nullptr,
             "runtime retry expiration did not request a fresh initiation");
+        timer_token = retry_arm->token;
     }
 
     effects = coordinator.Dispatch(ProtocolTimerExpiredEvent{
         .peer = identity,
         .hook = TimerHook::RetransmitHandshake,
+        .token = timer_token,
         .retry_deadline = retry_deadline,
         .zero_key_material_deadline = TimerDeadlineFromJiffies(5'000),
         .occurred_at = 7'000,
@@ -1446,7 +1623,6 @@ void TestRuntimeOutboundLifecycle(TestContext &context) {
         .peer = identity,
         .packet = RecoveryPacket,
         .packet_id = 62,
-        .owner_process_id = 7,
         .retry_deadline = retry_deadline,
         .occurred_at = 8'000,
     });
@@ -1838,6 +2014,74 @@ void TestTimerCoordinator(TestContext &context) {
         context,
         !coordinator.IsCurrent(retry, next_sequence),
         "retry timer token crossed a handshake-sequence boundary");
+}
+
+void TestTimerSchedule(TestContext &context) {
+    using namespace wgnx::sysmodule::runtime;
+    using namespace wgnx::wireguard;
+
+    TimerCoordinator coordinator{};
+    TimerSchedule schedule{};
+    const TimerOwner owner{
+        .peer_index = 2,
+        .activation_generation = 9,
+        .protocol_sequence = 4,
+    };
+    const TimerToken first = coordinator.Arm(TimerHook::RetransmitHandshake, owner);
+    const auto first_deadline = TimerDeadlineFromJiffies(100);
+    WGNX_TEST_REQUIRE(
+        context,
+        schedule.Arm(first, first_deadline) &&
+            schedule.IsArmed(TimerHook::RetransmitHandshake) &&
+            schedule.ArmedToken(TimerHook::RetransmitHandshake) == first &&
+            schedule.Deadline(TimerHook::RetransmitHandshake) == first_deadline,
+        "timer schedule did not retain an armed token and deadline");
+
+    const TimerToken replacement = coordinator.Arm(
+        TimerHook::RetransmitHandshake,
+        owner);
+    const auto replacement_deadline = TimerDeadlineFromJiffies(200);
+    WGNX_TEST_REQUIRE(
+        context,
+        schedule.Arm(replacement, replacement_deadline) &&
+            schedule.ArmedToken(TimerHook::RetransmitHandshake) == replacement &&
+            schedule.Deadline(TimerHook::RetransmitHandshake) == replacement_deadline,
+        "timer schedule replacement retained stale armed state");
+
+    WGNX_TEST_REQUIRE(
+        context,
+        schedule.CaptureExpiration(TimerHook::RetransmitHandshake) &&
+            !schedule.IsArmed(TimerHook::RetransmitHandshake),
+        "timer expiration did not consume the physical arm");
+    const TimerToken queued = schedule.TakeDelivery(TimerHook::RetransmitHandshake);
+    WGNX_TEST_REQUIRE(
+        context,
+        queued == replacement && coordinator.IsCurrent(queued, owner) &&
+            !schedule.TakeDelivery(TimerHook::RetransmitHandshake).IsValid(),
+        "timer delivery did not preserve the captured generation");
+
+    const TimerToken stale_queued = replacement;
+    const TimerToken current = coordinator.Arm(TimerHook::RetransmitHandshake, owner);
+    WGNX_TEST_REQUIRE(
+        context,
+        schedule.Arm(current, TimerDeadlineFromJiffies(300)) &&
+            !coordinator.IsCurrent(stale_queued, owner) &&
+            !schedule.Cancel(stale_queued) &&
+            schedule.IsArmed(TimerHook::RetransmitHandshake) &&
+            schedule.Cancel(current),
+        "timer replacement did not make a queued delivery stale");
+    WGNX_TEST_REQUIRE(
+        context,
+        !schedule.IsArmed(TimerHook::RetransmitHandshake) &&
+            !schedule.ArmedToken(TimerHook::RetransmitHandshake).IsValid() &&
+            schedule.Deadline(TimerHook::RetransmitHandshake) == TimerDeadline{},
+        "timer cancellation retained physical schedule state");
+
+    WGNX_TEST_REQUIRE(
+        context,
+        !schedule.Arm({}, TimerDeadlineFromJiffies(400)) &&
+            !schedule.CaptureExpiration(TimerHook::SendKeepalive),
+        "timer schedule accepted invalid or unarmed work");
 }
 
 void TestPeerControllerSendPolicy(TestContext &context) {
