@@ -14,6 +14,7 @@ void TestKeypairLifetime(TestContext &context);
 void TestBoundedQueueObservability(TestContext &context);
 void TestPacketChannelOwnership(TestContext &context);
 void TestPacketDataPlane(TestContext &context);
+void TestAuxiliaryRuntimeWorkflows(TestContext &context);
 void TestRuntimeContracts(TestContext &context);
 void TestPeerRegistryOwnership(TestContext &context);
 void TestPeerRuntimeLifecycle(TestContext &context);

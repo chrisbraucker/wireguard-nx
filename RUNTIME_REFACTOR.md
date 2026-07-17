@@ -397,8 +397,7 @@ coverage; real timer callbacks pass an on-device regression.
 
 ### Chunk 8: Extract The Packet Data Plane
 
-**Status:** Implementation complete; focused real-peer on-device regression
-pending. `PacketDataPlane` now owns IP-envelope validation, active-peer
+**Status:** Complete. `PacketDataPlane` now owns IP-envelope validation, active-peer
 selection, packet-ID allocation, PID consumer transfer, outbound staging,
 decrypted-packet delivery, receive staleness, and queue retirement.
 `PacketTransport` is the protocol-neutral inner-packet boundary, with explicit
@@ -407,7 +406,9 @@ current CMIF adapter. The public API v4 remains IPv4-only, while the internal
 data plane and decrypted protocol path validate complete IPv4 and IPv6 packets
 without inspecting their contained protocol. PID identity no longer crosses
 into peer events or WireGuard queue records.
-All 27 host and ASan/UBSan cases and the target build pass.
+All host and ASan/UBSan cases and the target build pass. Five consecutive
+requester processes completed against a real peer across a peer stop/start
+cycle, with monotonic packet IDs, clean ownership transfer, and no queue loss.
 
 Introduce `PacketTransport` as the generic inner IPv4/IPv6 packet boundary.
 Move inner-packet validation, active-peer routing, outbound submission, and
@@ -423,6 +424,16 @@ coverage.
 
 ### Chunk 9: Separate Auxiliary Workflows
 
+**Status:** Implementation complete; focused on-device regression pending.
+`DebugProbeRunner` now owns probe commands, status, packet construction, reply
+classification, and timeout state without mutating `PeerRuntime`.
+`NetworkPathObserver` owns observation sequencing and path-fingerprint state,
+while the Horizon adapter returns a stateless snapshot. `PeerConfigurationLoader`
+derives move-only key material and scrubs encoded secrets before configuration
+is assigned to live peers. Synthetic traffic enters through the internal
+producer side of `PacketDataPlane`, so it neither bypasses the data plane nor
+claims the CMIF packet consumer.
+
 Move synthetic ICMP, HTTP, and other probe behavior into `DebugProbeRunner`.
 Isolate NIFM observation and future rebinding policy. Separate configuration
 loading and secret derivation from live peer mutation.
@@ -432,6 +443,16 @@ and events instead of touching peer internals; disabling development probes does
 not alter the production tunnel lifecycle.
 
 ### Chunk 10: Collapse The Facade
+
+**Status:** Implementation and local verification complete; focused on-device
+regression pending. One `DaemonRuntime` instance now owns and composes the peer
+registry, coordinator, platform services, packet plane, auxiliary workflows,
+scratch storage, and bounded request owners. CMIF-facing free functions are
+narrow compatibility adapters. The last ad hoc bind-bump request was replaced
+by `UdpRebindQueue`; no independent daemon-state globals or daemon-owned
+pending-request records remain. Deactivation and fatal transport failure now
+enter `PeerRuntime` as typed events, removing the last facade-owned protocol
+reset and key-scrubbing procedures.
 
 Replace free-function access to hidden globals with an actual `DaemonRuntime`
 instance. Remove migration adapters, daemon-owned pending-request structures,
@@ -489,6 +510,36 @@ Every chunk must pass:
 - `git diff --check`
 - review that `common/include/wgnx/protocol.hpp` and the CMIF contract remain
   unchanged unless an API change is intentional
+
+The final local gate contains 28 deterministic host cases, the same 28 cases
+under ASan/UBSan, the devkitA64 target build, the 8 KiB frame guard, and
+`git diff --check`. IPC API v4 and `common/include/wgnx/protocol.hpp` are
+unchanged.
+
+## Footprint Comparison
+
+The target was rebuilt with the same toolchain and linked Atmosphere library at
+three points. GNU `size` reports loadable code/read-only data as `text`, writable
+initialized storage as `data`, and zero-initialized static storage as `bss`.
+The sum is a static image indicator, not total Horizon process memory: thread
+stacks, allocator state, service sessions, and runtime mappings require an
+on-device measurement.
+
+| Build | Text | Data | BSS | Static total | NSO |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Pre-refactor `862ef32` | 282,258 | 205,608 | 504,016 | 991,882 | 192,616 |
+| After Chunk 8 `6650af9` | 295,330 | 242,600 | 508,112 | 1,046,042 | 202,431 |
+| After Chunk 10 | 295,722 | 50,088 | 712,912 | 1,058,722 | 201,824 |
+
+The data-to-BSS shift after Chunk 8 is caused primarily by composing prior
+independent globals into the zero-initialized `DaemonRuntime`; compare
+`data + bss`, not either column alone. The complete refactor adds 66,840 bytes
+of static image footprint over `862ef32`. Chunks 9 and 10 add 12,680 bytes over
+Chunk 8, while the compressed NSO decreases by 607 bytes. The fixed 304 KiB BSD
+socket arena, 96 KiB workqueue-slot pool, and 16 KiB main-thread stack are
+unchanged. The final composed daemon object is 209,392 bytes, replacing the
+separate peer state, packet channel, scheduler, dispatcher, resolver, and
+receive scratch globals.
 
 Run focused on-device regressions after chunks 4, 5, 6, 7, and 10. At minimum,
 these runs should cover tunnel activation against a known-good peer, repeated

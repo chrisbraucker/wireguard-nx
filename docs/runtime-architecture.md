@@ -8,11 +8,11 @@ IPC and WireGuard wire contracts remain unchanged; the separation is internal.
 - `ipc_service.cpp` adapts CMIF buffers and process IDs to typed runtime
   operations and owns service registration. It does not own peer state,
   sockets, queues, or lifecycle policy.
-- `runtime/daemon_runtime.cpp` owns the single state mutex and executes
-  generation-checked platform effects. Its receive worker adapts outer UDP
-  datagrams into typed events. CMIF packet commands and peer-validated
-  plaintext delegate to the packet data plane. Debug probes and auxiliary
-  path-observation policy remain transitional procedures for later chunks.
+- `runtime/daemon_runtime.cpp` composes one `DaemonRuntime` instance. It owns
+  the single state mutex, routes external commands, aggregates status, and
+  coordinates generation-checked platform effects. CMIF-facing free functions
+  are narrow adapters to that instance; no peer, packet, timer, probe, or
+  pending-request state exists in independent daemon globals.
 - `runtime/peer_runtime.hpp` defines the fixed-capacity `PeerRegistry`. Each
   `PeerRuntime` slot is the structural owner of one peer's configuration,
   derived secrets, lifecycle and metrics state, UDP binding, protocol device,
@@ -23,10 +23,10 @@ IPC and WireGuard wire contracts remain unchanged; the separation is internal.
   events and effects never carry owned packet buffers.
 - `runtime/runtime_events.hpp` defines the closed event/effect vocabulary and
   bounded effect storage. `runtime/runtime_coordinator.*` resolves event peer
-  identity and dispatches into `PeerRuntime`. Activation, endpoint and bind
-  completion, outbound packet staging, send completion, encrypted datagram
-  receipt, protocol timer expiry, transport rebound, and decrypted-packet
-  publication use this path.
+identity and dispatches into `PeerRuntime`. Activation, endpoint and bind
+completion, outbound packet staging, send completion, encrypted datagram
+receipt, protocol timer expiry, transport rebound, fatal transport failure,
+deactivation, and decrypted-packet publication use this path.
 - `runtime/endpoint_resolver.*` owns the bounded pending endpoint-resolution
   request. Resolution runs on its Horizon work queue and returns a typed,
   activation-tagged completion instead of mutating daemon-owned request state.
@@ -54,6 +54,20 @@ IPC and WireGuard wire contracts remain unchanged; the separation is internal.
   the bounded receive queue end at this adapter; PID identity does not enter
   peer events or WireGuard packet records. Peer-owned outbound staging remains
   in the protocol peer.
+- `runtime/debug_probe_runner.*` owns synthetic probe commands, status, packet
+  construction, reply classification, and timeout state. It submits through
+  the internal-producer side of `PacketDataPlane`, preserving the CMIF packet
+  consumer while using the same peer staging and effect path.
+- `runtime/network_path_observer.*` owns NIFM observation sequencing and
+  fingerprint comparison. The Horizon UDP adapter produces a stateless
+  `NetworkPathSnapshot`; observation remains policy-free and cannot mutate a
+  peer or trigger rebinding.
+- `runtime/peer_configuration.*` loads a configuration snapshot, derives
+  move-only private and preshared key material before peer assignment, resolves
+  the autostart selection, and scrubs encoded secret fields.
+- `runtime/udp_binding.hpp` also defines the bounded single-item
+  `UdpRebindQueue`, which owns manual path-transition requests until the
+  receive worker can safely replace the socket.
 - `wireguard/peer_controller.*` owns platform-independent staged-send,
   handshake retry, initiator/responder session derivation, responder-session
   confirmation, and timer-token transitions. Each `PeerRuntime` owns one
@@ -69,7 +83,7 @@ endpoint or authenticated byte counters.
 
 ## Concurrency Rule
 
-The daemon keeps one state mutex during this refactor. Blocking endpoint
+The daemon keeps one state mutex. Blocking endpoint
 resolution, UDP socket opening and sends, and UDP receive use the established
 three-step pattern:
 
@@ -100,16 +114,17 @@ socket read and are never retained through the scratch view. The non-inlined
 commit boundary returns before the static batch enters effect execution, so its
 frame cannot accumulate with UDP send effects.
 
-The single mutex is intentionally retained until on-device regression testing
-confirms this ownership refactor. Narrower locks can be considered later from
+The single mutex is intentionally retained through the first post-refactor
+on-device regression. Narrower locks can be considered later from
 measured contention, without weakening generation-checked commits.
 
 ## Test Boundary
 
 The host suite links the production `PeerRegistry`, `PeerRuntime`,
 `RuntimeCoordinator`, `EndpointResolver`, `UdpBinding`, `PeerController`,
-`TimerCoordinator`, `TimerSchedule`, `PacketDataPlane`, and `PacketChannel`.
-Its 27 deterministic cases characterize selection, activation, lifecycle
+`TimerCoordinator`, `TimerSchedule`, `PacketDataPlane`, `PacketChannel`,
+`DebugProbeRunner`, `NetworkPathObserver`, and `UdpRebindQueue`.
+Its 28 deterministic cases characterize selection, activation, lifecycle
 transitions, status projection, stale event rejection, timer
 arming/replacement/cancellation, queued stale delivery,
 bounded effects, generation matching, per-peer ownership, packet IDs, PID

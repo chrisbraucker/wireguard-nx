@@ -8,6 +8,39 @@
 
 namespace wgnx::sysmodule::runtime {
 
+struct UdpRebindRequest {
+    std::size_t peer_index{0};
+    std::uint32_t activation_generation{0};
+};
+
+class UdpRebindQueue {
+public:
+    bool Queue(const UdpRebindRequest &request) {
+        const bool scheduled = !m_pending;
+        m_request = request;
+        m_pending = true;
+        return scheduled;
+    }
+
+    bool Take(UdpRebindRequest &out) {
+        if (!m_pending) {
+            return false;
+        }
+        out = m_request;
+        m_pending = false;
+        return true;
+    }
+
+    bool IsPending(const UdpRebindRequest &request) const {
+        return m_pending && m_request.peer_index == request.peer_index &&
+               m_request.activation_generation == request.activation_generation;
+    }
+
+private:
+    UdpRebindRequest m_request{};
+    bool m_pending{false};
+};
+
 class UdpBinding {
 public:
     constexpr UdpBinding() = default;

@@ -20,6 +20,7 @@ PacketSubmissionOutcome PacketDataPlane::SubmitIpPacket(
         retry_deadline,
         occurred_at,
         wireguard::ValidateInnerIpPacket(packet),
+        true,
         out_effects);
 }
 
@@ -35,6 +36,22 @@ PacketSubmissionOutcome PacketDataPlane::SubmitIpv4Packet(
         retry_deadline,
         occurred_at,
         wireguard::ValidateInnerIpv4Packet(packet),
+        true,
+        out_effects);
+}
+
+PacketSubmissionOutcome PacketDataPlane::SubmitInternalIpPacket(
+    std::span<const std::uint8_t> packet,
+    wireguard::TimerDeadline retry_deadline,
+    wgnx::platform::ktime_t occurred_at,
+    EffectBatch &out_effects) {
+    return SubmitValidatedPacket(
+        packet,
+        0,
+        retry_deadline,
+        occurred_at,
+        wireguard::ValidateInnerIpPacket(packet),
+        false,
         out_effects);
 }
 
@@ -44,6 +61,7 @@ PacketSubmissionOutcome PacketDataPlane::SubmitValidatedPacket(
     wireguard::TimerDeadline retry_deadline,
     wgnx::platform::ktime_t occurred_at,
     wireguard::InnerIpValidationError validation,
+    bool claim_transport,
     EffectBatch &out_effects) {
     out_effects.Clear();
     PacketSubmissionOutcome outcome{
@@ -76,7 +94,7 @@ PacketSubmissionOutcome PacketDataPlane::SubmitValidatedPacket(
         return outcome;
     }
 
-    if (!m_transport.IsOwnedBy(consumer_id)) {
+    if (claim_transport && !m_transport.IsOwnedBy(consumer_id)) {
         if (!peer.protocol.instantiated) {
             return outcome;
         }

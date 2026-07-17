@@ -99,6 +99,11 @@ public:
         wireguard::TimerDeadline retry_deadline,
         wgnx::platform::ktime_t occurred_at,
         EffectBatch &out_effects);
+    PacketSubmissionOutcome SubmitInternalIpPacket(
+        std::span<const std::uint8_t> packet,
+        wireguard::TimerDeadline retry_deadline,
+        wgnx::platform::ktime_t occurred_at,
+        EffectBatch &out_effects);
 
     PacketDeliveryOutcome DeliverDecryptedPacket(
         const PeerIdentity &peer,
@@ -115,6 +120,7 @@ private:
         wireguard::TimerDeadline retry_deadline,
         wgnx::platform::ktime_t occurred_at,
         wireguard::InnerIpValidationError validation,
+        bool claim_transport,
         EffectBatch &out_effects);
     std::uint64_t AllocatePacketId();
 

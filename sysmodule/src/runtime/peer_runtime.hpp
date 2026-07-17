@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <utility>
 
 namespace wgnx::sysmodule::runtime {
 
@@ -38,11 +39,8 @@ struct PeerRuntimeInfo {
     wgnx::platform::ktime_t last_handshake_ns{0};
     wgnx::platform::ktime_t last_rx_ns{0};
     wgnx::platform::ktime_t last_tx_ns{0};
-    wgnx::platform::ktime_t debug_probe_state_changed_ns{0};
     std::uint64_t rx_bytes{0};
     std::uint64_t tx_bytes{0};
-    wgnx::DebugTriggerAction debug_probe_action{wgnx::DebugTriggerAction::None};
-    wgnx::DebugProbeStatus debug_probe_status{wgnx::DebugProbeStatus::None};
     bool established{false};
 };
 
@@ -128,11 +126,6 @@ public:
 
     void RecordReceivedBytes(std::size_t byte_count, wgnx::platform::ktime_t now);
     void RecordTransmittedBytes(std::size_t byte_count, wgnx::platform::ktime_t now);
-    bool SetDebugProbeState(
-        wgnx::DebugTriggerAction action,
-        wgnx::DebugProbeStatus status,
-        wgnx::platform::ktime_t now);
-    void ClearDebugProbeState();
 
     wgnx::PeerInfo BuildInfo(
         wgnx::platform::ktime_t now,
@@ -224,8 +217,11 @@ public:
     constexpr std::uint32_t Count() const { return m_count; }
     constexpr bool Empty() const { return m_count == 0; }
 
-    bool Assign(std::span<const wgnx::PeerConfigEntry> configured_peers) {
-        if (configured_peers.size() > m_peers.size()) {
+    bool Assign(
+        std::span<const wgnx::PeerConfigEntry> configured_peers,
+        std::span<PeerConfigDerivedInfo> derived = {}) {
+        if (configured_peers.size() > m_peers.size() ||
+            (!derived.empty() && derived.size() != configured_peers.size())) {
             return false;
         }
 
@@ -233,6 +229,9 @@ public:
         for (std::size_t index = 0; index < configured_peers.size(); ++index) {
             m_peers[index].SetPeerIndex(static_cast<std::uint32_t>(index));
             m_peers[index].config = configured_peers[index];
+            if (!derived.empty()) {
+                m_peers[index].derived = std::move(derived[index]);
+            }
         }
         m_active_peer_index = -1;
         m_auto_start_peer_index = -1;

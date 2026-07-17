@@ -28,6 +28,18 @@ struct ActivationRequestedEvent {
     wgnx::platform::ktime_t occurred_at{0};
 };
 
+struct DeactivationRequestedEvent {
+    PeerIdentity peer{};
+    wgnx::platform::ktime_t occurred_at{0};
+};
+
+struct TransportFailureEvent {
+    PeerIdentity peer{};
+    wgnx::PeerErrorStage stage{wgnx::PeerErrorStage::Transport};
+    wgnx::PeerErrorCode code{wgnx::PeerErrorCode::TransportReceiveFailed};
+    wgnx::platform::ktime_t occurred_at{0};
+};
+
 struct EndpointResolvedEvent {
     PeerIdentity peer{};
     wgnx::platform::endpoint_resolution_result result{};
@@ -96,6 +108,8 @@ struct TransportReboundEvent {
 
 using PeerEvent = std::variant<
     ActivationRequestedEvent,
+    DeactivationRequestedEvent,
+    TransportFailureEvent,
     EndpointResolvedEvent,
     UdpBindOpenedEvent,
     EncryptedDatagramReceivedEvent,

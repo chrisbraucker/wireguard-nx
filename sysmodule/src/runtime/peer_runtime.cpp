@@ -1,6 +1,5 @@
 #include "runtime/peer_runtime.hpp"
 
-#include "wireguard/debug_probe.hpp"
 #include "wireguard/handshake.hpp"
 #include "wireguard/messages.hpp"
 
@@ -120,7 +119,6 @@ void PeerRuntime::EnterError(
     m_lifecycle.last_error_code = static_cast<std::uint32_t>(code);
     m_lifecycle.state_ticks = 0;
     m_lifecycle.established = false;
-    ClearDebugProbeState();
     m_lifecycle.state_changed_ns = now;
 }
 
@@ -867,24 +865,6 @@ void PeerRuntime::RecordTransmittedBytes(
     m_lifecycle.last_tx_ns = now;
 }
 
-bool PeerRuntime::SetDebugProbeState(
-    wgnx::DebugTriggerAction action,
-    wgnx::DebugProbeStatus status,
-    wgnx::platform::ktime_t now) {
-    const bool valid_transition =
-        wgnx::wireguard::CanTransitionDebugProbeStatus(m_lifecycle.debug_probe_status, status);
-    m_lifecycle.debug_probe_action = action;
-    m_lifecycle.debug_probe_status = status;
-    m_lifecycle.debug_probe_state_changed_ns = now;
-    return valid_transition;
-}
-
-void PeerRuntime::ClearDebugProbeState() {
-    m_lifecycle.debug_probe_action = wgnx::DebugTriggerAction::None;
-    m_lifecycle.debug_probe_status = wgnx::DebugProbeStatus::None;
-    m_lifecycle.debug_probe_state_changed_ns = 0;
-}
-
 wgnx::PeerInfo PeerRuntime::BuildInfo(
     wgnx::platform::ktime_t now,
     bool is_active,
@@ -906,11 +886,8 @@ wgnx::PeerInfo PeerRuntime::BuildInfo(
     peer.last_handshake_seconds = ComputeElapsedSeconds(m_lifecycle.last_handshake_ns, now);
     peer.last_rx_seconds = ComputeElapsedSeconds(m_lifecycle.last_rx_ns, now);
     peer.last_tx_seconds = ComputeElapsedSeconds(m_lifecycle.last_tx_ns, now);
-    peer.last_debug_probe_seconds =
-        ComputeElapsedSeconds(m_lifecycle.debug_probe_state_changed_ns, now);
+    peer.last_debug_probe_seconds = -1;
     peer.last_error_code = m_lifecycle.last_error_code;
-    peer.debug_probe_action = static_cast<std::uint32_t>(m_lifecycle.debug_probe_action);
-    peer.debug_probe_status = static_cast<std::uint32_t>(m_lifecycle.debug_probe_status);
     peer.persistent_keepalive_interval = m_lifecycle.persistent_keepalive_interval;
     peer.runtime_state = static_cast<std::uint8_t>(m_lifecycle.state);
     peer.error_stage = static_cast<std::uint8_t>(m_lifecycle.error_stage);
@@ -961,6 +938,42 @@ EffectBatch PeerRuntime::Handle(const PeerEvent &event) {
                     "%s",
                     config.endpoint.data());
                 static_cast<void>(effects.Push(resolve));
+            } else if constexpr (std::is_same_v<Event, DeactivationRequestedEvent>) {
+                if (!IsCurrentActivation(value.peer.activation_generation)) {
+                    return effects;
+                }
+                if (binding.IsOpen()) {
+                    static_cast<void>(effects.Push(CloseUdpSocketEffect{
+                        .socket = binding.ReleaseSocket(),
+                    }));
+                }
+                if (auto *peer = ProtocolPeer()) {
+                    for (const auto hook : {
+                             wgnx::wireguard::TimerHook::RetransmitHandshake,
+                             wgnx::wireguard::TimerHook::SendKeepalive,
+                             wgnx::wireguard::TimerHook::Rekey,
+                             wgnx::wireguard::TimerHook::ZeroKeyMaterial,
+                         }) {
+                        wgnx::wireguard::wg_timers_cancel(
+                            std::addressof(peer->timers), hook, peer->name);
+                        static_cast<void>(effects.Push(CancelProtocolTimerEffect{
+                            .peer = value.peer,
+                            .hook = hook,
+                            .token = controller.Timers().Cancel(hook),
+                        }));
+                    }
+                }
+                Deactivate(value.occurred_at);
+            } else if constexpr (std::is_same_v<Event, TransportFailureEvent>) {
+                if (!IsCurrentActivation(value.peer.activation_generation) ||
+                    !IsInTransportState()) {
+                    return effects;
+                }
+                EnterActivationError(
+                    value.stage,
+                    value.code,
+                    value.occurred_at,
+                    &effects);
             } else if constexpr (std::is_same_v<Event, EndpointResolvedEvent>) {
                 if (!IsCurrentActivation(value.peer.activation_generation) ||
                     m_lifecycle.state != wgnx::PeerRuntimeState::ResolvingEndpoint) {

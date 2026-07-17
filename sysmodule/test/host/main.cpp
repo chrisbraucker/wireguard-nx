@@ -28,6 +28,7 @@ int main() {
         TestCase{"protocol.bounded-queue-observability", wgnx::test::TestBoundedQueueObservability},
         TestCase{"runtime.packet-channel-ownership", wgnx::test::TestPacketChannelOwnership},
         TestCase{"runtime.packet-data-plane", wgnx::test::TestPacketDataPlane},
+        TestCase{"runtime.auxiliary-workflows", wgnx::test::TestAuxiliaryRuntimeWorkflows},
         TestCase{"runtime.frozen-contracts", wgnx::test::TestRuntimeContracts},
         TestCase{"runtime.peer-registry-ownership", wgnx::test::TestPeerRegistryOwnership},
         TestCase{"runtime.peer-lifecycle", wgnx::test::TestPeerRuntimeLifecycle},

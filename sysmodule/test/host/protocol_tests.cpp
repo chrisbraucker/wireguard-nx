@@ -6,6 +6,8 @@
 #include "runtime/packet_channel.hpp"
 #include "runtime/packet_data_plane.hpp"
 #include "runtime/endpoint_resolver.hpp"
+#include "runtime/debug_probe_runner.hpp"
+#include "runtime/network_path_observer.hpp"
 #include "runtime/peer_runtime.hpp"
 #include "runtime/runtime_coordinator.hpp"
 #include "runtime/runtime_contracts.hpp"
@@ -1010,6 +1012,76 @@ void TestPacketDataPlane(TestContext &context) {
         "packet data plane did not reject a queued packet from a stale activation");
 }
 
+void TestAuxiliaryRuntimeWorkflows(TestContext &context) {
+    using namespace wgnx::sysmodule::runtime;
+
+    DebugProbeRunner probes{};
+    const PeerIdentity peer{.peer_index = 2, .activation_generation = 7};
+    WGNX_TEST_REQUIRE(
+        context,
+        probes.Queue(
+            peer,
+            "10.13.13.8/24",
+            wgnx::DebugTriggerAction::PingTunnelPeer,
+            1'000'000'000) &&
+            probes.IsPending() &&
+            probes.Status() == wgnx::DebugProbeStatus::Queued,
+        "debug probe runner rejected a valid command");
+
+    DebugProbeRequest request{};
+    std::array<std::uint8_t, wgnx::wireguard::DebugProbePacketSize> packet{};
+    WGNX_TEST_REQUIRE(
+        context,
+        probes.TakePending(request) &&
+            probes.BuildPacket(request, packet, 0x12345678) == packet.size() &&
+            probes.MarkSent(request, 2'000'000'000) &&
+            probes.Status() == wgnx::DebugProbeStatus::Sent &&
+            probes.HandleTimeout(3'000'000'000) &&
+            probes.Status() == wgnx::DebugProbeStatus::TimedOut,
+        "debug probe command lifecycle diverged");
+
+    wgnx::PeerInfo projected{};
+    probes.Project(peer.peer_index, 5'000'000'000, projected);
+    WGNX_TEST_REQUIRE(
+        context,
+        projected.debug_probe_action ==
+                static_cast<std::uint32_t>(wgnx::DebugTriggerAction::PingTunnelPeer) &&
+            projected.debug_probe_status ==
+                static_cast<std::uint32_t>(wgnx::DebugProbeStatus::TimedOut) &&
+            projected.last_debug_probe_seconds == 2,
+        "debug probe status projection diverged");
+
+    NetworkPathObserver observer{};
+    wgnx::platform::NetworkPathSnapshot first{};
+    first.initialization_result = 1;
+    first.connection_type = 2;
+    const auto first_sequence = observer.BeginObservation();
+    const auto first_outcome = observer.Commit({first_sequence, first});
+    const auto second_sequence = observer.BeginObservation();
+    const auto duplicate_outcome = observer.Commit({second_sequence, first});
+    first.current_address = 0x080D0D0A;
+    const auto changed_outcome = observer.Commit({observer.BeginObservation(), first});
+    WGNX_TEST_REQUIRE(
+        context,
+        first_sequence != 0 && second_sequence == first_sequence + 1 &&
+            first_outcome.changed && !duplicate_outcome.changed && changed_outcome.changed &&
+            observer.HasObservation() &&
+            observer.LastObservation().current_address == first.current_address,
+        "network path observation sequencing or change detection diverged");
+
+    UdpRebindQueue rebinds{};
+    const UdpRebindRequest rebind{.peer_index = 1, .activation_generation = 9};
+    UdpRebindRequest taken{};
+    WGNX_TEST_REQUIRE(
+        context,
+        rebinds.Queue(rebind) && !rebinds.Queue(rebind) &&
+            rebinds.IsPending(rebind) && rebinds.Take(taken) &&
+            taken.peer_index == rebind.peer_index &&
+            taken.activation_generation == rebind.activation_generation &&
+            !rebinds.Take(taken),
+        "UDP rebind request ownership or coalescing diverged");
+}
+
 void TestRuntimeContracts(TestContext &context) {
     using namespace wgnx::sysmodule::runtime;
 
@@ -1182,14 +1254,10 @@ void TestPeerRuntimeLifecycle(TestContext &context) {
     peer.RecordTransmittedBytes(60, 9'000);
     WGNX_TEST_REQUIRE(
         context,
-        peer.SetDebugProbeState(
-            wgnx::DebugTriggerAction::PingTunnelPeer,
-            wgnx::DebugProbeStatus::Queued,
-            10'000) &&
-            peer.Lifecycle().rx_bytes == 40 && peer.Lifecycle().tx_bytes == 60 &&
+        peer.Lifecycle().rx_bytes == 40 && peer.Lifecycle().tx_bytes == 60 &&
             peer.Lifecycle().last_rx_ns == 8'000 &&
             peer.Lifecycle().last_tx_ns == 9'000,
-        "peer-owned metrics or debug state diverged");
+        "peer-owned metrics diverged");
 
     const auto active_info = peer.BuildInfo(10'000, true, false);
     WGNX_TEST_REQUIRE(
@@ -1223,9 +1291,8 @@ void TestPeerRuntimeLifecycle(TestContext &context) {
         context,
         peer.Lifecycle().state == wgnx::PeerRuntimeState::Inactive &&
             peer.Lifecycle().activation_generation == 0 &&
-            peer.Lifecycle().rx_bytes == 0 && peer.Lifecycle().tx_bytes == 0 &&
-            peer.Lifecycle().debug_probe_status == wgnx::DebugProbeStatus::None,
-        "deactivation retained activation, metrics, or debug state");
+            peer.Lifecycle().rx_bytes == 0 && peer.Lifecycle().tx_bytes == 0,
+        "deactivation retained activation or metrics");
 }
 
 void TestRuntimeCoordinatorDispatch(TestContext &context) {
@@ -1265,6 +1332,35 @@ void TestRuntimeCoordinatorDispatch(TestContext &context) {
         effects.Empty() &&
             registry[0].Lifecycle().state == wgnx::PeerRuntimeState::Handshaking,
         "coordinator accepted session completion without protocol state");
+
+    const auto stale_failure = coordinator.Dispatch(TransportFailureEvent{
+        .peer = {.peer_index = 0, .activation_generation = 2},
+        .occurred_at = 4'500,
+    });
+    const auto failure = coordinator.Dispatch(TransportFailureEvent{
+        .peer = {.peer_index = 0, .activation_generation = 1},
+        .stage = wgnx::PeerErrorStage::Transport,
+        .code = wgnx::PeerErrorCode::TransportReceiveFailed,
+        .occurred_at = 5'000,
+    });
+    WGNX_TEST_REQUIRE(
+        context,
+        stale_failure.Empty() && failure.Size() == 4 &&
+            registry[0].Lifecycle().state == wgnx::PeerRuntimeState::Error &&
+            registry[0].Lifecycle().last_error_code == static_cast<std::uint32_t>(
+                wgnx::PeerErrorCode::TransportReceiveFailed),
+        "transport failure event did not reject staleness or enter peer-owned error state");
+
+    const auto deactivation = coordinator.Dispatch(DeactivationRequestedEvent{
+        .peer = {.peer_index = 0, .activation_generation = 1},
+        .occurred_at = 6'000,
+    });
+    WGNX_TEST_REQUIRE(
+        context,
+        deactivation.Empty() &&
+            registry[0].Lifecycle().state == wgnx::PeerRuntimeState::Inactive &&
+            registry[0].Lifecycle().activation_generation == 0,
+        "deactivation event did not retire peer-owned lifecycle state");
 
     EffectBatch bounded{};
     const RuntimeEffect effect = QueueInnerPacketSubmissionEffect{

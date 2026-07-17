@@ -45,6 +45,22 @@ enum class socket_error : std::uint32_t {
     receive_failed = 5,
 };
 
+struct NetworkPathSnapshot {
+    std::uint32_t initialization_result{0};
+    std::uint32_t internet_status_result{0};
+    std::uint32_t ip_config_result{0};
+    std::uint32_t connection_type{0};
+    std::uint32_t connection_status{0};
+    std::uint32_t wifi_strength{0};
+    std::uint32_t current_address{0};
+    std::uint32_t subnet_mask{0};
+    std::uint32_t gateway{0};
+    std::uint32_t primary_dns{0};
+    std::uint32_t secondary_dns{0};
+
+    constexpr bool operator==(const NetworkPathSnapshot &) const = default;
+};
+
 /*
  * Deviation from Linux:
  * This exposes a compact project-owned endpoint value instead of `sockaddr`
@@ -76,8 +92,7 @@ socket_error udp_receive(
     std::size_t *out_received,
     endpoint *out_source);
 
-// Samples and logs Horizon's current network-path fingerprint when it changes.
-// This is observational only; callers remain responsible for recovery policy.
-void observe_network_path();
+// Samples Horizon's network path. Runtime policy owns comparison and reaction.
+NetworkPathSnapshot sample_network_path(std::uint64_t sequence);
 
 } // namespace wgnx::platform
