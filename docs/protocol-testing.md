@@ -33,8 +33,8 @@ make -C sysmodule verify
 ```
 
 This command checks the repository-owned formatting profile, cppcheck's
-warning/performance/portability analysis over first-party sysmodule and host
-test sources, the stricter host warning profile, deterministic tests,
+warning/performance/portability analysis over first-party sysmodule, host-test,
+and fuzz-harness sources, the stricter host warning profile, deterministic tests,
 ASan/UBSan, the target build, stack-chain budget, footprint report, and both
 staged and unstaged `git diff --check` output. It intentionally excludes the
 vendored Atmosphere libraries and Monocypher implementation.
@@ -51,6 +51,43 @@ make -C sysmodule test-tsan
 
 Run it only on a host/compiler combination with a supported TSan runtime; it
 is deliberately not part of `verify`.
+
+## Fuzzing Parsers
+
+Parser fuzzing is host-only and requires Clang with libFuzzer and
+AddressSanitizer/UndefinedBehaviorSanitizer support. Build the three targets
+with:
+
+```sh
+make -C sysmodule fuzz
+```
+
+Run each target against its versioned seed corpus for a bounded local pass:
+
+```sh
+make -C sysmodule fuzz-run FUZZ_SECONDS=60
+```
+
+`fuzz-run` applies the supplied duration independently to configuration and
+endpoint parsing, WireGuard message admission, and inner IPv4/IPv6 validation.
+The default is 30 seconds per target. The configuration seeds are readable
+versioned text files under `sysmodule/test/fuzz/corpus/config_endpoint/`.
+Message and inner-IP seeds are escaped byte strings in
+`sysmodule/test/fuzz/fuzz_seed_data.hpp`; `fuzz-run` materializes them beneath
+`sysmodule/out/fuzz/corpus/` for libFuzzer. This keeps opaque binary inputs out
+of the source tree. The input roots used at runtime are:
+
+- `sysmodule/test/fuzz/corpus/config_endpoint/`
+- `sysmodule/out/fuzz/corpus/message_admission/`
+- `sysmodule/out/fuzz/corpus/inner_ip/`
+
+Use `FUZZ_CXX=/path/to/clang++` when the required Clang is not the default
+compiler. Fuzzing is intentionally outside `make verify`: execution time is
+nondeterministic, while CI can invoke `fuzz-run` with an explicit budget.
+Represent minimized non-text crashing inputs as escaped seed strings in
+`fuzz_seed_data.hpp`; plain-text configuration examples belong in the versioned
+configuration corpus. Add a deterministic regression before accepting a parser
+correction.
 
 ## Scripted Platform Failures
 

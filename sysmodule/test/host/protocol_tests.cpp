@@ -1,7 +1,41 @@
 #include "protocol_tests.hpp"
 #include "protocol_test_support.hpp"
 
+#include "config_text_validation.hpp"
+#include "platform/endpoint_parser.hpp"
+
+#include <cstring>
+
 namespace wgnx::test {
+
+void TestFuzzedParsingBoundaries(TestContext &context) {
+    const auto valid_config = wgnx::sysmodule::ValidateConnectionConfigLayout(
+        "[Interface]\nAddress = 10.13.13.8/24\n[Peer]\nEndpoint = 10.13.13.1:51820\n");
+    WGNX_TEST_REQUIRE(context, valid_config.IsValid(), "valid config layout rejected");
+
+    const auto duplicate_interface = wgnx::sysmodule::ValidateConnectionConfigLayout(
+        "[Interface]\n[Interface]\n[Peer]\n");
+    WGNX_TEST_REQUIRE(
+        context,
+        duplicate_interface.error == wgnx::sysmodule::ConfigLayoutError::MultipleInterfaceSections &&
+            duplicate_interface.line == 2,
+        "duplicate Interface section did not retain its diagnostic location");
+
+    wgnx::platform::EndpointTextParts endpoint{};
+    WGNX_TEST_REQUIRE(
+        context,
+        wgnx::platform::ParseEndpointText(" [2001:db8::1]:51820 ", &endpoint) &&
+            std::strcmp(endpoint.host.data(), "2001:db8::1") == 0 &&
+            std::strcmp(endpoint.service.data(), "51820") == 0 &&
+            wgnx::platform::ParseEndpointPort(endpoint.service.data()),
+        "bracketed IPv6 endpoint was not parsed");
+    WGNX_TEST_REQUIRE(
+        context,
+        !wgnx::platform::ParseEndpointText("2001:db8::1:51820", &endpoint) &&
+            !wgnx::platform::ParseEndpointPort("0") &&
+            !wgnx::platform::ParseEndpointPort("65536"),
+        "endpoint parser accepted malformed endpoint or port");
+}
 
 void TestDeterministicHandshake(TestContext &context) {
     std::array<std::uint8_t, wgnx::wireguard::HandshakeInitiationSize> first{};

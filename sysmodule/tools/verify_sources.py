@@ -11,7 +11,7 @@ import sys
 
 
 SOURCE_SUFFIXES = {".cpp", ".hpp", ".c", ".h"}
-SOURCE_ROOTS = ("src", "test/host")
+SOURCE_ROOTS = ("src", "test/host", "test/fuzz")
 VENDORED_SOURCES = {
     pathlib.PurePosixPath("src/wireguard/crypto/monocypher.c"),
     pathlib.PurePosixPath("src/wireguard/crypto/monocypher.h"),

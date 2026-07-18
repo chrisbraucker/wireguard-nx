@@ -3,7 +3,7 @@
 #---------------------------------------------------------------------------------
 
 TOPDIR ?= $(CURDIR)
-HOST_ONLY_GOALS := test test-sanitize test-tsan test-warnings format-check static-check diff-check
+HOST_ONLY_GOALS := test test-sanitize test-tsan test-warnings format-check static-check diff-check fuzz fuzz-run fuzz-seeds
 HOST_ONLY_BUILD := $(strip $(filter $(HOST_ONLY_GOALS),$(MAKECMDGOALS)))
 
 ifeq ($(HOST_ONLY_BUILD),)
@@ -30,7 +30,7 @@ TITLE_ID	:=	010000000000EAD0
 DISTDIR		:=	$(OUTDIR)/atmosphere/contents/$(TITLE_ID)
 DATA		:=	data
 RESOURCES	:=	res
-SOURCES		+=	src src/runtime src/runtime/peer src/platform/horizon src/wireguard src/wireguard/crypto
+SOURCES		+=	src src/runtime src/runtime/peer src/platform src/platform/horizon src/wireguard src/wireguard/crypto
 INCLUDES	+=	../common/include \
 			src \
 			src/platform/horizon \
@@ -52,6 +52,18 @@ HOST_TSAN_DIR := $(OUTDIR)/host-test-tsan
 HOST_TSAN_TARGET := $(HOST_TSAN_DIR)/wireguard-host-test
 HOST_WARNING_DIR := $(OUTDIR)/host-test-warnings
 HOST_WARNING_TARGET := $(HOST_WARNING_DIR)/wireguard-host-test
+FUZZ_CXX	?= clang++
+FUZZ_DIR	:= $(OUTDIR)/fuzz
+FUZZ_SECONDS	?= 30
+FUZZ_COMMON_FLAGS := -std=c++23 -Wall -Wextra -Wpedantic -Werror -g -O1 \
+	-fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer
+FUZZ_CONFIG_ENDPOINT_TARGET := $(FUZZ_DIR)/config_endpoint_fuzz
+FUZZ_MESSAGE_ADMISSION_TARGET := $(FUZZ_DIR)/message_admission_fuzz
+FUZZ_INNER_IP_TARGET := $(FUZZ_DIR)/inner_ip_fuzz
+FUZZ_TARGETS := $(FUZZ_CONFIG_ENDPOINT_TARGET) $(FUZZ_MESSAGE_ADMISSION_TARGET) $(FUZZ_INNER_IP_TARGET)
+FUZZ_CORPUS_DIR := $(TOPDIR)/test/fuzz/corpus
+FUZZ_GENERATED_CORPUS_DIR := $(FUZZ_DIR)/corpus
+FUZZ_SEED_WRITER := $(FUZZ_DIR)/fuzz_seed_writer
 CLANG_FORMAT ?= clang-format
 CPPCHECK ?= cppcheck
 VERIFY_SOURCES := $(TOPDIR)/tools/verify_sources.py
@@ -69,6 +81,8 @@ HOST_TEST_CPP_SOURCES := \
 	src/runtime/runtime_coordinator.cpp \
 	src/runtime/timer_schedule.cpp \
 	src/runtime/udp_binding.cpp \
+	src/config_text_validation.cpp \
+	src/platform/endpoint_parser.cpp \
 	src/wireguard/messages.cpp \
 	src/wireguard/dispatch.cpp \
 	src/wireguard/index_allocator.cpp \
@@ -94,12 +108,24 @@ HOST_TEST_CPP_SOURCES := \
 	test/host/failure_composition_tests.cpp \
 	test/host/main.cpp
 HOST_TEST_C_SOURCES := src/wireguard/crypto/monocypher.c
-HOST_TEST_HEADERS := $(shell find $(TOPDIR)/test/host $(TOPDIR)/src/runtime $(TOPDIR)/src/wireguard $(TOPDIR)/../common/include -type f -name '*.hpp')
+HOST_TEST_HEADERS := $(shell find $(TOPDIR)/test/host $(TOPDIR)/src $(TOPDIR)/../common/include -type f -name '*.hpp')
 HOST_TEST_INCLUDES := \
 	-I$(CURDIR)/test/host \
 	-I$(CURDIR)/test/host/include \
 	-I$(CURDIR)/../common/include \
 	-I$(CURDIR)/src
+FUZZ_CONFIG_ENDPOINT_SOURCES := \
+	src/config_text_validation.cpp \
+	src/platform/endpoint_parser.cpp \
+	test/fuzz/config_endpoint_fuzz.cpp
+FUZZ_MESSAGE_ADMISSION_SOURCES := \
+	src/wireguard/messages.cpp \
+	src/wireguard/dispatch.cpp \
+	test/fuzz/message_admission_fuzz.cpp
+FUZZ_INNER_IP_SOURCES := \
+	src/wireguard/inner_packet.cpp \
+	test/fuzz/inner_ip_fuzz.cpp
+FUZZ_HEADERS := $(shell find $(TOPDIR)/src $(TOPDIR)/../common/include -type f -name '*.hpp')
 
 #---------------------------------------------------------------------------------
 # version control constants
@@ -175,9 +201,10 @@ export BUILD_EXEFS_SRC := $(TOPDIR)/$(EXEFS_SRC)
 
 export APP_JSON := $(TOPDIR)/res/module.json
 
+
 .PHONY	: $(BUILD) clean clean-libs clean-build all libs dist test test-sanitize test-tsan \
 		test-warnings format-check static-check diff-check verify prepare-build-id check-stack \
-		report-footprint resource-report
+		report-footprint resource-report fuzz fuzz-run fuzz-seeds
 
 #---------------------------------------------------------------------------------
 all	: $(BUILD)
@@ -200,6 +227,17 @@ test-tsan: $(HOST_TSAN_TARGET)
 
 test-warnings: $(HOST_WARNING_TARGET)
 	@$(HOST_WARNING_TARGET)
+
+fuzz: $(FUZZ_TARGETS)
+
+fuzz-run: fuzz fuzz-seeds
+	@$(FUZZ_CONFIG_ENDPOINT_TARGET) $(FUZZ_CORPUS_DIR)/config_endpoint -max_total_time=$(FUZZ_SECONDS) -max_len=16384
+	@$(FUZZ_MESSAGE_ADMISSION_TARGET) $(FUZZ_GENERATED_CORPUS_DIR)/message_admission -max_total_time=$(FUZZ_SECONDS) -max_len=66000
+	@$(FUZZ_INNER_IP_TARGET) $(FUZZ_GENERATED_CORPUS_DIR)/inner_ip -max_total_time=$(FUZZ_SECONDS) -max_len=66000
+
+fuzz-seeds: $(FUZZ_SEED_WRITER)
+	@[ -d $(FUZZ_GENERATED_CORPUS_DIR) ] || mkdir -p $(FUZZ_GENERATED_CORPUS_DIR)
+	@$(FUZZ_SEED_WRITER) $(FUZZ_GENERATED_CORPUS_DIR)
 
 format-check:
 	@$(PYTHON) $(VERIFY_SOURCES) format --root $(TOPDIR) --formatter $(CLANG_FORMAT)
@@ -235,6 +273,10 @@ $(HOST_TEST_TARGET): Makefile $(HOST_TEST_CPP_SOURCES) $(HOST_TEST_C_SOURCES) $(
 	@$(HOST_CC) $(HOST_TEST_CFLAGS) -I$(CURDIR)/src/wireguard/crypto -c $(CURDIR)/src/wireguard/crypto/monocypher.c -o $(HOST_TEST_DIR)/monocypher.o
 	@$(HOST_CXX) $(HOST_TEST_CXXFLAGS) $(HOST_TEST_INCLUDES) $(addprefix $(CURDIR)/,$(HOST_TEST_CPP_SOURCES)) $(HOST_TEST_DIR)/monocypher.o -o $(HOST_TEST_TARGET)
 
+$(FUZZ_SEED_WRITER): Makefile test/fuzz/fuzz_seed_writer.cpp test/fuzz/fuzz_seed_data.hpp
+	@[ -d $(FUZZ_DIR) ] || mkdir -p $(FUZZ_DIR)
+	@$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -I$(CURDIR)/test/fuzz $(CURDIR)/test/fuzz/fuzz_seed_writer.cpp -o $(FUZZ_SEED_WRITER)
+
 $(HOST_SANITIZE_TARGET): Makefile $(HOST_TEST_CPP_SOURCES) $(HOST_TEST_C_SOURCES) $(HOST_TEST_HEADERS)
 	@[ -d $(HOST_SANITIZE_DIR) ] || mkdir -p $(HOST_SANITIZE_DIR)
 	@$(HOST_CC) $(HOST_TEST_CFLAGS) -fsanitize=address,undefined -fno-omit-frame-pointer -I$(CURDIR)/src/wireguard/crypto -c $(CURDIR)/src/wireguard/crypto/monocypher.c -o $(HOST_SANITIZE_DIR)/monocypher.o
@@ -249,6 +291,21 @@ $(HOST_WARNING_TARGET): Makefile $(HOST_TEST_CPP_SOURCES) $(HOST_TEST_C_SOURCES)
 	@[ -d $(HOST_WARNING_DIR) ] || mkdir -p $(HOST_WARNING_DIR)
 	@$(HOST_CC) $(HOST_TEST_CFLAGS) -I$(CURDIR)/src/wireguard/crypto -c $(CURDIR)/src/wireguard/crypto/monocypher.c -o $(HOST_WARNING_DIR)/monocypher.o
 	@$(HOST_CXX) $(HOST_WARNING_CXXFLAGS) $(HOST_TEST_INCLUDES) $(addprefix $(CURDIR)/,$(HOST_TEST_CPP_SOURCES)) $(HOST_WARNING_DIR)/monocypher.o -o $(HOST_WARNING_TARGET)
+
+$(FUZZ_CONFIG_ENDPOINT_TARGET): Makefile $(FUZZ_CONFIG_ENDPOINT_SOURCES) $(FUZZ_HEADERS)
+	@[ -d $(FUZZ_DIR) ] || mkdir -p $(FUZZ_DIR)
+	@command -v $(FUZZ_CXX) >/dev/null || { echo "missing FUZZ_CXX=$(FUZZ_CXX); install Clang with libFuzzer support or set FUZZ_CXX" >&2; exit 1; }
+	@$(FUZZ_CXX) $(FUZZ_COMMON_FLAGS) $(HOST_TEST_INCLUDES) $(addprefix $(CURDIR)/,$(FUZZ_CONFIG_ENDPOINT_SOURCES)) -o $(FUZZ_CONFIG_ENDPOINT_TARGET)
+
+$(FUZZ_MESSAGE_ADMISSION_TARGET): Makefile $(FUZZ_MESSAGE_ADMISSION_SOURCES) $(FUZZ_HEADERS)
+	@[ -d $(FUZZ_DIR) ] || mkdir -p $(FUZZ_DIR)
+	@command -v $(FUZZ_CXX) >/dev/null || { echo "missing FUZZ_CXX=$(FUZZ_CXX); install Clang with libFuzzer support or set FUZZ_CXX" >&2; exit 1; }
+	@$(FUZZ_CXX) $(FUZZ_COMMON_FLAGS) $(HOST_TEST_INCLUDES) $(addprefix $(CURDIR)/,$(FUZZ_MESSAGE_ADMISSION_SOURCES)) -o $(FUZZ_MESSAGE_ADMISSION_TARGET)
+
+$(FUZZ_INNER_IP_TARGET): Makefile $(FUZZ_INNER_IP_SOURCES) $(FUZZ_HEADERS)
+	@[ -d $(FUZZ_DIR) ] || mkdir -p $(FUZZ_DIR)
+	@command -v $(FUZZ_CXX) >/dev/null || { echo "missing FUZZ_CXX=$(FUZZ_CXX); install Clang with libFuzzer support or set FUZZ_CXX" >&2; exit 1; }
+	@$(FUZZ_CXX) $(FUZZ_COMMON_FLAGS) $(HOST_TEST_INCLUDES) $(addprefix $(CURDIR)/,$(FUZZ_INNER_IP_SOURCES)) -o $(FUZZ_INNER_IP_TARGET)
 
 libs	:
 	@$(foreach lib,$(LIBNAMES),$(MAKE) --no-print-directory -C $(TOPDIR)/lib/$(lib) && ) true

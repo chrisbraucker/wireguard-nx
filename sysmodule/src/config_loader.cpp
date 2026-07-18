@@ -9,6 +9,7 @@
 
 #include <stratosphere/util/util_ini.hpp>
 
+#include "config_text_validation.hpp"
 #include "fs_runtime.hpp"
 #include "logger.hpp"
 #include "wgnx/paths.hpp"
@@ -49,16 +50,6 @@ struct ConnectionParseContext {
 
 constinit std::array<char, MaxConfigBytes + 1> g_config_buffer = {};
 constinit std::array<ConfigFileCandidate, MaxConfigFiles> g_candidates = {};
-
-std::string_view Trim(std::string_view value) {
-    while (!value.empty() && (value.front() == ' ' || value.front() == '\t' || value.front() == '\r')) {
-        value.remove_prefix(1);
-    }
-    while (!value.empty() && (value.back() == ' ' || value.back() == '\t' || value.back() == '\r')) {
-        value.remove_suffix(1);
-    }
-    return value;
-}
 
 void SetError(ConfigParseError *error, std::size_t line, const char *message) {
     if (error == nullptr) {
@@ -283,62 +274,14 @@ bool ValidateSectionLayout(const char *text, ConfigParseError *error) {
         return false;
     }
 
-    std::size_t interface_sections = 0;
-    std::size_t peer_sections = 0;
-    std::size_t line_number = 0;
-    std::string_view remaining(text);
-
-    while (true) {
-        const std::size_t line_end = remaining.find('\n');
-        std::string_view line = line_end == std::string_view::npos ? remaining : remaining.substr(0, line_end);
-        remaining = line_end == std::string_view::npos ? std::string_view{} : remaining.substr(line_end + 1);
-        ++line_number;
-
-        line = Trim(line);
-        if (line.empty() || line.front() == '#' || line.front() == ';') {
-            if (line_end == std::string_view::npos) {
-                break;
-            }
-            continue;
-        }
-
-        if (line.front() == '[') {
-            const std::size_t close = line.find(']');
-            if (close == std::string_view::npos) {
-                SetError(error, line_number, "section header is missing ']'");
-                return false;
-            }
-
-            const std::string_view section_name = Trim(line.substr(1, close - 1));
-            if (section_name == "Interface") {
-                ++interface_sections;
-                if (interface_sections > 1) {
-                    SetError(error, line_number, "multiple [Interface] sections are not supported");
-                    return false;
-                }
-            } else if (section_name == "Peer") {
-                ++peer_sections;
-                if (peer_sections > 1) {
-                    SetError(error, line_number, "multiple [Peer] sections are not supported");
-                    return false;
-                }
-            }
-        }
-
-        if (line_end == std::string_view::npos) {
-            break;
-        }
-    }
-
-    if (interface_sections == 0) {
-        SetError(error, 0, "missing [Interface] section");
+    const ConfigLayoutValidation validation = ValidateConnectionConfigLayout(text);
+    if (!validation.IsValid()) {
+        SetError(
+            error,
+            validation.line,
+            GetConfigLayoutErrorMessage(validation.error));
         return false;
     }
-    if (peer_sections == 0) {
-        SetError(error, 0, "missing [Peer] section");
-        return false;
-    }
-
     return true;
 }
 

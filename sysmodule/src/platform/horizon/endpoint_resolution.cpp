@@ -21,24 +21,17 @@ extern "C" {
 }
 
 #include "logger.hpp"
+#include "platform/endpoint_parser.hpp"
 #include "wgnx/resource_budget.hpp"
 
 namespace wgnx::platform {
 
 namespace {
 
-constexpr inline std::size_t MaxEndpointText = sizeof(wgnx::PeerInfo::endpoint);
-constexpr inline std::size_t MaxHostText = MaxEndpointText;
-constexpr inline std::size_t MaxServiceText = 6;
 constexpr inline std::size_t ResolverAddrInfoBufferSize =
     wgnx::resource_budget::ResolverScratchBytes;
 
 constinit std::uint8_t g_resolver_addrinfo_buffer[ResolverAddrInfoBufferSize] = {};
-
-struct EndpointParts {
-    char host[MaxHostText]{};
-    char service[MaxServiceText]{};
-};
 
 struct AddrInfoSerializedHeader {
     std::uint32_t magic;
@@ -50,87 +43,6 @@ struct AddrInfoSerializedHeader {
 };
 
 constexpr inline std::uint32_t AddrInfoMagic = 0xBEEFCAFEu;
-
-bool IsAsciiSpace(char ch) {
-    return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n';
-}
-
-std::string_view TrimView(std::string_view value) {
-    while (!value.empty() && IsAsciiSpace(value.front())) {
-        value.remove_prefix(1);
-    }
-    while (!value.empty() && IsAsciiSpace(value.back())) {
-        value.remove_suffix(1);
-    }
-
-    return value;
-}
-
-bool CopyView(std::span<char> dst, std::string_view value) {
-    if (dst.empty()) {
-        return false;
-    }
-
-    if (value.empty() || value.size() >= dst.size()) {
-        return false;
-    }
-
-    std::memcpy(dst.data(), value.data(), value.size());
-    dst[value.size()] = '\0';
-    return true;
-}
-
-bool ParseEndpointParts(std::string_view configured_endpoint, EndpointParts *out) {
-    if (out == nullptr) {
-        return false;
-    }
-
-    const std::string_view endpoint = TrimView(configured_endpoint);
-    if (endpoint.empty()) {
-        return false;
-    }
-
-    if (endpoint.front() == '[') {
-        const std::size_t closing = endpoint.find(']');
-        if (closing == std::string_view::npos || closing == 1 || (closing + 1) >= endpoint.size() || endpoint[closing + 1] != ':') {
-            return false;
-        }
-
-        const std::string_view host = TrimView(endpoint.substr(1, closing - 1));
-        const std::string_view service = TrimView(endpoint.substr(closing + 2));
-        return CopyView(out->host, host) && CopyView(out->service, service);
-    }
-
-    std::size_t separator = std::string_view::npos;
-    for (std::size_t i = endpoint.size(); i-- > 0;) {
-        if (endpoint[i] == ':') {
-            separator = i;
-            break;
-        }
-    }
-    if (separator == std::string_view::npos || separator == 0 || (separator + 1) >= endpoint.size()) {
-        return false;
-    }
-
-    if (endpoint.substr(0, separator).find(':') != std::string_view::npos) {
-        return false;
-    }
-
-    const std::string_view host = TrimView(endpoint.substr(0, separator));
-    const std::string_view service = TrimView(endpoint.substr(separator + 1));
-    return CopyView(out->host, host) && CopyView(out->service, service);
-}
-
-bool ParsePort(const char *service) {
-    if (service == nullptr || service[0] == '\0') {
-        return false;
-    }
-
-    char *end = nullptr;
-    errno = 0;
-    const unsigned long value = std::strtoul(service, &end, 10);
-    return errno == 0 && end != service && *end == '\0' && value > 0 && value <= 65535;
-}
 
 bool IsNumericHost(const char *host) {
     if (host == nullptr || host[0] == '\0') {
@@ -243,25 +155,25 @@ bool ParseSerializedResult(endpoint_resolution_result *out, const void *buffer, 
     return false;
 }
 
-bool ResolveNumericEndpoint(const EndpointParts &parts, endpoint_resolution_result *out) {
+bool ResolveNumericEndpoint(const EndpointTextParts &parts, endpoint_resolution_result *out) {
     if (out == nullptr) {
         return false;
     }
 
     in_addr addr4 = {};
-    if (::inet_pton(AF_INET, parts.host, std::addressof(addr4)) == 1) {
+    if (::inet_pton(AF_INET, parts.host.data(), std::addressof(addr4)) == 1) {
         out->resolved = {};
         out->resolved.family = address_family::inet;
-        out->resolved.port = static_cast<std::uint16_t>(std::strtoul(parts.service, nullptr, 10));
+        out->resolved.port = static_cast<std::uint16_t>(std::strtoul(parts.service.data(), nullptr, 10));
         std::memcpy(out->resolved.address.data(), std::addressof(addr4), sizeof(addr4));
         return StoreResolvedText(out);
     }
 
     in6_addr addr6 = {};
-    if (::inet_pton(AF_INET6, parts.host, std::addressof(addr6)) == 1) {
+    if (::inet_pton(AF_INET6, parts.host.data(), std::addressof(addr6)) == 1) {
         out->resolved = {};
         out->resolved.family = address_family::inet6;
-        out->resolved.port = static_cast<std::uint16_t>(std::strtoul(parts.service, nullptr, 10));
+        out->resolved.port = static_cast<std::uint16_t>(std::strtoul(parts.service.data(), nullptr, 10));
         std::memcpy(out->resolved.address.data(), std::addressof(addr6), sizeof(addr6));
         return StoreResolvedText(out);
     }
@@ -274,14 +186,15 @@ bool ResolveNumericEndpoint(const EndpointParts &parts, endpoint_resolution_resu
 endpoint_resolution_result resolve_endpoint(std::string_view configured_endpoint) {
     endpoint_resolution_result result{};
 
-    EndpointParts parts = {};
-    if (!ParseEndpointParts(configured_endpoint, std::addressof(parts)) || !ParsePort(parts.service)) {
+    EndpointTextParts parts = {};
+    if (!ParseEndpointText(configured_endpoint, std::addressof(parts)) ||
+        !ParseEndpointPort(parts.service.data())) {
         result.error_stage = wgnx::PeerErrorStage::ResolveEndpoint;
         result.error_code = wgnx::PeerErrorCode::EndpointMalformed;
         return result;
     }
 
-    if (IsNumericHost(parts.host)) {
+    if (IsNumericHost(parts.host.data())) {
         if (ResolveNumericEndpoint(parts, std::addressof(result))) {
             result.success = true;
             return result;
@@ -320,8 +233,8 @@ endpoint_resolution_result resolve_endpoint(std::string_view configured_endpoint
     const Result resolver_rc = sfdnsresGetAddrInfoRequest(
         resolverGetCancelHandle(),
         resolverGetEnableServiceDiscovery(),
-        parts.host,
-        parts.service,
+        parts.host.data(),
+        parts.service.data(),
         hints_buffer,
         hints_size,
         g_resolver_addrinfo_buffer,
@@ -332,7 +245,7 @@ endpoint_resolution_result resolve_endpoint(std::string_view configured_endpoint
 
     if (R_FAILED(resolver_rc) || remote_ret != 0) {
         wgnx::sysmodule::logger::Log("sfdnsresGetAddrInfoRequest failed for '%s:%s': resolver_rc=0x%08x ret=%d errno=%u serialized_size=%u",
-            parts.host, parts.service, static_cast<u32>(resolver_rc), remote_ret, remote_errno, serialized_size);
+            parts.host.data(), parts.service.data(), static_cast<u32>(resolver_rc), remote_ret, remote_errno, serialized_size);
         result.error_stage = wgnx::PeerErrorStage::ResolveEndpoint;
         result.error_code = wgnx::PeerErrorCode::EndpointResolutionFailed;
         return result;
@@ -340,7 +253,7 @@ endpoint_resolution_result resolve_endpoint(std::string_view configured_endpoint
 
     if (serialized_size == 0 || serialized_size > sizeof(g_resolver_addrinfo_buffer)) {
         wgnx::sysmodule::logger::Log("resolver returned invalid serialized size for '%s:%s': size=%u capacity=%zu",
-            parts.host, parts.service, serialized_size, sizeof(g_resolver_addrinfo_buffer));
+            parts.host.data(), parts.service.data(), serialized_size, sizeof(g_resolver_addrinfo_buffer));
         result.error_stage = wgnx::PeerErrorStage::ResolveEndpoint;
         result.error_code = wgnx::PeerErrorCode::EndpointResolutionFailed;
         return result;
@@ -353,7 +266,7 @@ endpoint_resolution_result resolve_endpoint(std::string_view configured_endpoint
     }
 
     if (!result.success) {
-        wgnx::sysmodule::logger::Log("resolver returned no usable AF_INET/AF_INET6 result for '%s:%s'", parts.host, parts.service);
+        wgnx::sysmodule::logger::Log("resolver returned no usable AF_INET/AF_INET6 result for '%s:%s'", parts.host.data(), parts.service.data());
         result.error_stage = wgnx::PeerErrorStage::ResolveEndpoint;
         result.error_code = wgnx::PeerErrorCode::EndpointResolutionFailed;
     }

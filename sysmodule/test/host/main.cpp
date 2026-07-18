@@ -26,6 +26,7 @@ int main() {
         TestCase{"protocol.bidirectional-transport", wgnx::test::TestBidirectionalTransport},
         TestCase{"protocol.timer-intent", wgnx::test::TestTimerIntent},
         TestCase{"protocol.typed-message-boundaries", wgnx::test::TestTypedMessageBoundaries},
+        TestCase{"protocol.fuzzed-parsing-boundaries", wgnx::test::TestFuzzedParsingBoundaries},
         TestCase{"protocol.private-key-parsing", wgnx::test::TestPrivateKeyParsing},
         TestCase{"protocol.keypair-lifetime", wgnx::test::TestKeypairLifetime},
         TestCase{"protocol.bounded-queue-observability", wgnx::test::TestBoundedQueueObservability},

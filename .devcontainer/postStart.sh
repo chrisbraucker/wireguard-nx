@@ -4,11 +4,13 @@
 set -eu
 
 if [ -d "/codex" ] && [ ! -e "$HOME/.codex" ]; then
-  ln -sT /codex $HOME/.codex
+  ln -sT /codex "$HOME/.codex"
 fi
 
 HISTFILE=/history/.bash_history
-touch $HISTFILE
+touch "$HISTFILE"
 
 SNIPPET="export PROMPT_COMMAND='history -a' && export HISTFILE=$HISTFILE"
-echo "$SNIPPET" >> "$HOME/.bashrc"
+if ! grep -Fq "$SNIPPET" "$HOME/.bashrc" 2>/dev/null; then
+  echo "$SNIPPET" >> "$HOME/.bashrc"
+fi

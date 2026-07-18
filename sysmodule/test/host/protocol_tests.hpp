@@ -9,6 +9,7 @@ void TestHandshakeInitiationAdmission(TestContext &context);
 void TestBidirectionalTransport(TestContext &context);
 void TestTimerIntent(TestContext &context);
 void TestTypedMessageBoundaries(TestContext &context);
+void TestFuzzedParsingBoundaries(TestContext &context);
 void TestPrivateKeyParsing(TestContext &context);
 void TestKeypairLifetime(TestContext &context);
 void TestBoundedQueueObservability(TestContext &context);
