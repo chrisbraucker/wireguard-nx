@@ -30,7 +30,7 @@ TITLE_ID	:=	010000000000EAD0
 DISTDIR		:=	$(OUTDIR)/atmosphere/contents/$(TITLE_ID)
 DATA		:=	data
 RESOURCES	:=	res
-SOURCES		+=	src src/runtime src/platform/horizon src/wireguard src/wireguard/crypto
+SOURCES		+=	src src/runtime src/runtime/peer src/platform/horizon src/wireguard src/wireguard/crypto
 INCLUDES	+=	../common/include \
 			src \
 			src/platform/horizon \
@@ -54,7 +54,12 @@ HOST_TEST_CPP_SOURCES := \
 	src/runtime/endpoint_resolver.cpp \
 	src/runtime/network_path_observer.cpp \
 	src/runtime/packet_data_plane.cpp \
-	src/runtime/peer_runtime.cpp \
+	src/runtime/peer/peer_runtime.cpp \
+	src/runtime/peer/activation.cpp \
+	src/runtime/peer/inbound.cpp \
+	src/runtime/peer/lifecycle.cpp \
+	src/runtime/peer/outbound.cpp \
+	src/runtime/peer/peer_timers.cpp \
 	src/runtime/runtime_coordinator.cpp \
 	src/runtime/timer_schedule.cpp \
 	src/runtime/udp_binding.cpp \
@@ -75,7 +80,11 @@ HOST_TEST_CPP_SOURCES := \
 	test/host/host_stubs.cpp \
 	test/host/legacy_self_tests.cpp \
 	test/host/platform_tests.cpp \
+	test/host/packet_data_plane_tests.cpp \
 	test/host/protocol_tests.cpp \
+	test/host/runtime_lifecycle_tests.cpp \
+	test/host/timer_tests.cpp \
+	test/host/failure_composition_tests.cpp \
 	test/host/main.cpp
 HOST_TEST_C_SOURCES := src/wireguard/crypto/monocypher.c
 HOST_TEST_HEADERS := $(shell find $(TOPDIR)/test/host $(TOPDIR)/src/runtime $(TOPDIR)/src/wireguard $(TOPDIR)/../common/include -type f -name '*.hpp')

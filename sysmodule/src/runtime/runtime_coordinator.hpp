@@ -1,6 +1,6 @@
 #pragma once
 
-#include "runtime/peer_runtime.hpp"
+#include "runtime/peer/peer_runtime.hpp"
 #include "runtime/runtime_events.hpp"
 
 namespace wgnx::sysmodule::runtime {

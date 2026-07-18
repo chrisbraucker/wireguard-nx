@@ -14,7 +14,7 @@
         {"label": "UDP bind open", "match": "RuntimeEffectExecutor::ExecuteOpenUdpBind("},
         {"label": "coordinator dispatch", "match": "EffectBatch wgnx::sysmodule::runtime::RuntimeCoordinator::Dispatch("},
         {"label": "peer dispatch", "match": "EffectBatch wgnx::sysmodule::runtime::PeerRuntime::Handle("},
-        {"label": "bind completion event", "match": "[with auto:60 = wgnx::sysmodule::runtime::UdpBindOpenedEvent]"},
+        {"label": "bind completion event", "match": "PeerRuntime::HandleEvent(const wgnx::sysmodule::runtime::UdpBindOpenedEvent&)"},
         {"label": "handshake startup", "match": "PeerRuntime::StartHandshake("},
         {"label": "initiation staging", "match": "PeerRuntime::PrepareHandshakeInitiation("},
         {"label": "initiation creation", "match": "noise_handshake_create_initiation("},

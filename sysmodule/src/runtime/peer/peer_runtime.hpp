@@ -232,6 +232,17 @@ private:
         const TimerFacts &timer_facts,
         wgnx::platform::ktime_t now,
         EffectBatch &effects);
+    [[nodiscard]] EffectBatch HandleEvent(const ActivationRequestedEvent &event);
+    [[nodiscard]] EffectBatch HandleEvent(const DeactivationRequestedEvent &event);
+    [[nodiscard]] EffectBatch HandleEvent(const TransportFailureEvent &event);
+    [[nodiscard]] EffectBatch HandleEvent(const EndpointResolvedEvent &event);
+    [[nodiscard]] EffectBatch HandleEvent(const UdpBindOpenedEvent &event);
+    [[nodiscard]] EffectBatch HandleEvent(const UdpRebindRequestedEvent &event);
+    [[nodiscard]] EffectBatch HandleEvent(const EncryptedDatagramReceivedEvent &event);
+    [[nodiscard]] EffectBatch HandleEvent(const PendingDatagramSentEvent &event);
+    [[nodiscard]] EffectBatch HandleEvent(const InnerPacketStagedEvent &event);
+    [[nodiscard]] EffectBatch HandleEvent(const ProcessOutboundQueueEvent &event);
+    [[nodiscard]] EffectBatch HandleEvent(const ProtocolTimerExpiredEvent &event);
 
     wgnx::PeerConfigEntry m_config{};
     PeerConfigDerivedInfo m_derived{};

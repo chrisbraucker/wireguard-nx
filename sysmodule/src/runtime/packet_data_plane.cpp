@@ -1,6 +1,6 @@
 #include "runtime/packet_data_plane.hpp"
 
-#include "runtime/peer_runtime.hpp"
+#include "runtime/peer/peer_runtime.hpp"
 #include "runtime/runtime_coordinator.hpp"
 
 #include <cstring>

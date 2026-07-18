@@ -33,7 +33,7 @@ IPC and WireGuard wire contracts remain unchanged; the separation is internal.
   the shared mutex, performs blocking receive without that mutex, and publishes
   authenticated datagrams or factual receive failures only after generation
   revalidation.
-- `runtime/peer_runtime.hpp` defines the fixed-capacity `PeerRegistry`. The
+- `runtime/peer/peer_runtime.hpp` defines the fixed-capacity `PeerRegistry`. The
   registry owns slot configuration, clearing, selection, event routing, and
   bounded bulk packet retirement without exposing mutable slots. Each
   `PeerRuntime` slot is the structural owner of one peer's configuration,
