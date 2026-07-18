@@ -65,8 +65,12 @@ path fingerprint when it changes:
 This observer is deliberately passive. NIFM's Internet status is not endpoint
 reachability: a LAN WireGuard peer may remain usable when Horizon reports no
 Internet connection. Recovery must therefore not be gated on a `Connected`
-status. Later automation may treat a fingerprint change as one input to the
-same bind-bump operation, with transport failures as a fallback.
+status. Later automation may treat a validated NIFM path-state transition as
+one input to the same bind-bump operation. Socket-adapter results remain
+diagnostic facts, not connectivity policy: in particular, Horizon BSD has been
+observed to return a negative `RecvFrom` result with a successful native error
+query. The receive worker rate-limits that ambiguous result locally but does
+not suspend a socket, restart a peer, or infer a path transition from it.
 
 Each enabled sample logs a monotonic sequence number around NIFM initialization,
 the Internet-connection-status query, and the current-IP-configuration query.

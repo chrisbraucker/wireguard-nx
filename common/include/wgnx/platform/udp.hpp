@@ -51,6 +51,12 @@ enum class udp_receive_disposition : std::uint8_t {
     failure,
 };
 
+enum class udp_receive_retry_reason : std::uint8_t {
+    none = 0,
+    native_transient,
+    missing_native_error,
+};
+
 enum class udp_receive_native_condition : std::uint8_t {
     none = 0,
     would_block,
@@ -61,6 +67,7 @@ enum class udp_receive_native_condition : std::uint8_t {
 
 struct udp_receive_result {
     udp_receive_disposition disposition{udp_receive_disposition::failure};
+    udp_receive_retry_reason retry_reason{udp_receive_retry_reason::none};
     udp_receive_native_condition native_condition{
         udp_receive_native_condition::other};
     std::size_t bytes_received{0};
@@ -78,6 +85,7 @@ struct udp_receive_result {
     if (native_result >= 0) {
         return {
             .disposition = udp_receive_disposition::datagram,
+            .retry_reason = udp_receive_retry_reason::none,
             .native_condition = udp_receive_native_condition::none,
             .bytes_received = static_cast<std::size_t>(native_result),
             .source = source,
@@ -92,6 +100,23 @@ struct udp_receive_result {
         native_condition == udp_receive_native_condition::interrupted) {
         return {
             .disposition = udp_receive_disposition::retry,
+            .retry_reason = udp_receive_retry_reason::native_transient,
+            .native_condition = native_condition,
+            .bytes_received = 0,
+            .source = {},
+            .error = socket_error::none,
+            .native_result = native_result,
+            .native_error = native_error,
+        };
+    }
+
+    // Horizon BSD has been observed to return a negative RecvFrom result while
+    // GetLastError reports success. This is not evidence of a path transition.
+    if (native_condition == udp_receive_native_condition::none &&
+        native_error == 0) {
+        return {
+            .disposition = udp_receive_disposition::retry,
+            .retry_reason = udp_receive_retry_reason::missing_native_error,
             .native_condition = native_condition,
             .bytes_received = 0,
             .source = {},
@@ -103,6 +128,7 @@ struct udp_receive_result {
 
     return {
         .disposition = udp_receive_disposition::failure,
+        .retry_reason = udp_receive_retry_reason::none,
         .native_condition = native_condition,
         .bytes_received = 0,
         .source = {},
@@ -110,6 +136,13 @@ struct udp_receive_result {
         .native_result = native_result,
         .native_error = native_error,
     };
+}
+
+[[nodiscard]] constexpr bool udp_receive_retry_requires_pacing(
+    const udp_receive_result &result) {
+    return result.disposition == udp_receive_disposition::retry &&
+           result.retry_reason ==
+               udp_receive_retry_reason::missing_native_error;
 }
 
 struct NetworkPathSnapshot {

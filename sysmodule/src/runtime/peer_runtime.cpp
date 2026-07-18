@@ -481,17 +481,43 @@ bool PeerRuntime::StartHandshake(
     EffectBatch &effects,
     bool retry) {
     auto *peer = ProtocolPeer();
-    if (peer == nullptr || m_pending_datagram.IsPending()) {
+    if (peer == nullptr) {
+        logger::Log(
+            "WG handshake start skipped peer=%u activation=%u retry=%u reason=no_protocol_peer",
+            identity.peer_index.Value(),
+            identity.activation_generation.Value(),
+            retry ? 1U : 0U);
+        return false;
+    }
+    if (m_pending_datagram.IsPending()) {
+        logger::Log(
+            "WG handshake start skipped peer=%u activation=%u retry=%u reason=pending_datagram kind=%s generation=%u",
+            identity.peer_index.Value(),
+            identity.activation_generation.Value(),
+            retry ? 1U : 0U,
+            GetPendingDatagramKindName(m_pending_datagram.kind),
+            m_pending_datagram.generation.Value());
         return false;
     }
     const auto transition = retry
         ? m_controller.HandleHandshakeRetryTimer(m_protocol.device, *peer)
         : m_controller.StartHandshake(m_protocol.device, *peer);
     if (transition.action == wgnx::wireguard::HandshakeTransitionAction::Ignore) {
+        logger::Log(
+            "WG handshake start ignored peer=%u activation=%u retry=%u",
+            identity.peer_index.Value(),
+            identity.activation_generation.Value(),
+            retry ? 1U : 0U);
         return true;
     }
     if (transition.action != wgnx::wireguard::HandshakeTransitionAction::SendInitiation ||
         !PrepareHandshakeInitiation(PendingDatagramKind::HandshakeInitiation)) {
+        logger::Log(
+            "WG handshake start failed peer=%u activation=%u retry=%u action=%u",
+            identity.peer_index.Value(),
+            identity.activation_generation.Value(),
+            retry ? 1U : 0U,
+            static_cast<unsigned int>(transition.action));
         return false;
     }
     effects.Add(ArmProtocolTimerEffect{
@@ -801,15 +827,44 @@ void PeerRuntime::RecoverTransport(
     const TimerFacts &timer_facts,
     wgnx::platform::ktime_t now,
     EffectBatch &effects) {
+    const auto binding = m_binding.StateSnapshot();
     if (m_pending_datagram.IsPending()) {
+        logger::Log(
+            "UDP recovery deferred peer=%u activation=%u state=%s reason=pending_datagram kind=%s generation=%u binding_open=%u binding_suspended=%u socket_generation=%u socket=%d",
+            identity.peer_index.Value(),
+            identity.activation_generation.Value(),
+            wgnx::GetPeerRuntimeStateName(m_lifecycle.state),
+            GetPendingDatagramKindName(m_pending_datagram.kind),
+            m_pending_datagram.generation.Value(),
+            binding.IsOpen() ? 1U : 0U,
+            binding.suspended ? 1U : 0U,
+            binding.generation.Value(),
+            static_cast<int>(binding.socket));
         return;
     }
     auto *peer = ProtocolPeer();
     if (peer == nullptr) {
+        logger::Log(
+            "UDP recovery skipped peer=%u activation=%u state=%s reason=no_protocol_peer binding_open=%u binding_suspended=%u socket_generation=%u socket=%d",
+            identity.peer_index.Value(),
+            identity.activation_generation.Value(),
+            wgnx::GetPeerRuntimeStateName(m_lifecycle.state),
+            binding.IsOpen() ? 1U : 0U,
+            binding.suspended ? 1U : 0U,
+            binding.generation.Value(),
+            static_cast<int>(binding.socket));
         return;
     }
+    const bool current_key_can_send =
+        peer->current_keypair.CanSendAt(wgnx::wireguard::GetMonotonicTime());
     if (m_lifecycle.state == wgnx::PeerRuntimeState::Active &&
-        peer->current_keypair.CanSendAt(wgnx::wireguard::GetMonotonicTime())) {
+        current_key_can_send) {
+        logger::Log(
+            "UDP recovery selected keepalive peer=%u activation=%u socket_generation=%u socket=%d",
+            identity.peer_index.Value(),
+            identity.activation_generation.Value(),
+            binding.generation.Value(),
+            static_cast<int>(binding.socket));
         wgnx::wireguard::TransportDataError build_error{};
         if (!PrepareTransportDatagram(
                 {},
@@ -827,7 +882,18 @@ void PeerRuntime::RecoverTransport(
             .peer = identity,
             .datagram_generation = m_pending_datagram.generation,
         });
-    } else if (!StartHandshake(identity, timer_facts, effects, false)) {
+        return;
+    }
+
+    logger::Log(
+        "UDP recovery selected handshake peer=%u activation=%u state=%s current_key_can_send=%u socket_generation=%u socket=%d",
+        identity.peer_index.Value(),
+        identity.activation_generation.Value(),
+        wgnx::GetPeerRuntimeStateName(m_lifecycle.state),
+        current_key_can_send ? 1U : 0U,
+        binding.generation.Value(),
+        static_cast<int>(binding.socket));
+    if (!StartHandshake(identity, timer_facts, effects, false)) {
         EnterActivationError(
             wgnx::PeerErrorStage::Handshake,
             wgnx::PeerErrorCode::HandshakeInitFailed,

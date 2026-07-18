@@ -163,11 +163,14 @@ frame cannot accumulate with UDP send effects.
 The UDP platform boundary returns a `[[nodiscard]]` closed receive result.
 `Datagram`, `Retry`, and `Failure` are separate outcomes; byte count is therefore
 not used as an error channel, and a zero-length UDP datagram remains a datagram.
-The Horizon adapter normalizes only explicit would-block, timeout, and
-interruption conditions as retryable while preserving the native result and
-errno value for diagnostics. A negative result without a classified condition
-is terminal, so a stale Horizon BSD socket cannot become a hot retry loop. The
-receive pump continues on a retry and publishes a generation-tagged transport
+The Horizon adapter normalizes explicit would-block, timeout, and interruption
+conditions as retryable while preserving the native result and errno value for
+diagnostics. Horizon BSD has also been observed to return negative `RecvFrom`
+results while reporting no native error. This separately tagged anomaly is a
+bounded, 25 ms-paced local retry on the dedicated receive worker. It neither
+publishes a transport failure nor changes peer or binding state: NIFM
+observation owns future path/lifecycle policy. Other unclassified negative
+results are terminal. The receive pump publishes a generation-tagged transport
 failure only for a terminal outcome, preserving peer recovery policy outside
 the platform adapter.
 

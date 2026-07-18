@@ -69,12 +69,15 @@ void TestUdpReceiveClassification(TestContext &context) {
         WGNX_TEST_REQUIRE(
             context,
             retry.disposition == udp_receive_disposition::retry &&
+                retry.retry_reason ==
+                    udp_receive_retry_reason::native_transient &&
                 retry.native_condition == RetryConditions[index] &&
                 retry.bytes_received == 0 &&
                 retry.source.family == address_family::unspecified &&
                 retry.error == socket_error::none &&
                 retry.native_result == -1 &&
-                retry.native_error == NativeErrors[index],
+                retry.native_error == NativeErrors[index] &&
+                !udp_receive_retry_requires_pacing(retry),
             "retryable receive did not preserve its closed outcome");
     }
 
@@ -85,14 +88,17 @@ void TestUdpReceiveClassification(TestContext &context) {
         source);
     WGNX_TEST_REQUIRE(
         context,
-        missing_errno.disposition == udp_receive_disposition::failure &&
+        missing_errno.disposition == udp_receive_disposition::retry &&
+            missing_errno.retry_reason ==
+                udp_receive_retry_reason::missing_native_error &&
             missing_errno.native_condition == udp_receive_native_condition::none &&
             missing_errno.bytes_received == 0 &&
             missing_errno.source.family == address_family::unspecified &&
-            missing_errno.error == socket_error::receive_failed &&
+            missing_errno.error == socket_error::none &&
             missing_errno.native_result == -1 &&
-            missing_errno.native_error == 0,
-        "negative receive without a classified errno was retried");
+            missing_errno.native_error == 0 &&
+            udp_receive_retry_requires_pacing(missing_errno),
+        "negative receive without a native error did not become a paced retry");
 
     const auto failure = classify_udp_receive_result(
         -1,
@@ -102,6 +108,7 @@ void TestUdpReceiveClassification(TestContext &context) {
     WGNX_TEST_REQUIRE(
         context,
         failure.disposition == udp_receive_disposition::failure &&
+            failure.retry_reason == udp_receive_retry_reason::none &&
             failure.native_condition == udp_receive_native_condition::other &&
             failure.bytes_received == 0 &&
             failure.source.family == address_family::unspecified &&

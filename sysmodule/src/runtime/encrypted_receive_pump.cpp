@@ -17,6 +17,9 @@ namespace wgnx::sysmodule::runtime {
 
 namespace {
 
+constexpr inline auto AmbiguousReceiveRetryDelay =
+    ams::TimeSpan::FromMilliSeconds(25);
+
 wgnx::platform::ktime_t GetRuntimeNowNs() {
     return wgnx::platform::ktime_get_coarse_boottime_ns();
 }
@@ -186,6 +189,13 @@ void EncryptedReceivePump::Run(RuntimeEffectExecutor &effect_executor) {
         }
         if (receive_result.disposition ==
             wgnx::platform::udp_receive_disposition::retry) {
+            if (wgnx::platform::udp_receive_retry_requires_pacing(
+                    receive_result)) {
+                // This Horizon-specific result has no usable error condition.
+                // Keep it local to this dedicated worker; future NIFM-driven
+                // path/lifecycle policy must not infer state from this read.
+                ams::os::SleepThread(AmbiguousReceiveRetryDelay);
+            }
             continue;
         }
         if (receive_result.disposition ==

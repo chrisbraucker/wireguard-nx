@@ -610,8 +610,10 @@ including a legitimate zero-length datagram, from a retryable native wakeup and
 a terminal platform failure. The Horizon adapter normalizes `EAGAIN`,
 `EWOULDBLOCK`, `ETIMEDOUT`, `EINTR`, and the observed negative
 `RecvFrom`/`ESuccess` anomaly while retaining the raw native result and error for
-diagnostics. Retry outcomes do not publish peer transport failures; terminal
-outcomes retain the existing generation-checked failure path.
+diagnostics. The anomaly is a separately tagged, paced local retry: it does not
+publish a peer transport failure or imply a network-path transition. Retry
+outcomes do not publish peer transport failures; terminal outcomes retain the
+existing generation-checked failure path.
 
 The completed chunk adds compiler-distinct `PeerIndex`,
 `ActivationGeneration`, `SocketGeneration`, `DatagramGeneration`,

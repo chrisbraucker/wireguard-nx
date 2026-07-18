@@ -83,6 +83,17 @@ NOINLINE void RuntimeEffectExecutor::ExecutePendingDatagramSend(
                 effect.peer,
                 effect.datagram_generation,
                 snapshot)) {
+            const auto binding = m_coordinator.BindingSnapshot(
+                effect.peer.peer_index.Value());
+            logger::Log(
+                "Skipped encrypted datagram send peer=%u activation=%u datagram_generation=%u reason=snapshot_rejected binding_open=%u binding_suspended=%u socket_generation=%u socket=%d",
+                effect.peer.peer_index.Value(),
+                effect.peer.activation_generation.Value(),
+                effect.datagram_generation.Value(),
+                binding.IsOpen() ? 1U : 0U,
+                binding.suspended ? 1U : 0U,
+                binding.generation.Value(),
+                static_cast<int>(binding.socket));
             return;
         }
     }
