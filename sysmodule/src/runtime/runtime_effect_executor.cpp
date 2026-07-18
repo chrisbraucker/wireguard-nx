@@ -77,25 +77,42 @@ NOINLINE void RuntimeEffectExecutor::ExecutePendingDatagramSend(
     const SendPendingDatagramEffect &effect,
     EffectBatch &generated) {
     PendingDatagramSnapshot snapshot{};
+    bool snapshot_available = false;
+    UdpBinding::Snapshot binding{};
+    EffectBatch completion{};
     {
         std::scoped_lock lock(m_state_mutex);
-        if (!m_coordinator.SnapshotPendingDatagram(
-                effect.peer,
-                effect.datagram_generation,
-                snapshot)) {
-            const auto binding = m_coordinator.BindingSnapshot(
-                effect.peer.peer_index.Value());
-            logger::Log(
-                "Skipped encrypted datagram send peer=%u activation=%u datagram_generation=%u reason=snapshot_rejected binding_open=%u binding_suspended=%u socket_generation=%u socket=%d",
-                effect.peer.peer_index.Value(),
-                effect.peer.activation_generation.Value(),
-                effect.datagram_generation.Value(),
-                binding.IsOpen() ? 1U : 0U,
-                binding.suspended ? 1U : 0U,
-                binding.generation.Value(),
-                static_cast<int>(binding.socket));
-            return;
+        snapshot_available = m_coordinator.SnapshotPendingDatagram(
+            effect.peer,
+            effect.datagram_generation,
+            snapshot);
+        if (!snapshot_available) {
+            binding = m_coordinator.BindingSnapshot(effect.peer.peer_index.Value());
         }
+    }
+
+    if (!snapshot_available) {
+        logger::Log(
+            "Abandoned encrypted datagram send peer=%u activation=%u datagram_generation=%u reason=snapshot_rejected binding_open=%u binding_suspended=%u socket_generation=%u socket=%d",
+            effect.peer.peer_index.Value(),
+            effect.peer.activation_generation.Value(),
+            effect.datagram_generation.Value(),
+            binding.IsOpen() ? 1U : 0U,
+            binding.suspended ? 1U : 0U,
+            binding.generation.Value(),
+            static_cast<int>(binding.socket));
+
+        {
+            std::scoped_lock lock(m_state_mutex);
+            completion = m_coordinator.Dispatch(PendingDatagramSentEvent{
+                .peer = effect.peer,
+                .datagram_generation = effect.datagram_generation,
+                .error = wgnx::platform::socket_error::send_failed,
+                .occurred_at = GetRuntimeNowNs(),
+            });
+        }
+        generated.Append(completion);
+        return;
     }
 
     std::size_t sent = 0;
@@ -117,7 +134,6 @@ NOINLINE void RuntimeEffectExecutor::ExecutePendingDatagramSend(
         static_cast<int>(snapshot.binding.socket),
         static_cast<unsigned int>(error));
 
-    EffectBatch completion{};
     {
         std::scoped_lock lock(m_state_mutex);
         completion = m_coordinator.Dispatch(PendingDatagramSentEvent{

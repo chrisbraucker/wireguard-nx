@@ -2534,6 +2534,79 @@ void TestRuntimeOutboundLifecycle(TestContext &context) {
             !suspended_binding.IsOpen() &&
             coordinator.Lifecycle(0)->state == wgnx::PeerRuntimeState::Active,
         "send failure did not apply peer-owned nonterminal suspension policy");
+
+    constexpr std::array<std::uint8_t, 20> SuspendedPacket = {
+        0x45, 0x00, 0x00, 0x14, 0x00, 0x02, 0x00, 0x00, 0x40, 0x11,
+        0x00, 0x00, 0x0A, 0x42, 0x42, 0x02, 0x0A, 0x42, 0x42, 0x01,
+    };
+    effects = coordinator.Dispatch(InnerPacketStagedEvent{
+        .peer = identity,
+        .packet = SuspendedPacket,
+        .packet_id = PacketId{63},
+        .timer_facts = timer_facts,
+        .occurred_at = SessionBirthTime + wgnx::platform::NSEC_PER_SEC + 13,
+    });
+    const auto *suspended_send = effects.Size() == 1
+        ? std::get_if<SendPendingDatagramEffect>(effects.begin())
+        : nullptr;
+    WGNX_TEST_REQUIRE(
+        context,
+        suspended_send != nullptr &&
+            !coordinator.SnapshotPendingDatagram(
+                identity,
+                suspended_send->datagram_generation,
+                snapshot),
+        "suspended binding unexpectedly exposed a sendable datagram snapshot");
+
+    effects = coordinator.Dispatch(PendingDatagramSentEvent{
+        .peer = identity,
+        .datagram_generation = suspended_send->datagram_generation,
+        .error = wgnx::platform::socket_error::send_failed,
+        .occurred_at = SessionBirthTime + wgnx::platform::NSEC_PER_SEC + 14,
+    });
+    WGNX_TEST_REQUIRE(
+        context,
+        effects.Empty() &&
+            !coordinator.SnapshotPendingDatagram(
+                identity,
+                suspended_send->datagram_generation,
+                snapshot),
+        "abandoned suspended send left a pending datagram behind");
+
+    effects = coordinator.Dispatch(UdpRebindRequestedEvent{
+        .peer = identity,
+        .occurred_at = SessionBirthTime + wgnx::platform::NSEC_PER_SEC + 15,
+    });
+    const auto *recovery_rebind = effects.Size() == 1
+        ? std::get_if<OpenUdpBindEffect>(effects.begin())
+        : nullptr;
+    WGNX_TEST_REQUIRE(
+        context,
+        recovery_rebind != nullptr,
+        "rebind was not requested after abandoning a suspended send");
+
+    effects = coordinator.Dispatch(UdpBindOpenedEvent{
+        .peer = recovery_rebind->peer,
+        .endpoint = recovery_rebind->endpoint,
+        .endpoint_text = recovery_rebind->endpoint_text,
+        .socket = 93,
+        .error = wgnx::platform::socket_error::none,
+        .socket_generation = recovery_rebind->socket_generation,
+        .purpose = UdpBindPurpose::Rebind,
+        .timer_facts = timer_facts,
+        .occurred_at = SessionBirthTime + wgnx::platform::NSEC_PER_SEC + 16,
+    });
+    const auto *recovery_send = effects.Size() > 0
+        ? std::get_if<SendPendingDatagramEffect>(effects.begin())
+        : nullptr;
+    WGNX_TEST_REQUIRE(
+        context,
+        recovery_send != nullptr &&
+            coordinator.SnapshotPendingDatagram(
+                identity,
+                recovery_send->datagram_generation,
+                snapshot),
+        "rebind recovery remained blocked by an abandoned suspended send");
 }
 
 void TestReplayWindowParity(TestContext &context) {
