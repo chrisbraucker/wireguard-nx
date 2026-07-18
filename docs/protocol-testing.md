@@ -24,6 +24,34 @@ The runner reports every case by name and emits the failed expression, source
 location, and protocol-state detail where available. A nonzero exit status
 means at least one case failed.
 
+## Unified Local Verification
+
+Run the complete pre-device gate with:
+
+```sh
+make -C sysmodule verify
+```
+
+This command checks the repository-owned formatting profile, cppcheck's
+warning/performance/portability analysis over first-party sysmodule and host
+test sources, the stricter host warning profile, deterministic tests,
+ASan/UBSan, the target build, stack-chain budget, footprint report, and both
+staged and unstaged `git diff --check` output. It intentionally excludes the
+vendored Atmosphere libraries and Monocypher implementation.
+
+`verify` requires `DEVKITPRO`, Python 3, `clang-format`, and `cppcheck` in
+addition to the normal target build prerequisites. Tool paths can be overridden
+with `CLANG_FORMAT=/path/to/clang-format` and `CPPCHECK=/path/to/cppcheck`.
+
+ThreadSanitizer remains an optional gate:
+
+```sh
+make -C sysmodule test-tsan
+```
+
+Run it only on a host/compiler combination with a supported TSan runtime; it
+is deliberately not part of `verify`.
+
 ## Deterministic Boundary
 
 The host target links the production protocol sources against controlled test

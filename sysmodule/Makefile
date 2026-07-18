@@ -3,7 +3,7 @@
 #---------------------------------------------------------------------------------
 
 TOPDIR ?= $(CURDIR)
-HOST_ONLY_GOALS := test test-sanitize test-tsan
+HOST_ONLY_GOALS := test test-sanitize test-tsan test-warnings format-check static-check diff-check
 HOST_ONLY_BUILD := $(strip $(filter $(HOST_ONLY_GOALS),$(MAKECMDGOALS)))
 
 ifeq ($(HOST_ONLY_BUILD),)
@@ -43,12 +43,18 @@ HOST_CC		?= cc
 PYTHON		?= python3
 HOST_TEST_CXXFLAGS := -std=c++23 -Wall -Wextra -Wpedantic -Werror
 HOST_TEST_CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -Werror
+HOST_WARNING_CXXFLAGS := $(HOST_TEST_CXXFLAGS) -Wshadow -Wformat=2
 HOST_TEST_DIR	:= $(OUTDIR)/host-test
 HOST_TEST_TARGET := $(HOST_TEST_DIR)/wireguard-host-test
 HOST_SANITIZE_DIR := $(OUTDIR)/host-test-sanitize
 HOST_SANITIZE_TARGET := $(HOST_SANITIZE_DIR)/wireguard-host-test
 HOST_TSAN_DIR := $(OUTDIR)/host-test-tsan
 HOST_TSAN_TARGET := $(HOST_TSAN_DIR)/wireguard-host-test
+HOST_WARNING_DIR := $(OUTDIR)/host-test-warnings
+HOST_WARNING_TARGET := $(HOST_WARNING_DIR)/wireguard-host-test
+CLANG_FORMAT ?= clang-format
+CPPCHECK ?= cppcheck
+VERIFY_SOURCES := $(TOPDIR)/tools/verify_sources.py
 HOST_TEST_CPP_SOURCES := \
 	src/runtime/debug_probe_runner.cpp \
 	src/runtime/endpoint_resolver.cpp \
@@ -169,7 +175,8 @@ export BUILD_EXEFS_SRC := $(TOPDIR)/$(EXEFS_SRC)
 export APP_JSON := $(TOPDIR)/res/module.json
 
 .PHONY	: $(BUILD) clean clean-libs clean-build all libs dist test test-sanitize test-tsan \
-		prepare-build-id check-stack report-footprint resource-report
+		test-warnings format-check static-check diff-check verify prepare-build-id check-stack \
+		report-footprint resource-report
 
 #---------------------------------------------------------------------------------
 all	: $(BUILD)
@@ -189,6 +196,30 @@ test-sanitize: $(HOST_SANITIZE_TARGET)
 
 test-tsan: $(HOST_TSAN_TARGET)
 	@TSAN_OPTIONS=halt_on_error=1 $(HOST_TSAN_TARGET)
+
+test-warnings: $(HOST_WARNING_TARGET)
+	@$(HOST_WARNING_TARGET)
+
+format-check:
+	@$(PYTHON) $(VERIFY_SOURCES) format --root $(TOPDIR) --formatter $(CLANG_FORMAT)
+
+static-check:
+	@$(PYTHON) $(VERIFY_SOURCES) static --root $(TOPDIR) --analyzer $(CPPCHECK)
+
+diff-check:
+	@git -C $(TOPDIR) diff --check
+	@git -C $(TOPDIR) diff --cached --check
+
+verify:
+	@$(MAKE) --no-print-directory format-check
+	@$(MAKE) --no-print-directory static-check
+	@$(MAKE) --no-print-directory test-warnings
+	@$(MAKE) --no-print-directory test
+	@$(MAKE) --no-print-directory test-sanitize
+	@$(MAKE) --no-print-directory all
+	@$(MAKE) --no-print-directory resource-report
+	@$(MAKE) --no-print-directory diff-check
+	@echo "verification passed"
 
 check-stack: $(BUILD)
 	@$(PYTHON) $(TOPDIR)/../tools/check_stack_usage.py
@@ -212,6 +243,11 @@ $(HOST_TSAN_TARGET): Makefile $(HOST_TEST_CPP_SOURCES) $(HOST_TEST_C_SOURCES) $(
 	@[ -d $(HOST_TSAN_DIR) ] || mkdir -p $(HOST_TSAN_DIR)
 	@$(HOST_CC) $(HOST_TEST_CFLAGS) -fsanitize=thread -fno-omit-frame-pointer -I$(CURDIR)/src/wireguard/crypto -c $(CURDIR)/src/wireguard/crypto/monocypher.c -o $(HOST_TSAN_DIR)/monocypher.o
 	@$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -fsanitize=thread -fno-omit-frame-pointer $(HOST_TEST_INCLUDES) $(addprefix $(CURDIR)/,$(HOST_TEST_CPP_SOURCES)) $(HOST_TSAN_DIR)/monocypher.o -o $(HOST_TSAN_TARGET)
+
+$(HOST_WARNING_TARGET): Makefile $(HOST_TEST_CPP_SOURCES) $(HOST_TEST_C_SOURCES) $(HOST_TEST_HEADERS)
+	@[ -d $(HOST_WARNING_DIR) ] || mkdir -p $(HOST_WARNING_DIR)
+	@$(HOST_CC) $(HOST_TEST_CFLAGS) -I$(CURDIR)/src/wireguard/crypto -c $(CURDIR)/src/wireguard/crypto/monocypher.c -o $(HOST_WARNING_DIR)/monocypher.o
+	@$(HOST_CXX) $(HOST_WARNING_CXXFLAGS) $(HOST_TEST_INCLUDES) $(addprefix $(CURDIR)/,$(HOST_TEST_CPP_SOURCES)) $(HOST_WARNING_DIR)/monocypher.o -o $(HOST_WARNING_TARGET)
 
 libs	:
 	@$(foreach lib,$(LIBNAMES),$(MAKE) --no-print-directory -C $(TOPDIR)/lib/$(lib) && ) true
