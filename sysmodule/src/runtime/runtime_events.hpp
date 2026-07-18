@@ -1,6 +1,7 @@
 #pragma once
 
 #include "runtime/domain_types.hpp"
+#include "runtime/timer_facts.hpp"
 #include "wgnx/resource_budget.hpp"
 #include "wgnx/platform/udp.hpp"
 #include "wgnx/platform/clock.hpp"
@@ -86,7 +87,7 @@ struct UdpBindOpenedEvent {
     wgnx::platform::socket_error error{wgnx::platform::socket_error::open_failed};
     SocketGeneration socket_generation{};
     UdpBindPurpose purpose{UdpBindPurpose::Activation};
-    wgnx::wireguard::TimerDeadline retry_deadline{};
+    TimerFacts timer_facts{};
     wgnx::platform::ktime_t occurred_at{0};
 };
 
@@ -100,9 +101,7 @@ struct EncryptedDatagramReceivedEvent {
     SynchronousPacketView packet{std::span<const std::uint8_t>{}};
     wgnx::platform::endpoint source{};
     std::array<char, sizeof(wgnx::PeerInfo::resolved_endpoint)> source_text{};
-    wgnx::wireguard::TimerDeadline keepalive_deadline{};
-    wgnx::wireguard::TimerDeadline rekey_deadline{};
-    wgnx::wireguard::TimerDeadline zero_key_material_deadline{};
+    TimerFacts timer_facts{};
     wgnx::platform::ktime_t occurred_at{0};
 };
 
@@ -118,13 +117,13 @@ struct InnerPacketStagedEvent {
     PeerIdentity peer{};
     SynchronousPacketView packet{std::span<const std::uint8_t>{}};
     PacketId packet_id{};
-    wgnx::wireguard::TimerDeadline retry_deadline{};
+    TimerFacts timer_facts{};
     wgnx::platform::ktime_t occurred_at{0};
 };
 
 struct ProcessOutboundQueueEvent {
     PeerIdentity peer{};
-    wgnx::wireguard::TimerDeadline retry_deadline{};
+    TimerFacts timer_facts{};
     wgnx::platform::ktime_t occurred_at{0};
 };
 
@@ -132,9 +131,7 @@ struct ProtocolTimerExpiredEvent {
     PeerIdentity peer{};
     wgnx::wireguard::TimerHook hook{wgnx::wireguard::TimerHook::RetransmitHandshake};
     wgnx::wireguard::TimerToken token{};
-    wgnx::wireguard::TimerDeadline retry_deadline{};
-    wgnx::wireguard::TimerDeadline keepalive_deadline{};
-    wgnx::wireguard::TimerDeadline zero_key_material_deadline{};
+    TimerFacts timer_facts{};
     wgnx::platform::ktime_t occurred_at{0};
 };
 
@@ -223,6 +220,13 @@ struct PublishDecryptedPacketEffect {
     PacketGeneration packet_generation{};
 };
 
+struct ArmDebugProbeTimeoutEffect {
+    PeerIdentity peer{};
+    wgnx::platform::jiffies_t deadline{0};
+};
+
+struct CancelDebugProbeTimeoutEffect {};
+
 using RuntimeEffect = std::variant<
     ResolveEndpointEffect,
     OpenUdpBindEffect,
@@ -232,7 +236,9 @@ using RuntimeEffect = std::variant<
     ArmProtocolTimerEffect,
     CancelProtocolTimerEffect,
     QueueInnerPacketSubmissionEffect,
-    PublishDecryptedPacketEffect>;
+    PublishDecryptedPacketEffect,
+    ArmDebugProbeTimeoutEffect,
+    CancelDebugProbeTimeoutEffect>;
 
 class EffectBatch {
 public:

@@ -48,6 +48,11 @@ int main() {
         TestCase{"protocol.keypair-protocol-limits", wgnx::test::TestKeypairProtocolLimits},
         TestCase{"protocol.outbound-staging-lifecycle", wgnx::test::TestOutboundStagingLifecycle},
         TestCase{"protocol.handshake-retry-lifecycle", wgnx::test::TestHandshakeRetryLifecycle},
+        TestCase{"runtime.autostart-persistence-generation", wgnx::test::TestAutoStartPersistenceGeneration},
+        TestCase{"runtime.udp-binding-ownership", wgnx::test::TestUdpBindingOwnership},
+        TestCase{
+            "runtime.composition-failure-injection",
+            wgnx::test::TestRuntimeCompositionFailureInjection},
     };
 
     return wgnx::test::RunTests(tests);

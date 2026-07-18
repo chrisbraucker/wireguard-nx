@@ -3,13 +3,11 @@
 #include "runtime/horizon_dispatcher.hpp"
 #include "runtime/runtime_effect_executor.hpp"
 
+#include "development_config.hpp"
 #include "logger.hpp"
 #include "wgnx/platform/clock.hpp"
 #include "wgnx/platform/udp.hpp"
-#include "wireguard/timers.hpp"
-
 #include <array>
-#include <chrono>
 #include <cstdio>
 #include <memory>
 #include <mutex>
@@ -83,6 +81,7 @@ NOINLINE void EncryptedReceivePump::CommitReceivedPacket(
     const wgnx::platform::endpoint &source,
     EffectBatch &out_effects) {
     out_effects.Clear();
+    const auto timer_facts = CaptureTimerFacts();
     std::scoped_lock lock(m_state_mutex);
     const auto binding =
         m_coordinator.BindingSnapshot(snapshot.peer.peer_index.Value());
@@ -91,28 +90,15 @@ NOINLINE void EncryptedReceivePump::CommitReceivedPacket(
         return;
     }
 
-    const auto *lifecycle =
-        m_coordinator.Lifecycle(snapshot.peer.peer_index.Value());
-    AMS_ABORT_UNLESS(lifecycle != nullptr);
     std::array<char, sizeof(wgnx::PeerInfo::resolved_endpoint)> source_text{};
     FormatEndpointText(source, source_text);
-    const auto now_jiffies = wgnx::platform::get_jiffies_64();
     out_effects = m_coordinator.Dispatch(
         EncryptedDatagramReceivedEvent{
             .peer = snapshot.peer,
             .packet = packet,
             .source = source,
             .source_text = source_text,
-            .keepalive_deadline =
-                wgnx::wireguard::TimerDeadlineFromJiffies(now_jiffies) +
-                std::chrono::seconds{
-                    lifecycle->persistent_keepalive_interval},
-            .rekey_deadline =
-                wgnx::wireguard::TimerDeadlineFromJiffies(now_jiffies) +
-                wgnx::wireguard::RekeyAfterTime,
-            .zero_key_material_deadline =
-                wgnx::wireguard::TimerDeadlineFromJiffies(now_jiffies) +
-                wgnx::wireguard::ZeroKeyMaterialAfterTime,
+            .timer_facts = timer_facts,
             .occurred_at = GetRuntimeNowNs(),
         });
 }
@@ -157,6 +143,7 @@ void EncryptedReceivePump::CommitReceiveFailure(
 }
 
 void EncryptedReceivePump::Run(RuntimeEffectExecutor &effect_executor) {
+    ON_SCOPE_EXIT { logger::Flush(); };
     // HorizonDispatcher serializes this callback on one ordered work queue, so
     // the process-lifetime receive storage has one exclusive user at a time.
     wgnx::platform::packet_buffer packet{
@@ -172,27 +159,31 @@ void EncryptedReceivePump::Run(RuntimeEffectExecutor &effect_executor) {
             return;
         }
 
-        logger::Log(
-            "WG receive iteration begin peer=%u activation=%u socket_generation=%u socket=%d",
-            snapshot.peer.peer_index.Value(),
-            snapshot.peer.activation_generation.Value(),
-            snapshot.socket_generation.Value(),
-            static_cast<int>(snapshot.socket));
+        if constexpr (development_config::VerboseHeartbeatLogging) {
+            logger::Log(
+                "WG receive iteration begin peer=%u activation=%u socket_generation=%u socket=%d",
+                snapshot.peer.peer_index.Value(),
+                snapshot.peer.activation_generation.Value(),
+                snapshot.socket_generation.Value(),
+                static_cast<int>(snapshot.socket));
+        }
         const auto receive_result = wgnx::platform::udp_receive(
             snapshot.socket,
             packet.storage());
-        logger::Log(
-            "WG receive iteration end peer=%u activation=%u socket_generation=%u socket=%d disposition=%u error=%u native_condition=%u native_result=%lld native_error=%u bytes=%zu",
-            snapshot.peer.peer_index.Value(),
-            snapshot.peer.activation_generation.Value(),
-            snapshot.socket_generation.Value(),
-            static_cast<int>(snapshot.socket),
-            static_cast<unsigned int>(receive_result.disposition),
-            static_cast<unsigned int>(receive_result.error),
-            static_cast<unsigned int>(receive_result.native_condition),
-            static_cast<long long>(receive_result.native_result),
-            receive_result.native_error,
-            receive_result.bytes_received);
+        if constexpr (development_config::VerboseHeartbeatLogging) {
+            logger::Log(
+                "WG receive iteration end peer=%u activation=%u socket_generation=%u socket=%d disposition=%u error=%u native_condition=%u native_result=%lld native_error=%u bytes=%zu",
+                snapshot.peer.peer_index.Value(),
+                snapshot.peer.activation_generation.Value(),
+                snapshot.socket_generation.Value(),
+                static_cast<int>(snapshot.socket),
+                static_cast<unsigned int>(receive_result.disposition),
+                static_cast<unsigned int>(receive_result.error),
+                static_cast<unsigned int>(receive_result.native_condition),
+                static_cast<long long>(receive_result.native_result),
+                receive_result.native_error,
+                receive_result.bytes_received);
+        }
         if (receive_result.disposition ==
             wgnx::platform::udp_receive_disposition::retry) {
             continue;

@@ -1,4 +1,5 @@
 #include "runtime/daemon_runtime.hpp"
+#include "runtime/autostart_persistence.hpp"
 #include "runtime/debug_probe_runner.hpp"
 #include "runtime/encrypted_receive_pump.hpp"
 #include "runtime/endpoint_resolver.hpp"
@@ -69,19 +70,26 @@ private:
 
     void ClearInnerPacketStateLocked(const char *reason);
     runtime::EffectBatch SetPeerInactive(std::size_t peer_index);
-    void QueuePayloadSubmissionWork();
     runtime::DebugProbeQueueResult QueuePayloadSubmissionRequestLocked(
         wgnx::DebugTriggerAction action);
     wgnx::PeerInfo BuildPeerInfo(std::size_t peer_index);
     bool HasRuntimeErrors();
-    void InitializeState();
-    bool IsValidPeerIndex(std::int32_t peer_index);
+    void EnsureInitialized();
+    void InitializeStateLocked();
+    bool CaptureAutoStartPersistenceRequestLocked(
+        std::int32_t peer_index,
+        runtime::AutoStartPersistenceRequest &out_request);
+    bool IsCurrentAutoStartPersistenceRequestLocked(
+        const runtime::AutoStartPersistenceRequest &request) const;
+    bool IsValidPeerIndex(std::int32_t peer_index) const;
     void ExecuteRuntimeEffects(const runtime::EffectBatch &effects);
     void InitializeHorizonDispatcher();
 
     static DaemonRuntime *s_instance;
     DaemonState m_state{};
     ams::os::Mutex m_state_mutex;
+    ams::os::Mutex m_initialization_mutex;
+    ams::os::Mutex m_auto_start_persistence_mutex;
     runtime::EndpointResolver m_endpoint_resolver{};
     runtime::HorizonDispatcher m_horizon_dispatcher{};
     runtime::TimerScheduler m_timer_scheduler{};
@@ -92,6 +100,7 @@ private:
     runtime::NetworkPathObserver m_network_path_observer{};
     runtime::PeerConfigurationLoader m_peer_configuration_loader{};
     runtime::LoadedPeerConfiguration m_loaded_peer_configuration{};
+    runtime::AutoStartPersistenceState m_auto_start_persistence{};
     runtime::EncryptedReceivePump m_receive_pump;
     runtime::RuntimeEffectExecutor m_effect_executor;
 };
@@ -104,6 +113,8 @@ DaemonRuntime *DaemonRuntime::s_instance = nullptr;
 
 DaemonRuntime::DaemonRuntime()
     : m_state_mutex(false),
+      m_initialization_mutex(false),
+      m_auto_start_persistence_mutex(false),
       m_runtime_coordinator(m_state.peers),
       m_packet_data_plane(m_runtime_coordinator, m_packet_channel),
       m_receive_pump(
@@ -140,7 +151,6 @@ void DaemonRuntime::ClearInnerPacketStateLocked(const char *reason) {
 }
 
 runtime::EffectBatch DaemonRuntime::SetPeerInactive(std::size_t peer_index) {
-    m_effect_executor.CancelDebugProbeTimeout();
     const auto *lifecycle = m_runtime_coordinator.Lifecycle(peer_index);
     AMS_ABORT_UNLESS(lifecycle != nullptr);
     const runtime::PeerIdentity peer{
@@ -150,14 +160,12 @@ runtime::EffectBatch DaemonRuntime::SetPeerInactive(std::size_t peer_index) {
     };
     m_debug_probe_runner.Cancel(&peer);
     ClearInnerPacketStateLocked("peer inactive");
-    return m_runtime_coordinator.Dispatch(runtime::DeactivationRequestedEvent{
+    auto effects = m_runtime_coordinator.Dispatch(runtime::DeactivationRequestedEvent{
         .peer = peer,
         .occurred_at = GetRuntimeNowNs(),
     });
-}
-
-[[maybe_unused]] void DaemonRuntime::QueuePayloadSubmissionWork() {
-    m_horizon_dispatcher.QueueDebugPayloadSubmission();
+    effects.Add(runtime::CancelDebugProbeTimeoutEffect{});
+    return effects;
 }
 
 [[maybe_unused]] runtime::DebugProbeQueueResult
@@ -185,13 +193,13 @@ bool DaemonRuntime::HasRuntimeErrors() {
     return m_runtime_coordinator.HasRuntimeErrors();
 }
 
-void DaemonRuntime::InitializeState() {
+void DaemonRuntime::InitializeStateLocked() {
     if (m_state.initialized) {
         return;
     }
 
     auto &config = m_loaded_peer_configuration;
-    if (m_peer_configuration_loader.Load(config)) {
+    if (config.peer_count != 0) {
         const bool assigned = m_runtime_coordinator.Configure(
             std::span<const wgnx::PeerConfigEntry>(config.peers).first(config.peer_count),
             std::span<runtime::PeerConfigDerivedInfo>(config.derived).first(config.peer_count),
@@ -199,7 +207,9 @@ void DaemonRuntime::InitializeState() {
             GetRuntimeNowNs());
         AMS_ABORT_UNLESS(assigned);
     } else {
-        m_runtime_coordinator.ClearConfiguration(GetRuntimeNowNs());
+        const auto cleanup_effects =
+            m_runtime_coordinator.ClearConfiguration(GetRuntimeNowNs());
+        AMS_ABORT_UNLESS(cleanup_effects.Empty());
     }
     config.~LoadedPeerConfiguration();
     std::construct_at(std::addressof(config));
@@ -210,7 +220,63 @@ void DaemonRuntime::InitializeState() {
         m_runtime_coordinator.PeerCount());
 }
 
-bool DaemonRuntime::IsValidPeerIndex(std::int32_t peer_index) {
+void DaemonRuntime::EnsureInitialized() {
+    std::scoped_lock initialization_lock(m_initialization_mutex);
+    {
+        std::scoped_lock state_lock(m_state_mutex);
+        if (m_state.initialized) {
+            return;
+        }
+    }
+
+    auto &config = m_loaded_peer_configuration;
+    if (!m_peer_configuration_loader.Load(config)) {
+        config.peer_count = 0;
+    }
+
+    std::scoped_lock state_lock(m_state_mutex);
+    InitializeStateLocked();
+}
+
+bool DaemonRuntime::CaptureAutoStartPersistenceRequestLocked(
+    std::int32_t peer_index,
+    runtime::AutoStartPersistenceRequest &out_request) {
+    if (!IsValidPeerIndex(peer_index)) {
+        return false;
+    }
+
+    const char *peer_name = nullptr;
+    if (peer_index >= 0) {
+        const auto *configuration = m_runtime_coordinator.Configuration(
+            static_cast<std::size_t>(peer_index));
+        if (configuration == nullptr) {
+            return false;
+        }
+        peer_name = configuration->name.data();
+    }
+    out_request = m_auto_start_persistence.Begin(peer_index, peer_name);
+    return true;
+}
+
+bool DaemonRuntime::IsCurrentAutoStartPersistenceRequestLocked(
+    const runtime::AutoStartPersistenceRequest &request) const {
+    if (!m_auto_start_persistence.IsCurrent(request) ||
+        !IsValidPeerIndex(request.peer_index)) {
+        return false;
+    }
+    if (request.peer_index < 0) {
+        return true;
+    }
+    const auto *configuration = m_runtime_coordinator.Configuration(
+        static_cast<std::size_t>(request.peer_index));
+    return configuration != nullptr &&
+           std::strncmp(
+               configuration->name.data(),
+               request.peer_name.data(),
+               request.peer_name.size()) == 0;
+}
+
+bool DaemonRuntime::IsValidPeerIndex(std::int32_t peer_index) const {
     return m_runtime_coordinator.IsValidSelection(peer_index);
 }
 
@@ -292,8 +358,9 @@ void DaemonRuntime::InitializeHorizonDispatcher() {
 }
 
 wgnx::DaemonStatus DaemonRuntime::GetDaemonStatus() {
+    ON_SCOPE_EXIT { logger::Flush(); };
+    EnsureInitialized();
     std::scoped_lock lock(m_state_mutex);
-    InitializeState();
 
     return {
         .abi_version = wgnx::IpcApiVersion,
@@ -308,8 +375,9 @@ wgnx::DaemonStatus DaemonRuntime::GetDaemonStatus() {
 }
 
 std::uint32_t DaemonRuntime::CopyPeers(std::span<wgnx::PeerInfo> out) {
+    ON_SCOPE_EXIT { logger::Flush(); };
+    EnsureInitialized();
     std::scoped_lock lock(m_state_mutex);
-    InitializeState();
 
     const std::size_t copy_count =
         std::min<std::size_t>(out.size(), m_runtime_coordinator.PeerCount());
@@ -321,8 +389,9 @@ std::uint32_t DaemonRuntime::CopyPeers(std::span<wgnx::PeerInfo> out) {
 }
 
 ams::Result DaemonRuntime::SetActivePeer(std::int32_t peer_index) {
+    ON_SCOPE_EXIT { logger::Flush(); };
+    EnsureInitialized();
     std::unique_lock lock(m_state_mutex);
-    InitializeState();
 
     if (!IsValidPeerIndex(peer_index)) {
         logger::Log("Rejected SetActivePeer(%d): invalid index", peer_index);
@@ -358,37 +427,59 @@ ams::Result DaemonRuntime::SetActivePeer(std::int32_t peer_index) {
 }
 
 ams::Result DaemonRuntime::SetAutoStartPeer(std::int32_t peer_index) {
-    std::scoped_lock lock(m_state_mutex);
-    InitializeState();
-
-    if (!IsValidPeerIndex(peer_index)) {
-        logger::Log("Rejected SetAutoStartPeer(%d): invalid index", peer_index);
-        R_THROW(ams::fs::ResultInvalidArgument());
+    ON_SCOPE_EXIT { logger::Flush(); };
+    EnsureInitialized();
+    runtime::AutoStartPersistenceRequest request{};
+    {
+        std::scoped_lock lock(m_state_mutex);
+        if (!CaptureAutoStartPersistenceRequestLocked(peer_index, request)) {
+            logger::Log("Rejected SetAutoStartPeer(%d): invalid index", peer_index);
+            R_THROW(ams::fs::ResultInvalidArgument());
+        }
     }
 
-    const char *peer_name = nullptr;
-    if (peer_index >= 0) {
-        peer_name = m_runtime_coordinator
-                        .Configuration(static_cast<std::size_t>(peer_index))
-                        ->name.data();
+    std::scoped_lock persistence_lock(m_auto_start_persistence_mutex);
+    {
+        std::scoped_lock state_lock(m_state_mutex);
+        if (!IsCurrentAutoStartPersistenceRequestLocked(request)) {
+            logger::Log(
+                "Discarded stale SetAutoStartPeer(%d) before persistence generation=%u",
+                peer_index,
+                request.generation.Value());
+            R_SUCCEED();
+        }
     }
 
+    const char *peer_name = peer_index >= 0 ? request.peer_name.data() : nullptr;
     const ams::Result store_rc = StoreAutoStartPeerName(peer_name);
     if (R_FAILED(store_rc)) {
         logger::Log("Rejected SetAutoStartPeer(%d): persist failed rc=0x%08x", peer_index, static_cast<u32>(store_rc.GetValue()));
         R_THROW(store_rc);
     }
 
-    AMS_ABORT_UNLESS(m_runtime_coordinator.SetAutoStartPeerIndex(peer_index));
+    {
+        std::scoped_lock state_lock(m_state_mutex);
+        if (!IsCurrentAutoStartPersistenceRequestLocked(request)) {
+            logger::Log(
+                "Discarded stale SetAutoStartPeer(%d) after persistence generation=%u",
+                peer_index,
+                request.generation.Value());
+            R_SUCCEED();
+        }
+        AMS_ABORT_UNLESS(m_runtime_coordinator.SetAutoStartPeerIndex(peer_index));
+    }
     logger::Log("SetAutoStartPeer(%d)", peer_index);
     R_SUCCEED();
 }
 
 ams::Result DaemonRuntime::TriggerDebugPayload(wgnx::DebugTriggerAction action) {
-    std::scoped_lock lock(m_state_mutex);
-    InitializeState();
-
-    const auto queue_result = QueuePayloadSubmissionRequestLocked(action);
+    ON_SCOPE_EXIT { logger::Flush(); };
+    EnsureInitialized();
+    runtime::DebugProbeQueueResult queue_result{};
+    {
+        std::scoped_lock lock(m_state_mutex);
+        queue_result = QueuePayloadSubmissionRequestLocked(action);
+    }
     if (queue_result != runtime::DebugProbeQueueResult::Queued) {
         logger::Log(
             "Rejected TriggerDebugPayload(action=%u): reason=%u",
@@ -396,16 +487,16 @@ ams::Result DaemonRuntime::TriggerDebugPayload(wgnx::DebugTriggerAction action) 
             static_cast<unsigned int>(queue_result));
         R_THROW(ams::fs::ResultInvalidArgument());
     }
-
-    QueuePayloadSubmissionWork();
+    m_horizon_dispatcher.QueueDebugPayloadSubmission();
     logger::Log("Queued debug payload trigger action=%s", wgnx::GetDebugTriggerActionName(action));
     R_SUCCEED();
 }
 
 ams::Result DaemonRuntime::BumpUdpBinding() {
+    ON_SCOPE_EXIT { logger::Flush(); };
+    EnsureInitialized();
     {
         std::scoped_lock lock(m_state_mutex);
-        InitializeState();
         runtime::PeerPacketStateSnapshot peer{};
         if (!m_runtime_coordinator.SnapshotPacketState(peer)) {
             logger::Log("Rejected BumpUdpBinding: no active peer");
@@ -461,19 +552,17 @@ wgnx::PacketSubmissionResult DaemonRuntime::SubmitInnerIpv4Packet(
         .peer_index = -1,
     };
 
+    ON_SCOPE_EXIT { logger::Flush(); };
+    EnsureInitialized();
     runtime::EffectBatch effects{};
     runtime::PacketSubmissionOutcome outcome{};
+    const auto timer_facts = runtime::CaptureTimerFacts();
     {
         std::scoped_lock lock(m_state_mutex);
-        InitializeState();
         outcome = m_packet_data_plane.SubmitIpv4Packet(
             packet_bytes,
             process_id,
-            wgnx::wireguard::TimerDeadlineFromJiffies(
-                wgnx::platform::get_jiffies_64()) +
-                wgnx::wireguard::GetHandshakeRetryDelay(
-                    wgnx::platform::get_random_u32_below(
-                        wgnx::wireguard::RekeyTimeoutJitterMaxMs)),
+            timer_facts,
             GetRuntimeNowNs(),
             effects);
         if (outcome.ownership_transferred) {
@@ -542,10 +631,11 @@ wgnx::PacketReceiveResult DaemonRuntime::ReceiveInnerIpv4Packet(
         .peer_index = -1,
     };
 
+    ON_SCOPE_EXIT { logger::Flush(); };
+    EnsureInitialized();
     runtime::PacketReceiveOutcome outcome{};
     {
         std::scoped_lock lock(m_state_mutex);
-        InitializeState();
         outcome = m_packet_data_plane.ReceivePacket(packet, process_id);
     }
     result.packet_id = outcome.packet_id.Value();
@@ -585,11 +675,9 @@ wgnx::PacketReceiveResult DaemonRuntime::ReceiveInnerIpv4Packet(
 }
 
 void DaemonRuntime::Initialize() {
-    {
-        std::scoped_lock lock(m_state_mutex);
-        InitializeState();
-    }
+    EnsureInitialized();
     InitializeHorizonDispatcher();
+    logger::Flush();
 }
 
 DaemonRuntime g_daemon_runtime{};

@@ -116,8 +116,6 @@ struct DecryptedPacketSlot {
     PacketGeneration generation{};
 };
 
-class RuntimeCoordinator;
-
 class PeerRuntime {
 public:
     const PeerRuntimeInfo &Lifecycle() const { return m_lifecycle; }
@@ -131,6 +129,8 @@ public:
     bool IsTimerCurrent(
         const wgnx::wireguard::TimerToken &token,
         const wgnx::wireguard::TimerOwner &owner) const;
+    wgnx::wireguard::TimerOwner CurrentTimerOwner(
+        wgnx::wireguard::TimerHook hook) const;
     wgnx::PeerInfo BuildInfo(
         wgnx::platform::ktime_t now,
         bool is_active,
@@ -146,14 +146,19 @@ public:
     bool CanStageInnerPacket() const;
     std::size_t StagedInnerPacketCount() const;
 
-private:
-    friend class RuntimeCoordinator;
-
+    // Closed owner transitions used by PeerRegistry. These mutate only
+    // peer-owned state and return any platform work as explicit effects.
     void Configure(
         PeerIndex peer_index,
         const wgnx::PeerConfigEntry &config,
         PeerConfigDerivedInfo derived,
         wgnx::platform::ktime_t now);
+    [[nodiscard]] wgnx::platform::socket_handle ClearConfiguration(
+        wgnx::platform::ktime_t now);
+    [[nodiscard]] EffectBatch Handle(const PeerEvent &event);
+    std::size_t ClearStagedInnerPackets();
+
+private:
     void Deactivate(wgnx::platform::ktime_t now);
     ActivationGeneration BeginActivation(wgnx::platform::ktime_t now);
     bool EnterHandshaking(ActivationGeneration activation_generation, wgnx::platform::ktime_t now);
@@ -164,8 +169,6 @@ private:
         wgnx::platform::ktime_t now);
     void RecordReceivedBytes(std::size_t byte_count, wgnx::platform::ktime_t now);
     void RecordTransmittedBytes(std::size_t byte_count, wgnx::platform::ktime_t now);
-    EffectBatch Handle(const PeerEvent &event);
-    std::size_t ClearStagedInnerPackets();
     void ResetLifecycle(
         wgnx::PeerRuntimeState state,
         ActivationGeneration activation_generation,
@@ -184,12 +187,12 @@ private:
         wgnx::wireguard::TransportDataError &out_error);
     bool StartHandshake(
         const PeerIdentity &identity,
-        wgnx::wireguard::TimerDeadline retry_deadline,
+        const TimerFacts &timer_facts,
         EffectBatch &effects,
         bool retry);
     void ProcessOutboundQueue(
         const PeerIdentity &identity,
-        wgnx::wireguard::TimerDeadline retry_deadline,
+        const TimerFacts &timer_facts,
         wgnx::platform::ktime_t now,
         EffectBatch &effects);
     void HandlePendingDatagramCompletion(
@@ -215,10 +218,18 @@ private:
         wgnx::platform::ktime_t now,
         EffectBatch *effects);
     void FinalizeTimerEffects(EffectBatch &effects);
+    wgnx::wireguard::TimerDeadline HandshakeRetryDeadline(
+        const TimerFacts &timer_facts) const;
+    wgnx::wireguard::TimerDeadline KeepaliveDeadline(
+        const TimerFacts &timer_facts) const;
+    wgnx::wireguard::TimerDeadline RekeyDeadline(
+        const TimerFacts &timer_facts) const;
+    wgnx::wireguard::TimerDeadline ZeroKeyMaterialDeadline(
+        const TimerFacts &timer_facts) const;
     void SuspendTransport(const PeerIdentity &identity, EffectBatch &effects);
     void RecoverTransport(
         const PeerIdentity &identity,
-        wgnx::wireguard::TimerDeadline retry_deadline,
+        const TimerFacts &timer_facts,
         wgnx::platform::ktime_t now,
         EffectBatch &effects);
 
@@ -242,6 +253,8 @@ private:
 
 class PeerRegistry {
 public:
+    static constexpr std::size_t Capacity = wgnx::resource_budget::PeerSlots;
+
     constexpr std::uint32_t Count() const { return m_count; }
     constexpr bool Empty() const { return m_count == 0; }
 
@@ -252,9 +265,22 @@ public:
     constexpr std::int32_t ActivePeerIndex() const { return m_active_peer_index; }
     constexpr std::int32_t AutoStartPeerIndex() const { return m_auto_start_peer_index; }
 
-private:
-    friend class RuntimeCoordinator;
+    [[nodiscard]] bool Configure(
+        std::span<const wgnx::PeerConfigEntry> configured_peers,
+        std::span<PeerConfigDerivedInfo> derived,
+        std::int32_t auto_start_peer_index,
+        wgnx::platform::ktime_t now);
+    [[nodiscard]] EffectBatch ClearConfiguration(wgnx::platform::ktime_t now);
+    [[nodiscard]] bool SetActivePeerIndex(std::int32_t peer_index);
+    [[nodiscard]] bool SetAutoStartPeerIndex(std::int32_t peer_index);
 
+    [[nodiscard]] EffectBatch Dispatch(const PeerEvent &event);
+    [[nodiscard]] const PeerRuntime *PeerAt(PeerIndex peer_index) const;
+    [[nodiscard]] bool HasRuntimeErrors() const;
+    std::size_t ClearStagedInnerPackets(PeerIndex peer_index);
+    std::size_t ClearAllStagedInnerPackets();
+
+private:
     std::array<PeerRuntime, wgnx::resource_budget::PeerSlots> m_peers{};
     std::uint32_t m_count{0};
     std::int32_t m_active_peer_index{-1};
@@ -265,5 +291,6 @@ static_assert(
     sizeof(PeerRuntime) <= wgnx::resource_budget::MaximumPeerRuntimeBytes);
 static_assert(
     sizeof(PeerRegistry) <= wgnx::resource_budget::MaximumPeerRegistryBytes);
+static_assert(PeerRegistry::Capacity <= EffectBatch::Capacity);
 
 } // namespace wgnx::sysmodule::runtime

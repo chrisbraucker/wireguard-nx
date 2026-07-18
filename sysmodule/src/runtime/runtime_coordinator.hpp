@@ -33,17 +33,17 @@ public:
         std::span<PeerConfigDerivedInfo> derived,
         std::int32_t auto_start_peer_index,
         wgnx::platform::ktime_t now);
-    void ClearConfiguration(wgnx::platform::ktime_t now);
+    [[nodiscard]] EffectBatch ClearConfiguration(wgnx::platform::ktime_t now);
     [[nodiscard]] bool SetActivePeerIndex(std::int32_t peer_index);
     [[nodiscard]] bool SetAutoStartPeerIndex(std::int32_t peer_index);
 
     [[nodiscard]] EffectBatch Dispatch(const PeerEvent &event);
 
-    std::uint32_t PeerCount() const { return m_peers.m_count; }
-    bool Empty() const { return m_peers.m_count == 0; }
+    std::uint32_t PeerCount() const { return m_peers.Count(); }
+    bool Empty() const { return m_peers.Empty(); }
     bool IsValidSelection(std::int32_t peer_index) const;
-    std::int32_t ActivePeerIndex() const { return m_peers.m_active_peer_index; }
-    std::int32_t AutoStartPeerIndex() const { return m_peers.m_auto_start_peer_index; }
+    std::int32_t ActivePeerIndex() const { return m_peers.ActivePeerIndex(); }
+    std::int32_t AutoStartPeerIndex() const { return m_peers.AutoStartPeerIndex(); }
     const PeerRuntimeInfo *Lifecycle(std::size_t peer_index) const;
     const wgnx::PeerConfigEntry *Configuration(std::size_t peer_index) const;
     UdpBinding::Snapshot BindingSnapshot(std::size_t peer_index) const;
@@ -72,7 +72,6 @@ public:
 
 private:
     const PeerRuntime *PeerAt(PeerIndex peer_index) const;
-    PeerRuntime *MutablePeerAt(PeerIndex peer_index);
 
     PeerRegistry &m_peers;
 };

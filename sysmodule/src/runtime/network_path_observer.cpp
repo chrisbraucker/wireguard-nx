@@ -1,5 +1,6 @@
 #include "runtime/network_path_observer.hpp"
 
+#include "development_config.hpp"
 #include "logger.hpp"
 
 #include <cstdio>
@@ -61,10 +62,12 @@ NetworkPathObservationOutcome NetworkPathObserver::Commit(
             primary_dns,
             secondary_dns);
     }
-    logger::Log(
-        "NIFM observer commit sequence=%llu changed=%u",
-        static_cast<unsigned long long>(event.sequence),
-        changed ? 1U : 0U);
+    if constexpr (development_config::VerboseHeartbeatLogging) {
+        logger::Log(
+            "NIFM observer commit sequence=%llu changed=%u",
+            static_cast<unsigned long long>(event.sequence),
+            changed ? 1U : 0U);
+    }
     return {.sequence = event.sequence, .changed = changed};
 }
 

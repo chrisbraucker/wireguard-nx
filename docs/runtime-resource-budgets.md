@@ -25,6 +25,7 @@ by updated target footprint and stack reports.
 | Socket arena | 2 concurrent sockets | 304 KiB |
 | Resolver scratch | 1 operation | 16 KiB |
 | Filesystem heap | 1 arena | 32 KiB |
+| Diagnostic producer queue | 16 x 512-byte messages | 8 KiB |
 | Composed daemon | 1 | 216 KiB |
 
 The four ordered lanes admit at most one resolver request, two submission
@@ -65,16 +66,26 @@ The lock hierarchy is deliberately shallow:
 1. `DaemonRuntime::m_state_mutex` serializes `PeerRegistry`,
    `RuntimeCoordinator`, `PacketDataPlane`, `PacketChannel`,
    `EndpointResolver`, `DebugProbeRunner`, and the pending UDP-rebind slot.
-2. `TimerScheduler::m_operation_mutex` serializes physical timer changes. It
+   It does not cover configuration loading, filesystem persistence, concrete
+   timer operations, workqueue submission, socket operations, or effect
+   execution.
+2. `DaemonRuntime::m_initialization_mutex` serializes one bounded configuration
+   load before its in-memory snapshot is committed under the state mutex.
+3. `DaemonRuntime::m_auto_start_persistence_mutex` serializes autostart writes.
+   It is never held for filesystem work together with the daemon state mutex;
+   request generations reject obsolete writes and stale completion commits.
+4. `TimerScheduler::m_operation_mutex` serializes physical timer changes. It
    may acquire the scheduler state mutex, never the reverse.
-3. Platform timer-manager, workqueue, socket-runtime, workqueue-pool, and
+5. Platform timer-manager, workqueue, socket-runtime, workqueue-pool, and
    logger locks are independent adapter locks. No callback runs while a
    platform timer-manager or workqueue lock is held.
 
 The daemon state mutex is released before endpoint resolution, UDP open/send/
-receive/close, concrete timer operations, work submission, and effect
-execution. Runtime completion paths reacquire it only to validate identity and
-commit a factual event.
+receive/close, concrete timer operations, work submission, effect execution,
+and diagnostic flushing. `logger::Log` only appends a bounded in-memory
+message; `logger::Flush` performs debug and filesystem I/O from post-lock IPC
+and worker boundaries. Runtime completion paths reacquire the state mutex only
+to validate identity and commit a factual event.
 
 Methods named `ClearInnerPacketStateLocked`,
 `QueuePayloadSubmissionRequestLocked`, `QueueRebindLocked`, and
@@ -117,3 +128,10 @@ locks during runtime work.
 The stack-chain configuration and footprint baseline live under
 `tools/baselines/`. Updating either is a reviewed budget change, not routine
 build churn.
+
+The post-Chunk 14 corrective diagnostic queue increased measured static BSS by
+8 KiB. The current static total is 1,080,496 bytes against the 1,310,720-byte
+absolute limit. The closed `PeerRegistry` ownership interface and
+platform-neutral effect drain add 3,072 bytes of target code without changing
+any fixed storage capacity. The diagnostic queue is intentionally fixed and
+drops the oldest queued diagnostic line when full.

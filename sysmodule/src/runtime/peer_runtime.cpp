@@ -7,8 +7,10 @@
 #include "logger.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
 #include <limits>
 #include <memory>
 #include <type_traits>
@@ -69,12 +71,125 @@ void PeerRuntime::Configure(
     const wgnx::PeerConfigEntry &config,
     PeerConfigDerivedInfo derived,
     wgnx::platform::ktime_t now) {
-    m_binding.Reset();
+    if (m_binding.Socket() != wgnx::platform::InvalidSocket) {
+        std::abort();
+    }
+    m_binding.ClearEndpoint();
     Deactivate(now);
     m_peer_index = peer_index;
     m_config = config;
     m_derived = std::move(derived);
     ResetLifecycle(wgnx::PeerRuntimeState::Inactive, ActivationGeneration{}, now);
+}
+
+wgnx::platform::socket_handle PeerRuntime::ClearConfiguration(
+    wgnx::platform::ktime_t now) {
+    const auto socket = m_binding.ReleaseSocket();
+    m_binding.ClearEndpoint();
+    Deactivate(now);
+    m_config = {};
+    m_derived = {};
+    m_peer_index = {};
+    return socket;
+}
+
+bool PeerRegistry::Configure(
+    std::span<const wgnx::PeerConfigEntry> configured_peers,
+    std::span<PeerConfigDerivedInfo> derived,
+    std::int32_t auto_start_peer_index,
+    wgnx::platform::ktime_t now) {
+    if (configured_peers.size() > m_peers.size() ||
+        derived.size() != configured_peers.size() ||
+        !IsValidPeerSelection(
+            auto_start_peer_index,
+            static_cast<std::uint32_t>(configured_peers.size()))) {
+        return false;
+    }
+
+    const auto cleanup_effects = ClearConfiguration(now);
+    if (!cleanup_effects.Empty()) {
+        // Runtime configuration is only installed before activation. A live
+        // replacement must be modelled as an explicit command transition.
+        std::abort();
+    }
+
+    m_count = static_cast<std::uint32_t>(configured_peers.size());
+    for (std::size_t index = 0; index < configured_peers.size(); ++index) {
+        m_peers[index].Configure(
+            PeerIndex{static_cast<std::uint32_t>(index)},
+            configured_peers[index],
+            std::move(derived[index]),
+            now);
+    }
+    m_auto_start_peer_index = auto_start_peer_index;
+    return true;
+}
+
+EffectBatch PeerRegistry::ClearConfiguration(wgnx::platform::ktime_t now) {
+    EffectBatch effects{};
+    for (std::size_t index = 0; index < m_count; ++index) {
+        const auto socket = m_peers[index].ClearConfiguration(now);
+        if (socket != wgnx::platform::InvalidSocket) {
+            effects.Add(CloseUdpSocketEffect{.socket = socket});
+        }
+    }
+    m_count = 0;
+    m_active_peer_index = -1;
+    m_auto_start_peer_index = -1;
+    return effects;
+}
+
+bool PeerRegistry::SetActivePeerIndex(std::int32_t peer_index) {
+    if (!IsValidSelection(peer_index)) {
+        return false;
+    }
+    m_active_peer_index = peer_index;
+    return true;
+}
+
+bool PeerRegistry::SetAutoStartPeerIndex(std::int32_t peer_index) {
+    if (!IsValidSelection(peer_index)) {
+        return false;
+    }
+    m_auto_start_peer_index = peer_index;
+    return true;
+}
+
+EffectBatch PeerRegistry::Dispatch(const PeerEvent &event) {
+    const PeerIdentity identity = GetPeerIdentity(event);
+    if (identity.peer_index.Value() >= m_count) {
+        return {};
+    }
+    return m_peers[identity.peer_index.Value()].Handle(event);
+}
+
+const PeerRuntime *PeerRegistry::PeerAt(PeerIndex peer_index) const {
+    return peer_index.Value() < m_count
+        ? std::addressof(m_peers[peer_index.Value()])
+        : nullptr;
+}
+
+bool PeerRegistry::HasRuntimeErrors() const {
+    for (std::size_t index = 0; index < m_count; ++index) {
+        if (m_peers[index].Lifecycle().state == wgnx::PeerRuntimeState::Error) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::size_t PeerRegistry::ClearStagedInnerPackets(PeerIndex peer_index) {
+    return peer_index.Value() < m_count
+        ? m_peers[peer_index.Value()].ClearStagedInnerPackets()
+        : 0;
+}
+
+std::size_t PeerRegistry::ClearAllStagedInnerPackets() {
+    std::size_t cleared = 0;
+    for (std::size_t index = 0; index < m_count; ++index) {
+        cleared += m_peers[index].ClearStagedInnerPackets();
+    }
+    return cleared;
 }
 
 PeerProtocolSnapshot PeerRuntime::ProtocolSnapshot() const {
@@ -103,6 +218,19 @@ bool PeerRuntime::IsTimerCurrent(
     const wgnx::wireguard::TimerToken &token,
     const wgnx::wireguard::TimerOwner &owner) const {
     return m_controller.Timers().IsCurrent(token, owner);
+}
+
+wgnx::wireguard::TimerOwner PeerRuntime::CurrentTimerOwner(
+    wgnx::wireguard::TimerHook hook) const {
+    const auto *peer = ProtocolPeer();
+    return {
+        .peer_index = m_peer_index.Value(),
+        .activation_generation = m_lifecycle.activation_generation.Value(),
+        .protocol_sequence =
+            hook == wgnx::wireguard::TimerHook::RetransmitHandshake && peer != nullptr
+                ? peer->handshake_retry.sequence_count
+                : 0,
+    };
 }
 
 void PeerRuntime::ResetLifecycle(
@@ -252,6 +380,27 @@ PacketGeneration PeerRuntime::AllocateDecryptedPacketGeneration() {
     return AllocateGeneration(m_next_decrypted_packet_generation);
 }
 
+wgnx::wireguard::TimerDeadline PeerRuntime::HandshakeRetryDeadline(
+    const TimerFacts &timer_facts) const {
+    return timer_facts.now + wgnx::wireguard::GetHandshakeRetryDelay(
+        timer_facts.random_u32);
+}
+
+wgnx::wireguard::TimerDeadline PeerRuntime::KeepaliveDeadline(
+    const TimerFacts &timer_facts) const {
+    return timer_facts.now + std::chrono::seconds{m_config.persistent_keepalive};
+}
+
+wgnx::wireguard::TimerDeadline PeerRuntime::RekeyDeadline(
+    const TimerFacts &timer_facts) const {
+    return timer_facts.now + wgnx::wireguard::RekeyAfterTime;
+}
+
+wgnx::wireguard::TimerDeadline PeerRuntime::ZeroKeyMaterialDeadline(
+    const TimerFacts &timer_facts) const {
+    return timer_facts.now + wgnx::wireguard::ZeroKeyMaterialAfterTime;
+}
+
 bool PeerRuntime::PrepareHandshakeInitiation(PendingDatagramKind kind) {
     auto *peer = ProtocolPeer();
     if (peer == nullptr || !peer->has_last_initiation || m_pending_datagram.IsPending()) {
@@ -328,7 +477,7 @@ bool PeerRuntime::PrepareTransportDatagram(
 
 bool PeerRuntime::StartHandshake(
     const PeerIdentity &identity,
-    wgnx::wireguard::TimerDeadline retry_deadline,
+    const TimerFacts &timer_facts,
     EffectBatch &effects,
     bool retry) {
     auto *peer = ProtocolPeer();
@@ -348,7 +497,7 @@ bool PeerRuntime::StartHandshake(
     effects.Add(ArmProtocolTimerEffect{
         .peer = identity,
         .hook = wgnx::wireguard::TimerHook::RetransmitHandshake,
-        .deadline = retry_deadline,
+        .deadline = HandshakeRetryDeadline(timer_facts),
     });
     effects.Add(SendPendingDatagramEffect{
         .peer = identity,
@@ -378,7 +527,7 @@ std::size_t PeerRuntime::StagedInnerPacketCount() const {
 
 void PeerRuntime::ProcessOutboundQueue(
     const PeerIdentity &identity,
-    wgnx::wireguard::TimerDeadline retry_deadline,
+    const TimerFacts &timer_facts,
     wgnx::platform::ktime_t now,
     EffectBatch &effects) {
     auto *peer = ProtocolPeer();
@@ -408,7 +557,7 @@ void PeerRuntime::ProcessOutboundQueue(
             *peer,
             wgnx::wireguard::GetMonotonicTime());
         if (action == wgnx::wireguard::OutboundStagingAction::InitiateHandshake) {
-            if (!StartHandshake(identity, retry_deadline, effects, false)) {
+            if (!StartHandshake(identity, timer_facts, effects, false)) {
                 EnterActivationError(
                     wgnx::PeerErrorStage::Handshake,
                     wgnx::PeerErrorCode::HandshakeInitFailed,
@@ -438,7 +587,7 @@ void PeerRuntime::ProcessOutboundQueue(
             *peer,
             wgnx::wireguard::OutboundSendOutcome::BuildFailed(build_error));
         if (transition.action == wgnx::wireguard::StagedPacketAction::InitiateHandshake) {
-            if (!StartHandshake(identity, retry_deadline, effects, false)) {
+            if (!StartHandshake(identity, timer_facts, effects, false)) {
                 EnterActivationError(
                     wgnx::PeerErrorStage::Handshake,
                     wgnx::PeerErrorCode::HandshakeInitFailed,
@@ -649,7 +798,7 @@ void PeerRuntime::SuspendTransport(
 
 void PeerRuntime::RecoverTransport(
     const PeerIdentity &identity,
-    wgnx::wireguard::TimerDeadline retry_deadline,
+    const TimerFacts &timer_facts,
     wgnx::platform::ktime_t now,
     EffectBatch &effects) {
     if (m_pending_datagram.IsPending()) {
@@ -678,7 +827,7 @@ void PeerRuntime::RecoverTransport(
             .peer = identity,
             .datagram_generation = m_pending_datagram.generation,
         });
-    } else if (!StartHandshake(identity, retry_deadline, effects, false)) {
+    } else if (!StartHandshake(identity, timer_facts, effects, false)) {
         EnterActivationError(
             wgnx::PeerErrorStage::Handshake,
             wgnx::PeerErrorCode::HandshakeInitFailed,
@@ -777,18 +926,18 @@ void PeerRuntime::CompleteInitiatorSession(
         effects.Add(ArmProtocolTimerEffect{
             .peer = event.peer,
             .hook = wgnx::wireguard::TimerHook::SendKeepalive,
-            .deadline = event.keepalive_deadline,
+            .deadline = KeepaliveDeadline(event.timer_facts),
         });
     }
     effects.Add(ArmProtocolTimerEffect{
         .peer = event.peer,
         .hook = wgnx::wireguard::TimerHook::Rekey,
-        .deadline = event.rekey_deadline,
+        .deadline = RekeyDeadline(event.timer_facts),
     });
     effects.Add(ArmProtocolTimerEffect{
         .peer = event.peer,
         .hook = wgnx::wireguard::TimerHook::ZeroKeyMaterial,
-        .deadline = event.zero_key_material_deadline,
+        .deadline = ZeroKeyMaterialDeadline(event.timer_facts),
     });
     effects.Add(SendPendingDatagramEffect{
         .peer = event.peer,
@@ -856,12 +1005,12 @@ void PeerRuntime::HandleTransportData(
         effects.Add(ArmProtocolTimerEffect{
             .peer = event.peer,
             .hook = wgnx::wireguard::TimerHook::Rekey,
-            .deadline = event.rekey_deadline,
+            .deadline = RekeyDeadline(event.timer_facts),
         });
         effects.Add(ArmProtocolTimerEffect{
             .peer = event.peer,
             .hook = wgnx::wireguard::TimerHook::ZeroKeyMaterial,
-            .deadline = event.zero_key_material_deadline,
+            .deadline = ZeroKeyMaterialDeadline(event.timer_facts),
         });
         effects.Add(QueueInnerPacketSubmissionEffect{.peer = event.peer});
     }
@@ -869,7 +1018,7 @@ void PeerRuntime::HandleTransportData(
         effects.Add(ArmProtocolTimerEffect{
             .peer = event.peer,
             .hook = wgnx::wireguard::TimerHook::SendKeepalive,
-            .deadline = event.keepalive_deadline,
+            .deadline = KeepaliveDeadline(event.timer_facts),
         });
     }
 
@@ -974,13 +1123,13 @@ void PeerRuntime::HandleEncryptedDatagram(
                 effects.Add(ArmProtocolTimerEffect{
                     .peer = event.peer,
                     .hook = wgnx::wireguard::TimerHook::SendKeepalive,
-                    .deadline = event.keepalive_deadline,
+                .deadline = KeepaliveDeadline(event.timer_facts),
                 });
             }
             effects.Add(ArmProtocolTimerEffect{
                 .peer = event.peer,
                 .hook = wgnx::wireguard::TimerHook::ZeroKeyMaterial,
-                .deadline = event.zero_key_material_deadline,
+                .deadline = ZeroKeyMaterialDeadline(event.timer_facts),
             });
             effects.Add(SendPendingDatagramEffect{
                 .peer = event.peer,
@@ -1212,7 +1361,7 @@ EffectBatch PeerRuntime::Handle(const PeerEvent &event) {
                         static_cast<int>(old_socket));
                     RecoverTransport(
                         value.peer,
-                        value.retry_deadline,
+                        value.timer_facts,
                         value.occurred_at,
                         effects);
                     effects.Add(QueueReceiveEffect{.peer = value.peer});
@@ -1274,7 +1423,7 @@ EffectBatch PeerRuntime::Handle(const PeerEvent &event) {
                 effects.Add(ArmProtocolTimerEffect{
                     .peer = value.peer,
                     .hook = wgnx::wireguard::TimerHook::RetransmitHandshake,
-                    .deadline = value.retry_deadline,
+                    .deadline = HandshakeRetryDeadline(value.timer_facts),
                 });
                 effects.Add(SendPendingDatagramEffect{
                     .peer = value.peer,
@@ -1328,7 +1477,7 @@ EffectBatch PeerRuntime::Handle(const PeerEvent &event) {
                 if (IsInTransportState()) {
                     ProcessOutboundQueue(
                         value.peer,
-                        value.retry_deadline,
+                        value.timer_facts,
                         value.occurred_at,
                         effects);
                 }
@@ -1336,7 +1485,7 @@ EffectBatch PeerRuntime::Handle(const PeerEvent &event) {
                 if (IsCurrentActivation(value.peer.activation_generation)) {
                     ProcessOutboundQueue(
                         value.peer,
-                        value.retry_deadline,
+                        value.timer_facts,
                         value.occurred_at,
                         effects);
                 }
@@ -1410,7 +1559,7 @@ EffectBatch PeerRuntime::Handle(const PeerEvent &event) {
                                 effects.Add(ArmProtocolTimerEffect{
                                     .peer = value.peer,
                                     .hook = wgnx::wireguard::TimerHook::ZeroKeyMaterial,
-                                    .deadline = value.zero_key_material_deadline,
+                                    .deadline = ZeroKeyMaterialDeadline(value.timer_facts),
                                 });
                             }
                             return effects;
@@ -1422,7 +1571,7 @@ EffectBatch PeerRuntime::Handle(const PeerEvent &event) {
                             effects.Add(ArmProtocolTimerEffect{
                                 .peer = value.peer,
                                 .hook = value.hook,
-                                .deadline = value.retry_deadline,
+                                .deadline = HandshakeRetryDeadline(value.timer_facts),
                             });
                             effects.Add(SendPendingDatagramEffect{
                                 .peer = value.peer,
@@ -1446,7 +1595,7 @@ EffectBatch PeerRuntime::Handle(const PeerEvent &event) {
                                 wgnx::wireguard::GetMonotonicTime())) {
                             if (!StartHandshake(
                                     value.peer,
-                                    value.retry_deadline,
+                                    value.timer_facts,
                                     effects,
                                     false)) {
                                 EnterActivationError(
@@ -1474,7 +1623,7 @@ EffectBatch PeerRuntime::Handle(const PeerEvent &event) {
                             effects.Add(ArmProtocolTimerEffect{
                                 .peer = value.peer,
                                 .hook = value.hook,
-                                .deadline = value.keepalive_deadline,
+                                .deadline = KeepaliveDeadline(value.timer_facts),
                             });
                         }
                         effects.Add(SendPendingDatagramEffect{
@@ -1487,7 +1636,7 @@ EffectBatch PeerRuntime::Handle(const PeerEvent &event) {
                         if (m_lifecycle.state == wgnx::PeerRuntimeState::Active &&
                             !StartHandshake(
                                 value.peer,
-                                value.retry_deadline,
+                                value.timer_facts,
                                 effects,
                                 false)) {
                             EnterActivationError(

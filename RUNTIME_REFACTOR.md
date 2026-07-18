@@ -62,10 +62,11 @@ executing Horizon I/O, and dispatches generation-tagged completion events.
 
 ### PeerRegistry And PeerRuntime
 
-`PeerRegistry` owns the fixed-capacity peer collection, active-peer selection,
-and autostart selection. Each `PeerRuntime` is the sole owner of one peer's
-configuration-derived state, activation generation, lifecycle and error state,
-metrics, `PeerController`, WireGuard protocol device, and `WireGuardUdpBind`.
+`PeerRegistry` owns the fixed-capacity peer collection, fixed-slot
+configuration/clearing, active-peer selection, and autostart selection. Each
+`PeerRuntime` is the sole owner of one peer's configuration-derived state,
+activation generation, lifecycle and error state, metrics, `PeerController`,
+WireGuard protocol device, and `WireGuardUdpBind`.
 
 A peer consumes a closed `PeerEvent` and produces a bounded `EffectBatch`:
 
@@ -103,7 +104,8 @@ packet delivery.
 
 - One `PeerRuntime` owns all mutable lifecycle and protocol state for one peer.
 - No parallel arrays rely on a shared peer index as an implicit ownership link.
-- Only `RuntimeCoordinator` mediates mutable access to the peer registry.
+- `RuntimeCoordinator` mediates runtime-facing peer transitions through the
+  closed `PeerRegistry` interface; no caller receives mutable peer storage.
 - Horizon resolution, socket, and other blocking I/O never run while the state
   lock is held.
 - Every asynchronous request and completion identifies the peer and applicable
@@ -178,8 +180,14 @@ chunks will make explicit:
 - Endpoint resolution and blocking UDP receive use snapshot, unlock, perform
   I/O, relock, validate, commit. No blocking Horizon I/O is permitted while the
   daemon mutex is held.
+- Configuration loading and autostart persistence run outside the daemon mutex.
+  Autostart requests are separately serialized and carry a monotonic request
+  generation; persistence succeeds before the corresponding selection is
+  committed, and a stale request is discarded before and after filesystem I/O.
 - Timer callbacks enqueue tokenized work; protocol transitions occur only after
   the token is validated under the daemon mutex.
+- Platform adapters provide sampled `TimerFacts`; `PeerRuntime` derives every
+  WireGuard retry, keepalive, rekey, and key-erasure deadline from those facts.
 - Queue insertion, removal, clearing, and ownership transfer occur under the
   daemon mutex, and every removal records a disposition.
 
@@ -501,10 +509,12 @@ host, sanitizer, target, and real-peer behavior remains intact.
 
 **Implementation:** `PeerRuntime` now keeps configuration, derived secrets, UDP
 binding, protocol device, controller, generations, and lifecycle private.
-`PeerRegistry` exposes selection metadata only; configuration assignment,
-selection changes, packet-queue retirement, and event dispatch pass through
-`RuntimeCoordinator`. The daemon and packet data plane consume immutable,
-purpose-specific snapshots rather than peer references.
+`PeerRegistry` exposes closed collection operations for configuration,
+clearing, selection, event dispatch, and bounded packet retirement. It invokes
+the relevant `PeerRuntime` transition but does not expose mutable slots.
+`RuntimeCoordinator` remains the runtime-facing mediator, while the daemon and
+packet data plane consume immutable, purpose-specific snapshots rather than
+peer references.
 
 UDP receive failures are reported as socket- and generation-tagged facts.
 Recoverable receive errors remain nonterminal, while terminal mapping and peer
@@ -572,7 +582,8 @@ pre-refactor limitation and did not expose a Chunk 12 regression.
 
 ### Chunk 13: Strengthen Domain Contracts
 
-**Status:** Complete locally; focused real-peer on-device regression pending.
+**Status:** Complete locally and validated by the corrected focused real-peer
+regression.
 
 Replace interchangeable integer identities with small, trivially copyable
 domain types for peer indices, activation generations, socket generations,
@@ -632,8 +643,9 @@ retained by an asynchronous queue; IPC layout and API v4 remain unchanged.
 
 ### Chunk 14: Enforce Resource And Concurrency Budgets
 
-**Status:** Locally complete; focused long-lived and path-transition on-device
-validation remains.
+**Status:** Locally complete. Focused long-lived repeated-connection validation
+has passed; the remaining path-transition cases continue under the corrective
+validation matrix.
 
 Centralize the fixed capacities and memory budgets for peer state, packet
 slots, effect batches, work queues, socket storage, and thread stacks. Add
@@ -681,7 +693,16 @@ long-lived real-peer regressions pass.
 
 ### Chunk 15: Establish Maintenance Gates
 
-**Status:** Planned.
+**Status:** Corrective lock, timer-policy, peer-ownership, persistence, and
+host-supported composition/failure hardening are locally complete. Logging now
+uses a bounded in-memory producer and explicit post-lock flushing, so
+state-owner paths do not perform debug or filesystem I/O. The 35-case host
+suite exercises the production iterative effect drain with multi-batch
+completion, cancelled resolver work and stale shutdown completion, resolver
+and UDP-open failure, and deactivated pending rebind/timer work. Horizon-bound
+composition, fuzzing, permissive-host ThreadSanitizer execution, and the
+remaining corrective on-device matrix cases remain pending. Repeated
+connections and requester traffic have passed prolonged on-device validation.
 
 Split large implementation and test translation units along existing cohesive
 behavior without creating new state owners. In particular, separate
@@ -752,7 +773,7 @@ Every chunk must pass:
 - review that `common/include/wgnx/protocol.hpp` and the CMIF contract remain
   unchanged unless an API change is intentional
 
-The current local gate contains 32 deterministic host cases, the same 32 cases
+The current local gate contains 35 deterministic host cases, the same 35 cases
 under ASan/UBSan, the devkitA64 target build, the 8 KiB frame guard, and
 `git diff --check`. Chunk 14 adds cumulative stack-chain and named-baseline
 footprint gates. IPC API v4 and `common/include/wgnx/protocol.hpp` are unchanged.
@@ -776,6 +797,7 @@ on-device measurement.
 | Chunk 13 receive contract | 304,992 | 50,776 | 713,304 | 1,069,072 | 207,141 |
 | After Chunk 13 correction | 305,152 | 50,776 | 713,304 | 1,069,232 | 207,203 |
 | Chunk 14 local | 306,160 | 50,776 | 713,304 | 1,070,240 | 208,322 |
+| Post-Chunk 14 corrective current | 308,160 | 50,776 | 721,496 | 1,080,432 | 209,777 |
 
 The data-to-BSS shift after Chunk 8 is caused primarily by composing prior
 independent globals into the zero-initialized `DaemonRuntime`; compare
@@ -833,13 +855,23 @@ small pending-slot accounting growth is absorbed by existing section
 alignment. The composed daemon is 209,664 bytes and the current NSP is 209,382
 bytes.
 
-Compiler stack-usage output reports 632 target functions, all within the 8 KiB
-per-frame limit. The conservative resolver -> activation -> handshake ->
-logging chain totals 14,448 bytes and retains 1,936 bytes on its 16 KiB worker.
-Receive commit, generated send, and failure-publication chains total 8,352,
-10,256, and 10,944 bytes, retaining 8,032, 6,128, and 5,440 bytes. These sums
-include explicitly configured nested frames and intentionally leave
+The current post-Chunk 14 corrective build reports 645 target functions, all
+within the 8 KiB per-frame limit. The platform-neutral iterative drain is an
+explicit 4,464-byte frame and is included in every executor chain. The
+conservative resolver -> activation -> handshake -> logging chain totals
+13,840 bytes and retains 2,544 bytes on its 16 KiB worker. Receive commit,
+generated send, and failure-publication chains total 7,680, 9,648, and 10,336
+bytes, retaining 8,704, 6,736, and 6,048 bytes.
+These sums include explicitly configured nested frames and intentionally leave
 unmeasured ABI/runtime overhead inside the reported margin.
+
+The corrective pass currently adds 11,264 bytes of static image and 2,751 bytes
+of compressed NSO over the corrected Chunk 13 baseline. Initialized data is
+unchanged; BSS increases by 8 KiB for the bounded diagnostic producer queue.
+The resulting NSP is 211,014 bytes. The remaining code growth covers post-lock
+persistence, debug-timer effects, peer-owned deadline derivation, the closed
+`PeerRegistry` ownership interface, and the platform-neutral effect drain; it
+does not add a packet, queue, or stack capacity.
 
 Run focused on-device regressions after chunks 4, 5, 6, 7, 10, 12, 13, 14, and 15.
 At minimum, these runs should cover tunnel activation against a known-good

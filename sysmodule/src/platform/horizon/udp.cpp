@@ -381,55 +381,69 @@ udp_receive_result udp_receive(
 }
 
 wgnx::platform::NetworkPathSnapshot sample_network_path(std::uint64_t sequence) {
-    wgnx::sysmodule::logger::Log(
-        "NIFM observer sample begin sequence=%llu",
-        static_cast<unsigned long long>(sequence));
+    if constexpr (wgnx::sysmodule::development_config::VerboseHeartbeatLogging) {
+        wgnx::sysmodule::logger::Log(
+            "NIFM observer sample begin sequence=%llu",
+            static_cast<unsigned long long>(sequence));
+    }
 
     NetworkPathSnapshot current{};
-    wgnx::sysmodule::logger::Log(
-        "NIFM observer init begin sequence=%llu",
-        static_cast<unsigned long long>(sequence));
+    if constexpr (wgnx::sysmodule::development_config::VerboseHeartbeatLogging) {
+        wgnx::sysmodule::logger::Log(
+            "NIFM observer init begin sequence=%llu",
+            static_cast<unsigned long long>(sequence));
+    }
     const ams::Result initialization_result =
         wgnx::sysmodule::platform::horizon::internal::EnsureNifmRuntimeInitialized();
     current.initialization_result = static_cast<std::uint32_t>(initialization_result.GetValue());
-    wgnx::sysmodule::logger::Log(
-        "NIFM observer init end sequence=%llu rc=0x%08x",
-        static_cast<unsigned long long>(sequence),
-        current.initialization_result);
+    if constexpr (wgnx::sysmodule::development_config::VerboseHeartbeatLogging) {
+        wgnx::sysmodule::logger::Log(
+            "NIFM observer init end sequence=%llu rc=0x%08x",
+            static_cast<unsigned long long>(sequence),
+            current.initialization_result);
+    }
 
     if (R_SUCCEEDED(initialization_result)) {
         if constexpr (wgnx::sysmodule::development_config::QueryNifmInternetStatus) {
             NifmInternetConnectionType connection_type{};
             NifmInternetConnectionStatus connection_status{};
             u32 wifi_strength = 0;
-            wgnx::sysmodule::logger::Log(
-                "NIFM observer status begin sequence=%llu",
-                static_cast<unsigned long long>(sequence));
+            if constexpr (wgnx::sysmodule::development_config::VerboseHeartbeatLogging) {
+                wgnx::sysmodule::logger::Log(
+                    "NIFM observer status begin sequence=%llu",
+                    static_cast<unsigned long long>(sequence));
+            }
             const Result status_result = nifmGetInternetConnectionStatus(
                 std::addressof(connection_type),
                 std::addressof(wifi_strength),
                 std::addressof(connection_status));
             current.internet_status_result = status_result;
-            wgnx::sysmodule::logger::Log(
-                "NIFM observer status end sequence=%llu rc=0x%08x",
-                static_cast<unsigned long long>(sequence),
-                current.internet_status_result);
+            if constexpr (wgnx::sysmodule::development_config::VerboseHeartbeatLogging) {
+                wgnx::sysmodule::logger::Log(
+                    "NIFM observer status end sequence=%llu rc=0x%08x",
+                    static_cast<unsigned long long>(sequence),
+                    current.internet_status_result);
+            }
             if (R_SUCCEEDED(status_result)) {
                 current.connection_type = static_cast<std::uint32_t>(connection_type);
                 current.connection_status = static_cast<std::uint32_t>(connection_status);
                 current.wifi_strength = wifi_strength;
             }
         } else {
-            wgnx::sysmodule::logger::Log(
-                "NIFM observer status skipped sequence=%llu mode=%s",
-                static_cast<unsigned long long>(sequence),
-                wgnx::sysmodule::development_config::GetNifmPathObserverModeName());
+            if constexpr (wgnx::sysmodule::development_config::VerboseHeartbeatLogging) {
+                wgnx::sysmodule::logger::Log(
+                    "NIFM observer status skipped sequence=%llu mode=%s",
+                    static_cast<unsigned long long>(sequence),
+                    wgnx::sysmodule::development_config::GetNifmPathObserverModeName());
+            }
         }
 
         if constexpr (wgnx::sysmodule::development_config::QueryNifmIpConfig) {
-            wgnx::sysmodule::logger::Log(
-                "NIFM observer config begin sequence=%llu",
-                static_cast<unsigned long long>(sequence));
+            if constexpr (wgnx::sysmodule::development_config::VerboseHeartbeatLogging) {
+                wgnx::sysmodule::logger::Log(
+                    "NIFM observer config begin sequence=%llu",
+                    static_cast<unsigned long long>(sequence));
+            }
             const Result config_result = nifmGetCurrentIpConfigInfo(
                 std::addressof(current.current_address),
                 std::addressof(current.subnet_mask),
@@ -437,10 +451,12 @@ wgnx::platform::NetworkPathSnapshot sample_network_path(std::uint64_t sequence) 
                 std::addressof(current.primary_dns),
                 std::addressof(current.secondary_dns));
             current.ip_config_result = config_result;
-            wgnx::sysmodule::logger::Log(
-                "NIFM observer config end sequence=%llu rc=0x%08x",
-                static_cast<unsigned long long>(sequence),
-                current.ip_config_result);
+            if constexpr (wgnx::sysmodule::development_config::VerboseHeartbeatLogging) {
+                wgnx::sysmodule::logger::Log(
+                    "NIFM observer config end sequence=%llu rc=0x%08x",
+                    static_cast<unsigned long long>(sequence),
+                    current.ip_config_result);
+            }
             if (R_FAILED(config_result)) {
                 current.current_address = 0;
                 current.subnet_mask = 0;
@@ -449,16 +465,20 @@ wgnx::platform::NetworkPathSnapshot sample_network_path(std::uint64_t sequence) 
                 current.secondary_dns = 0;
             }
         } else {
-            wgnx::sysmodule::logger::Log(
-                "NIFM observer config skipped sequence=%llu mode=%s",
-                static_cast<unsigned long long>(sequence),
-                wgnx::sysmodule::development_config::GetNifmPathObserverModeName());
+            if constexpr (wgnx::sysmodule::development_config::VerboseHeartbeatLogging) {
+                wgnx::sysmodule::logger::Log(
+                    "NIFM observer config skipped sequence=%llu mode=%s",
+                    static_cast<unsigned long long>(sequence),
+                    wgnx::sysmodule::development_config::GetNifmPathObserverModeName());
+            }
         }
     }
 
-    wgnx::sysmodule::logger::Log(
-        "NIFM observer sample end sequence=%llu",
-        static_cast<unsigned long long>(sequence));
+    if constexpr (wgnx::sysmodule::development_config::VerboseHeartbeatLogging) {
+        wgnx::sysmodule::logger::Log(
+            "NIFM observer sample end sequence=%llu",
+            static_cast<unsigned long long>(sequence));
+    }
     return current;
 }
 

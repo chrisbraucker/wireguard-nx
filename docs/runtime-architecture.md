@@ -11,6 +11,10 @@ IPC and WireGuard wire contracts remain unchanged; the separation is internal.
 - `runtime/daemon_runtime.cpp` composes one `DaemonRuntime` instance. It owns
   the single state mutex, routes external commands, aggregates status, and
   wires platform callbacks to their concrete execution components.
+  Configuration loading and autostart filesystem persistence are serialized
+  independently of the state mutex. The latter captures a bounded,
+  generation-tagged request, persists outside the state lock, and commits only
+  if it remains current after the write succeeds.
   CMIF-facing free functions are narrow adapters to that instance; no peer,
   packet, timer, probe, or pending-request state exists in independent daemon
   globals.
@@ -21,13 +25,17 @@ IPC and WireGuard wire contracts remain unchanged; the separation is internal.
   resolver, timer, debug-probe, and NIFM observation completions. It executes
   peer decisions and reports generation-tagged facts through
   `RuntimeCoordinator`; it does not choose peer lifecycle or recovery policy.
+  It validates in-memory state under the daemon mutex, then releases it before
+  every concrete timer, workqueue, socket, or nested-effect operation.
 - `runtime/encrypted_receive_pump.*` owns encrypted UDP receive scheduling, the
   bounded manual-rebind request, one 4 KiB process-lifetime datagram scratch
   buffer, and one bounded completion batch. It snapshots receive identity under
   the shared mutex, performs blocking receive without that mutex, and publishes
   authenticated datagrams or factual receive failures only after generation
   revalidation.
-- `runtime/peer_runtime.hpp` defines the fixed-capacity `PeerRegistry`. Each
+- `runtime/peer_runtime.hpp` defines the fixed-capacity `PeerRegistry`. The
+  registry owns slot configuration, clearing, selection, event routing, and
+  bounded bulk packet retirement without exposing mutable slots. Each
   `PeerRuntime` slot is the structural owner of one peer's configuration,
   derived secrets, lifecycle and metrics state, UDP binding, protocol device,
   and peer controller. Lifecycle state is private; activation generations,
@@ -35,11 +43,13 @@ IPC and WireGuard wire contracts remain unchanged; the separation is internal.
   outbound protocol policy are peer-owned. Each peer owns one bounded pending
   encrypted datagram and one bounded generation-tagged plaintext slot, so
   events and effects never carry owned packet buffers.
-- `runtime/runtime_coordinator.*` is the only mutable entry point to the peer
-  registry and peer policy. Peer configuration, derived secrets, binding,
-  protocol device, controller, generations, and lifecycle are private. Runtime
-  adapters receive immutable lifecycle, binding, packet, timer, or protocol
-  snapshots scoped to one operation; they cannot obtain a mutable peer.
+- `runtime/runtime_coordinator.*` is the runtime-facing mediator for peer
+  transitions. It uses only `PeerRegistry`'s closed collection API and has no
+  direct mutable access to peer slots. Peer configuration, derived secrets,
+  binding, protocol device, controller, generations, and lifecycle are private.
+  Runtime adapters receive immutable lifecycle, binding, packet, timer, or
+  protocol snapshots scoped to one operation; they cannot obtain a mutable
+  peer.
 - `runtime/runtime_events.hpp` defines the closed event/effect vocabulary and
   bounded effect storage. `runtime/runtime_coordinator.*` resolves event peer
   identity and dispatches into `PeerRuntime`. Activation, endpoint and bind
@@ -72,8 +82,10 @@ IPC and WireGuard wire contracts remain unchanged; the separation is internal.
   peer policy. Arm and cancellation effects likewise retain the token allocated
   under the runtime lock, preventing delayed platform work from changing a
   newer physical schedule.
-- `runtime/udp_binding.*` is the move-only owner of one resolved endpoint and
-  UDP socket lifetime. It also owns socket generation and suspension state.
+- `runtime/udp_binding.*` owns in-memory resolved-endpoint, socket-generation,
+  and suspension state. It does not perform platform I/O or implicit
+  destruction-time closure: every socket is explicitly released into a close
+  effect before it crosses the state-lock boundary.
 - `runtime/packet_transport.hpp` defines the protocol-neutral complete-IP
   packet boundary. It does not expose CMIF types or contained IP protocols.
 - `runtime/packet_data_plane.*` owns IPv4/IPv6 envelope validation, active-peer
@@ -132,11 +144,12 @@ paths release the state mutex before handing a batch to
 `RuntimeEffectExecutor`, which revalidates peer and activation identity before
 scheduling work. Stale effects are discarded.
 
-Effect execution is iterative. Completion events may produce another bounded
-batch, but `RuntimeEffectExecutor` drains those batches without recursively
-retaining prior batches on a Horizon worker stack. Blocking UDP bind and send
-handlers are non-inlined stack boundaries so their I/O snapshots cannot be
-coalesced into the executor frame.
+Effect execution is iterative. The platform-neutral `DrainEffectBatches`
+primitive owns the loop used by `RuntimeEffectExecutor`, so completion events
+may produce another bounded batch without recursively retaining prior batches
+on a Horizon worker stack. Blocking UDP bind and send handlers are non-inlined
+stack boundaries so their I/O snapshots cannot be coalesced into the executor
+frame.
 
 `EncryptedReceivePump` owns one process-lifetime 4 KiB datagram scratch buffer
 and one 2,184-byte effect batch. Its ordered work item places only a small
@@ -173,13 +186,25 @@ The single mutex is intentionally retained through the first post-refactor
 on-device regression. Narrower locks can be considered later from
 measured contention, without weakening generation-checked commits.
 
+`TimerFacts` records only sampled platform facts: a monotonic timer origin and
+raw entropy. It never contains a policy decision. `PeerRuntime` reduces that
+entropy using WireGuard's retry-jitter bounds, combines it with peer
+configuration and protocol limits, and emits absolute timer effects; daemon,
+receive, and executor adapters do not derive deadlines.
+
+Diagnostics use a bounded in-memory producer queue. `logger::Log` only formats
+and records a line, so protocol and state-owner paths can preserve diagnostic
+facts while holding the daemon mutex. `logger::Flush` performs debug and SD-card
+I/O only from post-lock IPC and worker boundaries.
+
 ## Test Boundary
 
 The host suite links the production `PeerRegistry`, `PeerRuntime`,
 `RuntimeCoordinator`, `EndpointResolver`, `UdpBinding`, `PeerController`,
 `TimerCoordinator`, `TimerSchedule`, `PacketDataPlane`, `PacketChannel`,
-`DebugProbeRunner`, `NetworkPathObserver`, and `UdpRebindQueue`.
-Its 32 deterministic cases characterize UDP receive and work-admission
+`DebugProbeRunner`, `NetworkPathObserver`, `UdpRebindQueue`, and the production
+`DrainEffectBatches` primitive. Its 35 deterministic cases characterize UDP
+receive and work-admission
 outcomes, selection,
 activation, lifecycle transitions, status projection, stale event rejection,
 timer arming/replacement/cancellation, queued stale delivery,
@@ -199,7 +224,10 @@ The same runtime test then drives peer-originated rotation:
 authenticated transport -> promote next/preserve previous -> publish plaintext`
 
 It also verifies initiation admission, malformed input, transport replay,
-unknown receiver indices, and unauthenticated endpoint-roaming rejection.
+unknown receiver indices, unauthenticated endpoint-roaming rejection, and the
+composition failure path: cancelled resolver work and stale completion during
+shutdown, resolution and UDP-open failure, deactivation with pending rebind and
+timer work, and a multi-batch nonrecursive effect drain.
 
 Horizon work-queue execution, synchronous platform timer cancellation, BSD
 socket lifetime, and real callback races remain on-device validation
@@ -220,16 +248,16 @@ guard. This limit is necessary but does not detect cumulative nested frames: a
 Chunk 4 activation regression retained resolver, effect-batch, bind-completion,
 and send-snapshot frames through recursive effect execution and overflowed the
 16 KiB resolver stack. The executor is now iterative, with target frames of
-3,152 bytes for resolver work, 4,560 bytes for effect iteration, 2,528 bytes for
-bind opening, and 4,048 bytes for datagram send. Host ASan/UBSan coverage
-verifies object lifetime and bounded effect chaining, while generated target
-code verifies each constrained frame.
+3,184 bytes for resolver work, 32 bytes for executor entry, 4,464 bytes for the
+shared effect drain, 2,560 bytes for bind opening, and 4,064 bytes for datagram
+send. Host ASan/UBSan coverage verifies object lifetime and bounded effect
+chaining, while generated target code verifies each constrained frame.
 
 Chunk 14 enables compiler stack-usage output and checks the known cumulative
 paths with `tools/check_stack_usage.py`. The resolver -> activation ->
-handshake -> logging path is currently the tightest at 14,448 bytes, leaving
-1,936 bytes on its 16 KiB worker stack. Receive commit, generated send, and
-failure-publication chains retain 8,032, 6,128, and 5,440 bytes respectively.
+handshake -> logging path is currently the tightest at 13,840 bytes, leaving
+2,544 bytes on its 16 KiB worker stack. Receive commit, generated send, and
+failure-publication chains retain 8,704, 6,736, and 6,048 bytes respectively.
 
 An on-device fatal after Chunk 5 exposed another cumulative-stack case on the
 receive worker: its 4 KiB local datagram buffer remained live while inbound
@@ -283,3 +311,11 @@ and coordinator dispatch directly returns the peer result. Target frames are
 capacity. The corrected path subsequently sustained a real-peer connection for
 more than 15 minutes and completed several requester round trips without
 instability.
+
+The post-Chunk 14 corrective pass moves iterative effect handling into a
+platform-neutral 4,464-byte drain called through a 32-byte executor entry;
+bind opening is 2,560 bytes. The resource gate measures the complete resolver
+chain at 13,840 bytes. This remains above the required 1 KiB margin and leaves
+2,544 bytes for ABI and platform overhead. Any new activation or common
+effect-path local storage must therefore be checked against this chain before
+it is accepted.

@@ -22,6 +22,11 @@ constexpr inline bool QueryNifmIpConfig =
     NifmPathObserver == NifmPathObserverMode::IpConfigOnly ||
     NifmPathObserver == NifmPathObserverMode::Full;
 
+// Emit every receive-loop and NIFM-observation iteration. Keep this disabled
+// for normal operation: lifecycle and path-change records remain unconditional,
+// while steady-state heartbeats otherwise overwhelm the bounded logger queue.
+constexpr inline bool VerboseHeartbeatLogging = false;
+
 // Diagnostic mode: isolate stale BSD socket state after an uplink loss while
 // preserving the active peer, WireGuard protocol state, and NIFM session.
 constexpr inline bool SuspendUdpTransportOnFirstSendFailure = true;

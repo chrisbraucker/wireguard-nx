@@ -3,15 +3,18 @@
 #include "test_framework.hpp"
 #include "test_runtime.hpp"
 
+#include "runtime/autostart_persistence.hpp"
 #include "runtime/packet_channel.hpp"
 #include "runtime/packet_data_plane.hpp"
 #include "runtime/endpoint_resolver.hpp"
 #include "runtime/debug_probe_runner.hpp"
+#include "runtime/effect_drain.hpp"
 #include "runtime/network_path_observer.hpp"
 #include "runtime/peer_runtime.hpp"
 #include "runtime/runtime_coordinator.hpp"
 #include "runtime/runtime_contracts.hpp"
 #include "runtime/timer_schedule.hpp"
+#include "runtime/udp_binding.hpp"
 #include "wireguard/data.hpp"
 #include "wireguard/device.hpp"
 #include "wireguard/handshake.hpp"
@@ -33,6 +36,18 @@
 namespace wgnx::test {
 
 namespace {
+
+template<typename Binding>
+concept HasLegacyUdpPlatformIo = requires(
+    Binding &binding,
+    wgnx::sysmodule::runtime::SocketGeneration generation,
+    std::span<const std::uint8_t> packet,
+    std::size_t *sent) {
+    binding.Open(generation);
+    binding.Close();
+    binding.Send(packet, sent);
+    binding.Suspend();
+};
 
 constexpr char InitiatorPrivateKey[] = "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=";
 constexpr char InitiatorPublicKey[] = "B6N8vBQgk8i3VdwbEOhstCY3StFqqFPtC9/AsrhtHHw=";
@@ -198,7 +213,9 @@ wgnx::sysmodule::runtime::EffectBatch CompleteTestPeerActivation(
         .error = wgnx::platform::socket_error::none,
         .socket_generation = open->socket_generation,
         .purpose = open->purpose,
-        .retry_deadline = TimerDeadlineFromJiffies(500),
+        .timer_facts = {
+            .now = TimerDeadlineFromJiffies(500),
+        },
         .occurred_at = now + 2,
     });
 }
@@ -1056,12 +1073,14 @@ void TestPacketDataPlane(TestContext &context) {
     constexpr ProcessId FirstConsumer{100};
     constexpr ProcessId OtherConsumer{101};
     constexpr ProcessId SecondConsumer{200};
-    const auto retry_deadline = TimerDeadlineFromJiffies(500);
+    const TimerFacts timer_facts{
+        .now = TimerDeadlineFromJiffies(500),
+    };
 
     const auto first = data_plane.SubmitIpv4Packet(
         Ipv4Packet,
         FirstConsumer,
-        retry_deadline,
+        timer_facts,
         3'000,
         effects);
     PeerPacketStateSnapshot peer{};
@@ -1077,13 +1096,13 @@ void TestPacketDataPlane(TestContext &context) {
     const auto ipv4_only = data_plane.SubmitIpv4Packet(
         Ipv6Packet,
         FirstConsumer,
-        retry_deadline,
+        timer_facts,
         3'100,
         effects);
     const auto generic = data_plane.SubmitIpPacket(
         Ipv6Packet,
         FirstConsumer,
-        retry_deadline,
+        timer_facts,
         3'200,
         effects);
     static_cast<void>(coordinator.SnapshotPacketState(peer));
@@ -1135,7 +1154,7 @@ void TestPacketDataPlane(TestContext &context) {
     const auto transfer = data_plane.SubmitIpPacket(
         Ipv6Packet,
         SecondConsumer,
-        retry_deadline,
+        timer_facts,
         4'000,
         effects);
     WGNX_TEST_REQUIRE(
@@ -1183,7 +1202,9 @@ void TestRuntimeTypedRejections(TestContext &context) {
         0xE2, 0x52, 0x0A, 0x42, 0x42, 0x02, 0x0A, 0x42, 0x42, 0x01,
     };
     constexpr std::array<std::uint8_t, 3> MalformedPacket = {0x45, 0x00, 0x00};
-    const auto retry_deadline = TimerDeadlineFromJiffies(500);
+    const TimerFacts timer_facts{
+        .now = TimerDeadlineFromJiffies(500),
+    };
 
     WGNX_TEST_REQUIRE(
         context,
@@ -1192,13 +1213,13 @@ void TestRuntimeTypedRejections(TestContext &context) {
     const auto malformed_submission = data_plane.SubmitIpv4Packet(
         MalformedPacket,
         Consumer,
-        retry_deadline,
+        timer_facts,
         100,
         effects);
     const auto unavailable_submission = data_plane.SubmitIpv4Packet(
         ValidPacket,
         Consumer,
-        retry_deadline,
+        timer_facts,
         200,
         effects);
     WGNX_TEST_REQUIRE(
@@ -1218,7 +1239,7 @@ void TestRuntimeTypedRejections(TestContext &context) {
     const auto pre_protocol_submission = data_plane.SubmitIpv4Packet(
         ValidPacket,
         Consumer,
-        retry_deadline,
+        timer_facts,
         400,
         effects);
     WGNX_TEST_REQUIRE(
@@ -1266,7 +1287,7 @@ void TestRuntimeTypedRejections(TestContext &context) {
         const auto submission = data_plane.SubmitIpv4Packet(
             ValidPacket,
             Consumer,
-            retry_deadline,
+            timer_facts,
             600 + static_cast<wgnx::platform::ktime_t>(index),
             effects);
         filled = filled && submission.status == PacketSubmissionStatus::Queued;
@@ -1274,7 +1295,7 @@ void TestRuntimeTypedRejections(TestContext &context) {
     const auto full_submission = data_plane.SubmitIpv4Packet(
         ValidPacket,
         Consumer,
-        retry_deadline,
+        timer_facts,
         700,
         effects);
     WGNX_TEST_REQUIRE(
@@ -1530,7 +1551,7 @@ void TestPeerRegistryOwnership(TestContext &context) {
             coordinator.IsCurrentTimerEffect(*timer),
         "peer runtime slots did not isolate index-correlated mutable state");
 
-    coordinator.ClearConfiguration(20);
+    static_cast<void>(coordinator.ClearConfiguration(20));
     WGNX_TEST_REQUIRE(
         context,
         coordinator.Empty() && coordinator.ActivePeerIndex() == -1 &&
@@ -1869,6 +1890,8 @@ void TestRuntimePeerActivation(TestContext &context) {
             coordinator.BindingSnapshot(0).has_endpoint,
         "resolution did not request a UDP bind before protocol instantiation");
 
+    constexpr std::uint32_t HandshakeRetryEntropy =
+        RekeyTimeoutJitterMaxMs + 7;
     const auto opened = coordinator.Dispatch(UdpBindOpenedEvent{
         .peer = open->peer,
         .endpoint = open->endpoint,
@@ -1876,21 +1899,29 @@ void TestRuntimePeerActivation(TestContext &context) {
         .socket = 42,
         .error = wgnx::platform::socket_error::none,
         .socket_generation = open->socket_generation,
-        .retry_deadline = TimerDeadlineFromJiffies(500),
+        .timer_facts = {
+            .now = TimerDeadlineFromJiffies(500),
+            .random_u32 = HandshakeRetryEntropy,
+        },
         .occurred_at = 3'000,
     });
     const auto *send = opened.Size() > 1
         ? std::get_if<SendPendingDatagramEffect>(opened.begin() + 1)
         : nullptr;
+    const auto *handshake_timer = opened.Size() > 0
+        ? std::get_if<ArmProtocolTimerEffect>(opened.begin())
+        : nullptr;
     WGNX_TEST_REQUIRE(
         context,
-        opened.Size() == 3 && send != nullptr &&
-            std::get_if<ArmProtocolTimerEffect>(opened.begin()) != nullptr &&
+        opened.Size() == 3 && send != nullptr && handshake_timer != nullptr &&
+            handshake_timer->deadline ==
+                TimerDeadlineFromJiffies(500) +
+                    GetHandshakeRetryDelay(HandshakeRetryEntropy) &&
             std::get_if<QueueReceiveEffect>(opened.begin() + 2) != nullptr &&
             coordinator.Lifecycle(0)->state == wgnx::PeerRuntimeState::Handshaking &&
             coordinator.ProtocolSnapshot(0).instantiated &&
             coordinator.BindingSnapshot(0).Matches(open->socket_generation, 42),
-        "opened bind did not deterministically start the first handshake");
+        "opened bind did not derive the first handshake timer in peer policy");
 
     PendingDatagramSnapshot snapshot{};
     WGNX_TEST_REQUIRE(
@@ -1962,12 +1993,14 @@ void TestRuntimeOutboundLifecycle(TestContext &context) {
         0x00, 0x00, 0x0A, 0x42, 0x42, 0x02, 0x0A, 0x42, 0x42, 0x01,
     };
     const PeerIdentity identity{.peer_index = PeerIndex{0}, .activation_generation = ActivationGeneration{1}};
-    const auto retry_deadline = TimerDeadlineFromJiffies(500);
+    const TimerFacts timer_facts{
+        .now = TimerDeadlineFromJiffies(500),
+    };
     const auto staged = coordinator.Dispatch(InnerPacketStagedEvent{
         .peer = identity,
         .packet = FirstPacket,
         .packet_id = PacketId{61},
-        .retry_deadline = retry_deadline,
+        .timer_facts = timer_facts,
         .occurred_at = 3'000,
     });
     PeerPacketStateSnapshot packet_state{};
@@ -1992,8 +2025,7 @@ void TestRuntimeOutboundLifecycle(TestContext &context) {
         .peer = identity,
         .hook = TimerHook::RetransmitHandshake,
         .token = stale_timer_token,
-        .retry_deadline = retry_deadline,
-        .zero_key_material_deadline = TimerDeadlineFromJiffies(5'000),
+        .timer_facts = timer_facts,
         .occurred_at = 3'500,
     });
     WGNX_TEST_REQUIRE(
@@ -2030,8 +2062,7 @@ void TestRuntimeOutboundLifecycle(TestContext &context) {
             .peer = identity,
             .hook = TimerHook::RetransmitHandshake,
             .token = timer_token,
-            .retry_deadline = retry_deadline,
-            .zero_key_material_deadline = TimerDeadlineFromJiffies(5'000),
+            .timer_facts = timer_facts,
             .occurred_at = 5'000 + attempt,
         });
         send = effects.Size() > 2
@@ -2054,8 +2085,7 @@ void TestRuntimeOutboundLifecycle(TestContext &context) {
         .peer = identity,
         .hook = TimerHook::RetransmitHandshake,
         .token = timer_token,
-        .retry_deadline = retry_deadline,
-        .zero_key_material_deadline = TimerDeadlineFromJiffies(5'000),
+        .timer_facts = timer_facts,
         .occurred_at = 7'000,
     });
     static_cast<void>(coordinator.SnapshotPacketState(packet_state));
@@ -2075,7 +2105,7 @@ void TestRuntimeOutboundLifecycle(TestContext &context) {
         .peer = identity,
         .packet = RecoveryPacket,
         .packet_id = PacketId{62},
-        .retry_deadline = retry_deadline,
+        .timer_facts = timer_facts,
         .occurred_at = 8'000,
     });
     send = effects.Size() > 1
@@ -2125,9 +2155,9 @@ void TestRuntimeOutboundLifecycle(TestContext &context) {
             .address = {192, 0, 2, 1},
         },
         .source_text = {"192.0.2.1:51820"},
-        .keepalive_deadline = TimerDeadlineFromJiffies(600),
-        .rekey_deadline = TimerDeadlineFromJiffies(700),
-        .zero_key_material_deadline = TimerDeadlineFromJiffies(800),
+        .timer_facts = {
+            .now = TimerDeadlineFromJiffies(600),
+        },
         .occurred_at = SessionBirthTime,
     });
     send = nullptr;
@@ -2176,7 +2206,7 @@ void TestRuntimeOutboundLifecycle(TestContext &context) {
 
     effects = coordinator.Dispatch(ProcessOutboundQueueEvent{
         .peer = identity,
-        .retry_deadline = retry_deadline,
+        .timer_facts = timer_facts,
         .occurred_at = SessionBirthTime + 2,
     });
     send = effects.Size() == 1
@@ -2233,8 +2263,9 @@ void TestRuntimeOutboundLifecycle(TestContext &context) {
         .packet = peer_initiation_packet,
         .source = roamed_endpoint,
         .source_text = {"198.51.100.44:51999"},
-        .keepalive_deadline = TimerDeadlineFromJiffies(900),
-        .zero_key_material_deadline = TimerDeadlineFromJiffies(1'000),
+        .timer_facts = {
+            .now = TimerDeadlineFromJiffies(900),
+        },
         .occurred_at = SessionBirthTime + wgnx::platform::NSEC_PER_SEC,
     });
     send = effects.Size() == 3
@@ -2305,9 +2336,9 @@ void TestRuntimeOutboundLifecycle(TestContext &context) {
         .packet = inbound_packet,
         .source = roamed_endpoint,
         .source_text = {"198.51.100.44:51999"},
-        .keepalive_deadline = TimerDeadlineFromJiffies(1'100),
-        .rekey_deadline = TimerDeadlineFromJiffies(1'200),
-        .zero_key_material_deadline = TimerDeadlineFromJiffies(1'300),
+        .timer_facts = {
+            .now = TimerDeadlineFromJiffies(1'100),
+        },
         .occurred_at = SessionBirthTime + wgnx::platform::NSEC_PER_SEC + 2,
     });
     const PublishDecryptedPacketEffect *publish = nullptr;
@@ -2446,7 +2477,7 @@ void TestRuntimeOutboundLifecycle(TestContext &context) {
         .error = wgnx::platform::socket_error::none,
         .socket_generation = first_rebind_request.socket_generation,
         .purpose = UdpBindPurpose::Rebind,
-        .retry_deadline = retry_deadline,
+        .timer_facts = timer_facts,
         .occurred_at = SessionBirthTime + wgnx::platform::NSEC_PER_SEC + 10,
     });
     WGNX_TEST_REQUIRE(
@@ -2463,7 +2494,7 @@ void TestRuntimeOutboundLifecycle(TestContext &context) {
         .error = wgnx::platform::socket_error::none,
         .socket_generation = second_rebind_request.socket_generation,
         .purpose = UdpBindPurpose::Rebind,
-        .retry_deadline = retry_deadline,
+        .timer_facts = timer_facts,
         .occurred_at = SessionBirthTime + wgnx::platform::NSEC_PER_SEC + 11,
     });
     const SendPendingDatagramEffect *rebind_send = nullptr;
@@ -3228,6 +3259,248 @@ void TestHandshakeRetryLifecycle(TestContext &context) {
                 pair.initiator->cookie.value,
                 [](std::uint8_t byte) { return byte == 0x6A; }),
         "zero-key expiry erased configured identity, precomputation, or cookie state");
+}
+
+void TestAutoStartPersistenceGeneration(TestContext &context) {
+    using namespace wgnx::sysmodule::runtime;
+
+    AutoStartPersistenceState persistence{};
+    const auto first = persistence.Begin(0, "first");
+    const auto replacement = persistence.Begin(1, "replacement");
+    const auto clear = persistence.Begin(-1, nullptr);
+
+    WGNX_TEST_REQUIRE(
+        context,
+        first.generation != replacement.generation &&
+            replacement.generation != clear.generation &&
+            !persistence.IsCurrent(first) &&
+            !persistence.IsCurrent(replacement) &&
+            persistence.IsCurrent(clear) &&
+            clear.peer_index == -1 && clear.peer_name.front() == '\0',
+        "autostart persistence generations did not reject stale requests");
+}
+
+void TestUdpBindingOwnership(TestContext &context) {
+    using namespace wgnx::sysmodule::runtime;
+
+    static_assert(!HasLegacyUdpPlatformIo<UdpBinding>);
+
+    UdpBinding binding{};
+    const wgnx::platform::endpoint endpoint{
+        .family = wgnx::platform::address_family::inet,
+        .port = 51820,
+        .address = {192, 0, 2, 1},
+    };
+    binding.SetEndpoint(endpoint, "192.0.2.1:51820");
+    binding.AdoptOpenSocket(endpoint, "192.0.2.1:51820", SocketGeneration{3}, 44);
+    const auto open = binding.StateSnapshot();
+    const auto released = binding.ReleaseSocket();
+    binding.AdoptOpenSocket(endpoint, "192.0.2.1:51820", SocketGeneration{4}, 45);
+    const auto suspended = binding.ReleaseAndSuspend();
+    UdpBinding::SendSnapshot send{};
+
+    WGNX_TEST_REQUIRE(
+        context,
+        open.IsOpen() && open.Matches(SocketGeneration{3}, 44) &&
+            released == 44 && binding.IsSuspended() && suspended == 45 &&
+            !binding.SnapshotForSend(send),
+        "UDP binding did not expose an explicit, I/O-free socket transfer");
+}
+
+void TestRuntimeCompositionFailureInjection(TestContext &context) {
+    using namespace wgnx::sysmodule::runtime;
+    using namespace wgnx::wireguard;
+
+    runtime::Reset(InitialRuntimeState);
+    std::array<wgnx::PeerConfigEntry, 1> configured{};
+    FillConfig(
+        &configured[0],
+        "composition",
+        "10.66.66.2/32",
+        InitiatorPrivateKey,
+        ResponderPublicKey);
+
+    PeerRegistry registry{};
+    RuntimeCoordinator coordinator{registry};
+    WGNX_TEST_REQUIRE(
+        context,
+        ConfigureTestPeers(coordinator, configured, 0),
+        "composition failure-injection setup failed");
+
+    const auto activation = coordinator.Dispatch(ActivationRequestedEvent{
+        .peer_index = PeerIndex{0},
+        .occurred_at = 1'000,
+    });
+    const auto *resolve = activation.Size() == 1
+        ? std::get_if<ResolveEndpointEffect>(activation.begin())
+        : nullptr;
+    WGNX_TEST_REQUIRE(
+        context,
+        resolve != nullptr,
+        "composition failure-injection did not produce an endpoint request");
+    if (resolve == nullptr) {
+        return;
+    }
+
+    // This is the host representation of queued resolver work which becomes
+    // stale during shutdown before the worker receives CPU time.
+    EndpointResolver resolver{};
+    static_cast<void>(resolver.Queue(*resolve));
+    resolver.Cancel(resolve->peer);
+    const auto shutdown = coordinator.Dispatch(DeactivationRequestedEvent{
+        .peer = resolve->peer,
+        .occurred_at = 1'100,
+    });
+    const wgnx::platform::endpoint_resolution_result resolved{
+        .success = true,
+        .resolved = {
+            .family = wgnx::platform::address_family::inet,
+            .port = 51820,
+            .address = {192, 0, 2, 1},
+        },
+    };
+    const auto stale_resolution = coordinator.Dispatch(EndpointResolvedEvent{
+        .peer = resolve->peer,
+        .result = resolved,
+        .occurred_at = 1'200,
+    });
+    const auto resolver_statistics = resolver.Statistics();
+    WGNX_TEST_REQUIRE(
+        context,
+        resolver_statistics.cancelled == 1 && resolver_statistics.depth == 0 &&
+            !resolver.Take().has_value() && stale_resolution.Empty() &&
+            coordinator.Lifecycle(0)->state == wgnx::PeerRuntimeState::Inactive,
+        "cancelled resolver work or its stale completion escaped shutdown");
+    static_cast<void>(shutdown);
+
+    const auto failed_activation = coordinator.Dispatch(ActivationRequestedEvent{
+        .peer_index = PeerIndex{0},
+        .occurred_at = 1'300,
+    });
+    const auto *failed_resolve = failed_activation.Size() == 1
+        ? std::get_if<ResolveEndpointEffect>(failed_activation.begin())
+        : nullptr;
+    wgnx::platform::endpoint_resolution_result resolution_failure{
+        .success = false,
+        .error_stage = wgnx::PeerErrorStage::ResolveEndpoint,
+        .error_code = wgnx::PeerErrorCode::EndpointResolutionFailed,
+    };
+    const auto resolution_failure_effects = failed_resolve != nullptr
+        ? coordinator.Dispatch(EndpointResolvedEvent{
+              .peer = failed_resolve->peer,
+              .result = resolution_failure,
+              .occurred_at = 1'400,
+          })
+        : EffectBatch{};
+    WGNX_TEST_REQUIRE(
+        context,
+        failed_resolve != nullptr && resolution_failure_effects.Size() == 4 &&
+            coordinator.Lifecycle(0)->state == wgnx::PeerRuntimeState::Error &&
+            coordinator.Lifecycle(0)->error_stage ==
+                wgnx::PeerErrorStage::ResolveEndpoint &&
+            coordinator.Lifecycle(0)->last_error_code == static_cast<std::uint32_t>(
+                wgnx::PeerErrorCode::EndpointResolutionFailed),
+        "endpoint-resolution failure did not remain a peer-owned terminal event");
+
+    const auto retry_activation = coordinator.Dispatch(ActivationRequestedEvent{
+        .peer_index = PeerIndex{0},
+        .occurred_at = 1'500,
+    });
+    const auto *retry_resolve = retry_activation.Size() == 1
+        ? std::get_if<ResolveEndpointEffect>(retry_activation.begin())
+        : nullptr;
+    const auto open_request = retry_resolve != nullptr
+        ? coordinator.Dispatch(EndpointResolvedEvent{
+              .peer = retry_resolve->peer,
+              .result = resolved,
+              .occurred_at = 1'600,
+          })
+        : EffectBatch{};
+    const auto *open = open_request.Size() == 1
+        ? std::get_if<OpenUdpBindEffect>(open_request.begin())
+        : nullptr;
+    const auto open_failure_effects = open != nullptr
+        ? coordinator.Dispatch(UdpBindOpenedEvent{
+              .peer = open->peer,
+              .endpoint = open->endpoint,
+              .endpoint_text = open->endpoint_text,
+              .socket = wgnx::platform::InvalidSocket,
+              .error = wgnx::platform::socket_error::open_failed,
+              .socket_generation = open->socket_generation,
+              .purpose = open->purpose,
+              .timer_facts = {.now = TimerDeadlineFromJiffies(10)},
+              .occurred_at = 1'700,
+          })
+        : EffectBatch{};
+    WGNX_TEST_REQUIRE(
+        context,
+        retry_resolve != nullptr && open != nullptr && open_failure_effects.Size() == 4 &&
+            coordinator.Lifecycle(0)->state == wgnx::PeerRuntimeState::Error &&
+            coordinator.Lifecycle(0)->error_stage == wgnx::PeerErrorStage::Transport &&
+            coordinator.Lifecycle(0)->last_error_code == static_cast<std::uint32_t>(
+                wgnx::PeerErrorCode::TransportOpenFailed),
+        "UDP-open failure did not preserve the resolved endpoint and enter transport error");
+
+    const auto live_effects = ActivateTestPeer(coordinator, 0, 91, 1'800);
+    const PeerIdentity live_peer{
+        .peer_index = PeerIndex{0},
+        .activation_generation = coordinator.Lifecycle(0)->activation_generation,
+    };
+    const auto *timer = live_effects.Empty()
+        ? nullptr
+        : std::get_if<ArmProtocolTimerEffect>(live_effects.begin());
+    UdpRebindQueue rebinds{};
+    static_cast<void>(rebinds.Queue({
+        .peer_index = live_peer.peer_index,
+        .activation_generation = live_peer.activation_generation,
+    }));
+    const auto deactivate_effects = coordinator.Dispatch(DeactivationRequestedEvent{
+        .peer = live_peer,
+        .occurred_at = 1'900,
+    });
+    const auto pending_rebind = rebinds.Take();
+    const auto stale_rebind = pending_rebind.has_value()
+        ? coordinator.Dispatch(UdpRebindRequestedEvent{
+              .peer = {
+                  .peer_index = pending_rebind->peer_index,
+                  .activation_generation = pending_rebind->activation_generation,
+              },
+              .occurred_at = 2'000,
+          })
+        : EffectBatch{};
+    TimerSchedule schedule{};
+    const bool timer_armed = timer != nullptr && schedule.Arm(timer->token, timer->deadline);
+    schedule.CancelAll();
+    WGNX_TEST_REQUIRE(
+        context,
+        timer_armed && !deactivate_effects.Empty() && pending_rebind.has_value() &&
+            stale_rebind.Empty() && !schedule.CaptureExpiration(timer->hook) &&
+            !schedule.TakeDelivery(timer->hook).IsValid() &&
+            coordinator.Lifecycle(0)->state == wgnx::PeerRuntimeState::Inactive,
+        "pending rebind or timer work remained actionable after deactivation");
+
+    // Exercise the production effect-drain primitive with more generated
+    // batches than fit in one effect batch. The callback's active depth stays
+    // one, demonstrating that completion batches are not recursively invoked.
+    EffectBatch initial{};
+    initial.Add(QueueReceiveEffect{.peer = live_peer});
+    std::size_t processed = 0;
+    std::size_t active_depth = 0;
+    std::size_t maximum_depth = 0;
+    constexpr std::size_t EffectChainLength = EffectBatch::Capacity * 3 + 1;
+    DrainEffectBatches(initial, [&](const RuntimeEffect &, EffectBatch &generated) {
+        ++active_depth;
+        maximum_depth = std::max(maximum_depth, active_depth);
+        ++processed;
+        if (processed < EffectChainLength) {
+            generated.Add(QueueReceiveEffect{.peer = live_peer});
+        }
+        --active_depth;
+    });
+    WGNX_TEST_REQUIRE(
+        context,
+        processed == EffectChainLength && maximum_depth == 1,
+        "effect completion batches were not drained iteratively");
 }
 
 } // namespace wgnx::test

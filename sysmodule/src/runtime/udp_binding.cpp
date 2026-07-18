@@ -1,12 +1,9 @@
 #include "runtime/udp_binding.hpp"
 
 #include <cstdio>
+#include <cstdlib>
 
 namespace wgnx::sysmodule::runtime {
-
-UdpBinding::~UdpBinding() {
-    Close();
-}
 
 void UdpBinding::SetEndpoint(
     const wgnx::platform::endpoint &endpoint,
@@ -22,51 +19,20 @@ void UdpBinding::ClearEndpoint() {
     m_has_endpoint = false;
 }
 
-void UdpBinding::Reset() {
-    Close();
-    ClearEndpoint();
-    m_suspended = false;
-}
-
-wgnx::platform::socket_error UdpBinding::Open(SocketGeneration generation) {
-    Close();
-    if (!m_has_endpoint) {
-        return wgnx::platform::socket_error::invalid_endpoint;
-    }
-
-    const auto error = wgnx::platform::udp_open(&m_socket, m_endpoint.family);
-    if (error != wgnx::platform::socket_error::none) {
-        m_socket = wgnx::platform::InvalidSocket;
-        return error;
-    }
-    m_generation = generation;
-    m_suspended = false;
-    return wgnx::platform::socket_error::none;
-}
-
 void UdpBinding::AdoptOpenSocket(
     const wgnx::platform::endpoint &endpoint,
     const char *text,
     SocketGeneration generation,
     wgnx::platform::socket_handle socket) {
-    Close();
+    // Callers explicitly release any prior socket into a close effect before
+    // adopting a replacement. Binding state itself never performs platform I/O.
+    if (m_socket != wgnx::platform::InvalidSocket) {
+        std::abort();
+    }
     SetEndpoint(endpoint, text);
     m_socket = socket;
     m_generation = generation;
     m_suspended = false;
-}
-
-void UdpBinding::Close() {
-    if (m_socket != wgnx::platform::InvalidSocket) {
-        wgnx::platform::udp_close(m_socket);
-    }
-    m_socket = wgnx::platform::InvalidSocket;
-    m_generation = SocketGeneration{};
-}
-
-void UdpBinding::Suspend() {
-    m_suspended = true;
-    Close();
 }
 
 wgnx::platform::socket_handle UdpBinding::ReleaseAndSuspend() {
@@ -79,15 +45,6 @@ wgnx::platform::socket_handle UdpBinding::ReleaseSocket() {
     m_socket = wgnx::platform::InvalidSocket;
     m_generation = SocketGeneration{};
     return socket;
-}
-
-wgnx::platform::socket_error UdpBinding::Send(
-    std::span<const std::uint8_t> packet,
-    std::size_t *sent) const {
-    if (m_suspended || !m_has_endpoint || !IsOpen()) {
-        return wgnx::platform::socket_error::send_failed;
-    }
-    return wgnx::platform::udp_send(m_socket, m_endpoint, packet, sent);
 }
 
 bool UdpBinding::SnapshotForSend(SendSnapshot &out) const {

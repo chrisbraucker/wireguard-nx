@@ -31,5 +31,8 @@ void TestPeerControllerRecoveryWorkflow(TestContext &context);
 void TestKeypairProtocolLimits(TestContext &context);
 void TestOutboundStagingLifecycle(TestContext &context);
 void TestHandshakeRetryLifecycle(TestContext &context);
+void TestAutoStartPersistenceGeneration(TestContext &context);
+void TestUdpBindingOwnership(TestContext &context);
+void TestRuntimeCompositionFailureInjection(TestContext &context);
 
 } // namespace wgnx::test

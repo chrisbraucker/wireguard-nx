@@ -1,6 +1,8 @@
 #include "logger.hpp"
 
 #include <cstdarg>
+#include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstring>
 #include <mutex>
@@ -14,6 +16,9 @@ namespace {
 constexpr const char *SdMountName = "sdmc";
 constexpr const char *LogDirectory = "sdmc:/wgnx";
 constexpr const char *LogFilePath = "sdmc:/wgnx/wgnx-sysmodule.log";
+constexpr std::size_t PendingLogCapacity = 16;
+constexpr std::size_t MaximumQueuedMessageSize = 512;
+constexpr std::size_t MaximumFormattedLineSize = 640;
 
 enum class FileBackendState : std::uint8_t {
     Uninitialized,
@@ -22,6 +27,16 @@ enum class FileBackendState : std::uint8_t {
 
 bool g_logger_initialized = false;
 FileBackendState g_file_backend_state = FileBackendState::Uninitialized;
+struct PendingLogLine {
+    std::array<char, MaximumQueuedMessageSize> bytes{};
+    std::size_t size{0};
+};
+
+std::array<PendingLogLine, PendingLogCapacity> g_pending_logs{};
+std::size_t g_pending_head = 0;
+std::size_t g_pending_count = 0;
+std::size_t g_dropped_log_count = 0;
+ams::os::Mutex g_pending_log_mutex(false);
 ams::os::Mutex g_file_backend_mutex(false);
 
 void EmitDebugString(const char *line, size_t line_size) {
@@ -119,6 +134,45 @@ void WriteLineToFile(const char *line, size_t line_size) {
     WriteLineToFileLocked(line, line_size);
 }
 
+void EnqueueLine(const char *line, std::size_t line_size) {
+    if (line == nullptr || line_size == 0) {
+        return;
+    }
+
+    std::scoped_lock lock(g_pending_log_mutex);
+    if (g_pending_count == PendingLogCapacity) {
+        g_pending_head = (g_pending_head + 1) % PendingLogCapacity;
+        --g_pending_count;
+        ++g_dropped_log_count;
+    }
+
+    const std::size_t index =
+        (g_pending_head + g_pending_count) % PendingLogCapacity;
+    auto &entry = g_pending_logs[index];
+    entry.size = std::min(line_size, entry.bytes.size());
+    std::memcpy(entry.bytes.data(), line, entry.size);
+    ++g_pending_count;
+}
+
+bool TakePendingLine(PendingLogLine &out_line) {
+    std::scoped_lock lock(g_pending_log_mutex);
+    if (g_pending_count == 0) {
+        return false;
+    }
+
+    out_line = g_pending_logs[g_pending_head];
+    g_pending_head = (g_pending_head + 1) % PendingLogCapacity;
+    --g_pending_count;
+    return true;
+}
+
+std::size_t TakeDroppedLogCount() {
+    std::scoped_lock lock(g_pending_log_mutex);
+    const std::size_t dropped = g_dropped_log_count;
+    g_dropped_log_count = 0;
+    return dropped;
+}
+
 } // namespace
 
 void Initialize() {
@@ -128,9 +182,8 @@ void Initialize() {
     }
 
     g_logger_initialized = true;
-    const char *banner = "\n=== wgnx sysmodule boot ===\n";
-    EmitDebugString(banner, std::strlen(banner));
-    WriteLineToFileLocked(banner, std::strlen(banner));
+    const char *banner = "=== wgnx sysmodule boot ===";
+    EnqueueLine(banner, std::strlen(banner));
 }
 
 void Log(const char *fmt, ...) {
@@ -144,16 +197,47 @@ void Log(const char *fmt, ...) {
         return;
     }
 
-    char line[640];
-    const auto tick = static_cast<unsigned long long>(svcGetSystemTick());
-    const int line_written = std::snprintf(line, sizeof(line), "[%llu] %s\n", tick, message);
-    if (line_written <= 0) {
-        return;
+    const size_t message_size = static_cast<size_t>(
+        std::min(written, static_cast<int>(sizeof(message) - 1)));
+    EnqueueLine(message, message_size);
+}
+
+void Flush() {
+    const std::size_t dropped = TakeDroppedLogCount();
+    if (dropped != 0) {
+        char notice[128]{};
+        const int written = std::snprintf(
+            notice,
+            sizeof(notice),
+            "wgnx logger dropped %zu buffered diagnostic line(s)\n",
+            dropped);
+        if (written > 0) {
+            const std::size_t notice_size = static_cast<std::size_t>(
+                std::min(written, static_cast<int>(sizeof(notice) - 1)));
+            EmitDebugString(notice, notice_size);
+            WriteLineToFile(notice, notice_size);
+        }
     }
 
-    const size_t line_size = static_cast<size_t>((line_written < static_cast<int>(sizeof(line))) ? line_written : (sizeof(line) - 1));
-    EmitDebugString(line, line_size);
-    WriteLineToFile(line, line_size);
+    PendingLogLine line{};
+    while (TakePendingLine(line)) {
+        char formatted[MaximumFormattedLineSize]{};
+        const auto tick = static_cast<unsigned long long>(svcGetSystemTick());
+        const int written = std::snprintf(
+            formatted,
+            sizeof(formatted),
+            "[%llu] %.*s\n",
+            tick,
+            static_cast<int>(line.size),
+            line.bytes.data());
+        if (written <= 0) {
+            continue;
+        }
+        const std::size_t formatted_size = static_cast<std::size_t>(
+            std::min(written, static_cast<int>(sizeof(formatted) - 1)));
+        EmitDebugString(formatted, formatted_size);
+        WriteLineToFile(formatted, formatted_size);
+    }
 }
 
 } // namespace wgnx::sysmodule::logger

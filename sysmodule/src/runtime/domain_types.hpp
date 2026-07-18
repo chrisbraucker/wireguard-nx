@@ -32,6 +32,7 @@ struct DatagramGenerationTag;
 struct PacketGenerationTag;
 struct PacketIdTag;
 struct ProcessIdTag;
+struct AutoStartRequestGenerationTag;
 
 using PeerIndex = DomainId<PeerIndexTag, std::uint32_t>;
 using ActivationGeneration = DomainId<ActivationGenerationTag, std::uint32_t>;
@@ -40,6 +41,7 @@ using DatagramGeneration = DomainId<DatagramGenerationTag, std::uint32_t>;
 using PacketGeneration = DomainId<PacketGenerationTag, std::uint32_t>;
 using PacketId = DomainId<PacketIdTag, std::uint64_t>;
 using ProcessId = DomainId<ProcessIdTag, std::uint64_t>;
+using AutoStartRequestGeneration = DomainId<AutoStartRequestGenerationTag, std::uint32_t>;
 
 template<typename Id>
 concept DomainIdentity =
@@ -49,7 +51,8 @@ concept DomainIdentity =
     std::same_as<Id, DatagramGeneration> ||
     std::same_as<Id, PacketGeneration> ||
     std::same_as<Id, PacketId> ||
-    std::same_as<Id, ProcessId>;
+    std::same_as<Id, ProcessId> ||
+    std::same_as<Id, AutoStartRequestGeneration>;
 
 template<typename Id>
 concept MonotonicIdentity =
@@ -57,7 +60,8 @@ concept MonotonicIdentity =
     std::same_as<Id, SocketGeneration> ||
     std::same_as<Id, DatagramGeneration> ||
     std::same_as<Id, PacketGeneration> ||
-    std::same_as<Id, PacketId>;
+    std::same_as<Id, PacketId> ||
+    std::same_as<Id, AutoStartRequestGeneration>;
 
 template<MonotonicIdentity Id>
 constexpr Id AllocateGeneration(Id &next) {
@@ -78,6 +82,7 @@ static_assert(std::is_trivially_copyable_v<DatagramGeneration>);
 static_assert(std::is_trivially_copyable_v<PacketGeneration>);
 static_assert(std::is_trivially_copyable_v<PacketId>);
 static_assert(std::is_trivially_copyable_v<ProcessId>);
+static_assert(std::is_trivially_copyable_v<AutoStartRequestGeneration>);
 static_assert(sizeof(PeerIndex) == sizeof(std::uint32_t));
 static_assert(sizeof(PacketId) == sizeof(std::uint64_t));
 

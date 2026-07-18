@@ -83,7 +83,7 @@ public:
     };
 
     constexpr UdpBinding() = default;
-    ~UdpBinding();
+    ~UdpBinding() = default;
 
     UdpBinding(const UdpBinding &) = delete;
     UdpBinding &operator=(const UdpBinding &) = delete;
@@ -92,22 +92,13 @@ public:
 
     void SetEndpoint(const wgnx::platform::endpoint &endpoint, const char *text);
     void ClearEndpoint();
-    void Reset();
-
-    wgnx::platform::socket_error Open(SocketGeneration generation);
     void AdoptOpenSocket(
         const wgnx::platform::endpoint &endpoint,
         const char *text,
         SocketGeneration generation,
         wgnx::platform::socket_handle socket);
-    void Close();
-    void Suspend();
     wgnx::platform::socket_handle ReleaseAndSuspend();
     wgnx::platform::socket_handle ReleaseSocket();
-
-    wgnx::platform::socket_error Send(
-        std::span<const std::uint8_t> packet,
-        std::size_t *sent) const;
 
     bool HasEndpoint() const { return m_has_endpoint; }
     bool IsOpen() const { return m_socket != wgnx::platform::InvalidSocket; }

@@ -11,13 +11,13 @@ namespace wgnx::sysmodule::runtime {
 PacketSubmissionOutcome PacketDataPlane::SubmitIpPacket(
     std::span<const std::uint8_t> packet,
     ProcessId consumer_id,
-    wireguard::TimerDeadline retry_deadline,
+    const TimerFacts &timer_facts,
     wgnx::platform::ktime_t occurred_at,
     EffectBatch &out_effects) {
     return SubmitValidatedPacket(
         packet,
         consumer_id,
-        retry_deadline,
+        timer_facts,
         occurred_at,
         wireguard::ValidateInnerIpPacket(packet),
         true,
@@ -27,13 +27,13 @@ PacketSubmissionOutcome PacketDataPlane::SubmitIpPacket(
 PacketSubmissionOutcome PacketDataPlane::SubmitIpv4Packet(
     std::span<const std::uint8_t> packet,
     ProcessId consumer_id,
-    wireguard::TimerDeadline retry_deadline,
+    const TimerFacts &timer_facts,
     wgnx::platform::ktime_t occurred_at,
     EffectBatch &out_effects) {
     return SubmitValidatedPacket(
         packet,
         consumer_id,
-        retry_deadline,
+        timer_facts,
         occurred_at,
         wireguard::ValidateInnerIpv4Packet(packet),
         true,
@@ -42,13 +42,13 @@ PacketSubmissionOutcome PacketDataPlane::SubmitIpv4Packet(
 
 PacketSubmissionOutcome PacketDataPlane::SubmitInternalIpPacket(
     std::span<const std::uint8_t> packet,
-    wireguard::TimerDeadline retry_deadline,
+    const TimerFacts &timer_facts,
     wgnx::platform::ktime_t occurred_at,
     EffectBatch &out_effects) {
     return SubmitValidatedPacket(
         packet,
         ProcessId{},
-        retry_deadline,
+        timer_facts,
         occurred_at,
         wireguard::ValidateInnerIpPacket(packet),
         false,
@@ -58,7 +58,7 @@ PacketSubmissionOutcome PacketDataPlane::SubmitInternalIpPacket(
 PacketSubmissionOutcome PacketDataPlane::SubmitValidatedPacket(
     std::span<const std::uint8_t> packet,
     ProcessId consumer_id,
-    wireguard::TimerDeadline retry_deadline,
+    const TimerFacts &timer_facts,
     wgnx::platform::ktime_t occurred_at,
     wireguard::InnerIpValidationError validation,
     bool claim_transport,
@@ -116,7 +116,7 @@ PacketSubmissionOutcome PacketDataPlane::SubmitValidatedPacket(
         .peer = outcome.peer,
         .packet = SynchronousPacketView{packet},
         .packet_id = outcome.packet_id,
-        .retry_deadline = retry_deadline,
+        .timer_facts = timer_facts,
         .occurred_at = occurred_at,
     });
     if (m_coordinator.SnapshotPacketState(peer) && peer.identity == outcome.peer) {

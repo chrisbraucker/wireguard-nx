@@ -1,6 +1,7 @@
 #include "runtime/runtime_effect_executor.hpp"
 
 #include "runtime/debug_probe_runner.hpp"
+#include "runtime/effect_drain.hpp"
 #include "runtime/encrypted_receive_pump.hpp"
 #include "runtime/endpoint_resolver.hpp"
 #include "runtime/horizon_dispatcher.hpp"
@@ -18,7 +19,6 @@
 #include "wireguard/timers.hpp"
 
 #include <array>
-#include <chrono>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -37,19 +37,7 @@ wgnx::platform::ktime_t GetRuntimeNowNs() {
     return wgnx::platform::ktime_get_coarse_boottime_ns();
 }
 
-wgnx::wireguard::TimerDeadline GetHandshakeRetryDeadline() {
-    return wgnx::wireguard::TimerDeadlineFromJiffies(
-               wgnx::platform::get_jiffies_64()) +
-           wgnx::wireguard::GetHandshakeRetryDelay(
-               wgnx::platform::get_random_u32_below(
-                   wgnx::wireguard::RekeyTimeoutJitterMaxMs));
-}
-
 } // namespace
-
-void RuntimeEffectExecutor::CancelDebugProbeTimeout() {
-    m_timer_scheduler.CancelDebugProbeTimeout();
-}
 
 NOINLINE void RuntimeEffectExecutor::ExecuteOpenUdpBind(
     const OpenUdpBindEffect &effect,
@@ -66,7 +54,7 @@ NOINLINE void RuntimeEffectExecutor::ExecuteOpenUdpBind(
         static_cast<int>(socket),
         effect.endpoint_text.data(),
         static_cast<unsigned int>(error));
-    const auto retry_deadline = GetHandshakeRetryDeadline();
+    const auto timer_facts = CaptureTimerFacts();
     EffectBatch completion{};
     {
         std::scoped_lock lock(m_state_mutex);
@@ -78,7 +66,7 @@ NOINLINE void RuntimeEffectExecutor::ExecuteOpenUdpBind(
             .error = error,
             .socket_generation = effect.socket_generation,
             .purpose = effect.purpose,
-            .retry_deadline = retry_deadline,
+            .timer_facts = timer_facts,
             .occurred_at = GetRuntimeNowNs(),
         });
     }
@@ -134,21 +122,27 @@ NOINLINE void RuntimeEffectExecutor::ExecutePendingDatagramSend(
 
 NOINLINE void RuntimeEffectExecutor::ExecutePublishDecryptedPacket(
     const PublishDecryptedPacketEffect &effect) {
-    std::scoped_lock lock(m_state_mutex);
-    DecryptedPacketView view{};
-    if (m_coordinator.ViewDecryptedPacket(
-            effect.peer,
-            effect.packet_generation,
-            view)) {
-        PublishDecryptedPacketLocked(effect.peer, view.packet);
+    bool cancel_debug_timeout = false;
+    {
+        std::scoped_lock lock(m_state_mutex);
+        DecryptedPacketView view{};
+        if (m_coordinator.ViewDecryptedPacket(
+                effect.peer,
+                effect.packet_generation,
+                view)) {
+            cancel_debug_timeout = PublishDecryptedPacketLocked(effect.peer, view.packet);
+        }
+    }
+    if (cancel_debug_timeout) {
+        m_timer_scheduler.CancelDebugProbeTimeout();
     }
 }
 
 void RuntimeEffectExecutor::Execute(const EffectBatch &effects) {
-    EffectBatch current = effects;
-    while (!current.Empty()) {
-        EffectBatch generated{};
-        for (const auto &effect : current) {
+    ON_SCOPE_EXIT { logger::Flush(); };
+    DrainEffectBatches(
+        effects,
+        [this](const RuntimeEffect &effect, EffectBatch &generated) {
             std::visit(
                 [this, &generated](const auto &value) {
                     using Effect = std::remove_cvref_t<decltype(value)>;
@@ -217,15 +211,25 @@ void RuntimeEffectExecutor::Execute(const EffectBatch &effects) {
                         }
                     } else if constexpr (std::is_same_v<Effect, PublishDecryptedPacketEffect>) {
                         ExecutePublishDecryptedPacket(value);
+                    } else if constexpr (std::is_same_v<Effect, ArmDebugProbeTimeoutEffect>) {
+                        bool current = false;
+                        {
+                            std::scoped_lock lock(m_state_mutex);
+                            current = m_debug_probe_runner.Peer() == value.peer &&
+                                      m_debug_probe_runner.Status() == wgnx::DebugProbeStatus::Sent;
+                        }
+                        if (current) {
+                            m_timer_scheduler.ArmDebugProbeTimeout(value.deadline);
+                        }
+                    } else if constexpr (std::is_same_v<Effect, CancelDebugProbeTimeoutEffect>) {
+                        m_timer_scheduler.CancelDebugProbeTimeout();
                     }
                 },
                 effect);
-        }
-        current = generated;
-    }
+        });
 }
 
-void RuntimeEffectExecutor::PublishDecryptedPacketLocked(
+bool RuntimeEffectExecutor::PublishDecryptedPacketLocked(
     const PeerIdentity &peer,
     std::span<const std::uint8_t> inner_packet) {
     const auto probe = m_debug_probe_runner.HandleDecryptedPacket(
@@ -233,7 +237,7 @@ void RuntimeEffectExecutor::PublishDecryptedPacketLocked(
         inner_packet,
         GetRuntimeNowNs());
     if (probe.consumed) {
-        CancelDebugProbeTimeout();
+        // The concrete cancellation runs after the caller releases the daemon lock.
     }
     if (probe.validation == wgnx::wireguard::DebugProbeReplyValidation::Valid) {
         char inner_source[16] = {};
@@ -254,7 +258,7 @@ void RuntimeEffectExecutor::PublishDecryptedPacketLocked(
             inner_destination,
             static_cast<unsigned int>(probe.info.sequence),
             probe.info.activation_generation);
-        return;
+        return true;
     }
 
     if (probe.consumed) {
@@ -263,7 +267,7 @@ void RuntimeEffectExecutor::PublishDecryptedPacketLocked(
             peer.peer_index.Value(),
             wgnx::wireguard::GetDebugProbeReplyValidationName(probe.validation),
             inner_packet.size());
-        return;
+        return true;
     }
 
     const auto delivery = m_packet_data_plane.DeliverDecryptedPacket(peer, inner_packet);
@@ -311,6 +315,7 @@ void RuntimeEffectExecutor::PublishDecryptedPacketLocked(
         case PacketDeliveryStatus::StalePeer:
             break;
     }
+    return probe.consumed;
 }
 
 bool RuntimeEffectExecutor::TakeDebugPayloadSubmission(
@@ -322,6 +327,11 @@ bool RuntimeEffectExecutor::TakeDebugPayloadSubmission(
 void RuntimeEffectExecutor::CommitDebugPayloadSubmission(
     const DebugProbeRequest &request) {
     EffectBatch effects{};
+    const auto timer_facts = CaptureTimerFacts();
+    const auto random_seed = wgnx::platform::get_random_u32_below(
+        std::numeric_limits<std::uint32_t>::max());
+    const auto debug_timeout_deadline =
+        wgnx::platform::get_jiffies_64() + DebugProbeTimeoutJiffies;
     std::unique_lock lock(m_state_mutex);
     if (!m_coordinator.IsActiveIdentity(request.peer)) {
         static_cast<void>(m_debug_probe_runner.MarkFailed(
@@ -361,8 +371,7 @@ void RuntimeEffectExecutor::CommitDebugPayloadSubmission(
     const std::size_t payload_size = m_debug_probe_runner.BuildPacket(
         request,
         payload,
-        wgnx::platform::get_random_u32_below(
-            std::numeric_limits<std::uint32_t>::max()));
+        random_seed);
     if (payload_size == 0) {
         char target_text[16] = {};
         std::array<std::uint8_t, 4> target_ipv4{};
@@ -402,7 +411,7 @@ void RuntimeEffectExecutor::CommitDebugPayloadSubmission(
         payload_size);
     const auto submission = m_packet_data_plane.SubmitInternalIpPacket(
         std::span<const std::uint8_t>(payload.data(), payload_size),
-        GetHandshakeRetryDeadline(),
+        timer_facts,
         GetRuntimeNowNs(),
         effects);
     if (submission.status != PacketSubmissionStatus::Queued) {
@@ -419,13 +428,16 @@ void RuntimeEffectExecutor::CommitDebugPayloadSubmission(
     }
 
     static_cast<void>(m_debug_probe_runner.MarkSent(request, GetRuntimeNowNs()));
-    m_timer_scheduler.ArmDebugProbeTimeout(
-        wgnx::platform::get_jiffies_64() + DebugProbeTimeoutJiffies);
+    effects.Add(ArmDebugProbeTimeoutEffect{
+        .peer = request.peer,
+        .deadline = debug_timeout_deadline,
+    });
     lock.unlock();
     Execute(effects);
 }
 
 void RuntimeEffectExecutor::RunDebugPayloadSubmission() {
+    ON_SCOPE_EXIT { logger::Flush(); };
     DebugProbeRequest request{};
     while (TakeDebugPayloadSubmission(request)) {
         CommitDebugPayloadSubmission(request);
@@ -433,7 +445,9 @@ void RuntimeEffectExecutor::RunDebugPayloadSubmission() {
 }
 
 void RuntimeEffectExecutor::RunInnerPacketSubmission() {
+    ON_SCOPE_EXIT { logger::Flush(); };
     EffectBatch effects{};
+    const auto timer_facts = CaptureTimerFacts();
     {
         std::scoped_lock lock(m_state_mutex);
         PeerPacketStateSnapshot peer{};
@@ -442,7 +456,7 @@ void RuntimeEffectExecutor::RunInnerPacketSubmission() {
         }
         effects = m_coordinator.Dispatch(ProcessOutboundQueueEvent{
             .peer = peer.identity,
-            .retry_deadline = GetHandshakeRetryDeadline(),
+            .timer_facts = timer_facts,
             .occurred_at = GetRuntimeNowNs(),
         });
     }
@@ -450,6 +464,7 @@ void RuntimeEffectExecutor::RunInnerPacketSubmission() {
 }
 
 void RuntimeEffectExecutor::RunEndpointResolver() {
+    ON_SCOPE_EXIT { logger::Flush(); };
     while (true) {
         std::optional<ResolveEndpointEffect> request{};
         {
@@ -490,16 +505,14 @@ void RuntimeEffectExecutor::RunEndpointResolver() {
 void RuntimeEffectExecutor::RunProtocolTimer(
     wgnx::wireguard::TimerHook hook,
     const wgnx::wireguard::TimerToken &token) {
+    ON_SCOPE_EXIT { logger::Flush(); };
+    const auto timer_facts = CaptureTimerFacts();
     std::unique_lock lock(m_state_mutex);
     if (!token.IsValid() || token.hook != hook ||
         token.owner.peer_index >= m_coordinator.PeerCount()) {
         return;
     }
 
-    const std::size_t peer_index = token.owner.peer_index;
-    const auto *configuration = m_coordinator.Configuration(peer_index);
-    AMS_ABORT_UNLESS(configuration != nullptr);
-    const auto now_jiffies = wgnx::platform::get_jiffies_64();
     const EffectBatch effects = m_coordinator.Dispatch(
         ProtocolTimerExpiredEvent{
             .peer = {
@@ -509,17 +522,7 @@ void RuntimeEffectExecutor::RunProtocolTimer(
             },
             .hook = hook,
             .token = token,
-            .retry_deadline =
-                wgnx::wireguard::TimerDeadlineFromJiffies(now_jiffies) +
-                wgnx::wireguard::GetHandshakeRetryDelay(
-                    wgnx::platform::get_random_u32_below(
-                        wgnx::wireguard::RekeyTimeoutJitterMaxMs)),
-            .keepalive_deadline =
-                wgnx::wireguard::TimerDeadlineFromJiffies(now_jiffies) +
-                std::chrono::seconds{configuration->persistent_keepalive},
-            .zero_key_material_deadline =
-                wgnx::wireguard::TimerDeadlineFromJiffies(now_jiffies) +
-                wgnx::wireguard::ZeroKeyMaterialAfterTime,
+            .timer_facts = timer_facts,
             .occurred_at = GetRuntimeNowNs(),
         });
     lock.unlock();
@@ -527,6 +530,7 @@ void RuntimeEffectExecutor::RunProtocolTimer(
 }
 
 void RuntimeEffectExecutor::RunDebugProbeTimeout() {
+    ON_SCOPE_EXIT { logger::Flush(); };
     std::scoped_lock lock(m_state_mutex);
     const auto peer = m_debug_probe_runner.Peer();
     const auto action = m_debug_probe_runner.Action();
@@ -541,6 +545,7 @@ void RuntimeEffectExecutor::RunDebugProbeTimeout() {
 }
 
 void RuntimeEffectExecutor::RunNetworkPathObservation() {
+    ON_SCOPE_EXIT { logger::Flush(); };
     bool has_active_transport = false;
     {
         std::scoped_lock lock(m_state_mutex);

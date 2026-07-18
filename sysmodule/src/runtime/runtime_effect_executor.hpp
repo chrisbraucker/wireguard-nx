@@ -48,7 +48,6 @@ public:
         const wgnx::wireguard::TimerToken &token);
     void RunDebugProbeTimeout();
     void RunNetworkPathObservation();
-    void CancelDebugProbeTimeout();
 
 private:
     bool TakeDebugPayloadSubmission(DebugProbeRequest &out_request);
@@ -60,7 +59,7 @@ private:
         EffectBatch &generated);
     NOINLINE void ExecutePublishDecryptedPacket(
         const PublishDecryptedPacketEffect &effect);
-    void PublishDecryptedPacketLocked(
+    [[nodiscard]] bool PublishDecryptedPacketLocked(
         const PeerIdentity &peer,
         std::span<const std::uint8_t> inner_packet);
     void CommitDebugPayloadSubmission(const DebugProbeRequest &request);

@@ -88,18 +88,18 @@ public:
     [[nodiscard]] PacketSubmissionOutcome SubmitIpPacket(
         std::span<const std::uint8_t> packet,
         ProcessId consumer_id,
-        wireguard::TimerDeadline retry_deadline,
+        const TimerFacts &timer_facts,
         wgnx::platform::ktime_t occurred_at,
         EffectBatch &out_effects);
     [[nodiscard]] PacketSubmissionOutcome SubmitIpv4Packet(
         std::span<const std::uint8_t> packet,
         ProcessId consumer_id,
-        wireguard::TimerDeadline retry_deadline,
+        const TimerFacts &timer_facts,
         wgnx::platform::ktime_t occurred_at,
         EffectBatch &out_effects);
     [[nodiscard]] PacketSubmissionOutcome SubmitInternalIpPacket(
         std::span<const std::uint8_t> packet,
-        wireguard::TimerDeadline retry_deadline,
+        const TimerFacts &timer_facts,
         wgnx::platform::ktime_t occurred_at,
         EffectBatch &out_effects);
 
@@ -115,7 +115,7 @@ private:
     PacketSubmissionOutcome SubmitValidatedPacket(
         std::span<const std::uint8_t> packet,
         ProcessId consumer_id,
-        wireguard::TimerDeadline retry_deadline,
+        const TimerFacts &timer_facts,
         wgnx::platform::ktime_t occurred_at,
         wireguard::InnerIpValidationError validation,
         bool claim_transport,

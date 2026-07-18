@@ -3,7 +3,7 @@
 #---------------------------------------------------------------------------------
 
 TOPDIR ?= $(CURDIR)
-HOST_ONLY_GOALS := test test-sanitize
+HOST_ONLY_GOALS := test test-sanitize test-tsan
 HOST_ONLY_BUILD := $(strip $(filter $(HOST_ONLY_GOALS),$(MAKECMDGOALS)))
 
 ifeq ($(HOST_ONLY_BUILD),)
@@ -47,6 +47,8 @@ HOST_TEST_DIR	:= $(OUTDIR)/host-test
 HOST_TEST_TARGET := $(HOST_TEST_DIR)/wireguard-host-test
 HOST_SANITIZE_DIR := $(OUTDIR)/host-test-sanitize
 HOST_SANITIZE_TARGET := $(HOST_SANITIZE_DIR)/wireguard-host-test
+HOST_TSAN_DIR := $(OUTDIR)/host-test-tsan
+HOST_TSAN_TARGET := $(HOST_TSAN_DIR)/wireguard-host-test
 HOST_TEST_CPP_SOURCES := \
 	src/runtime/debug_probe_runner.cpp \
 	src/runtime/endpoint_resolver.cpp \
@@ -157,7 +159,7 @@ export BUILD_EXEFS_SRC := $(TOPDIR)/$(EXEFS_SRC)
 
 export APP_JSON := $(TOPDIR)/res/module.json
 
-.PHONY	: $(BUILD) clean clean-libs clean-build all libs dist test test-sanitize \
+.PHONY	: $(BUILD) clean clean-libs clean-build all libs dist test test-sanitize test-tsan \
 		prepare-build-id check-stack report-footprint resource-report
 
 #---------------------------------------------------------------------------------
@@ -176,6 +178,9 @@ test: $(HOST_TEST_TARGET)
 test-sanitize: $(HOST_SANITIZE_TARGET)
 	@ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 $(HOST_SANITIZE_TARGET)
 
+test-tsan: $(HOST_TSAN_TARGET)
+	@TSAN_OPTIONS=halt_on_error=1 $(HOST_TSAN_TARGET)
+
 check-stack: $(BUILD)
 	@$(PYTHON) $(TOPDIR)/../tools/check_stack_usage.py
 
@@ -193,6 +198,11 @@ $(HOST_SANITIZE_TARGET): Makefile $(HOST_TEST_CPP_SOURCES) $(HOST_TEST_C_SOURCES
 	@[ -d $(HOST_SANITIZE_DIR) ] || mkdir -p $(HOST_SANITIZE_DIR)
 	@$(HOST_CC) $(HOST_TEST_CFLAGS) -fsanitize=address,undefined -fno-omit-frame-pointer -I$(CURDIR)/src/wireguard/crypto -c $(CURDIR)/src/wireguard/crypto/monocypher.c -o $(HOST_SANITIZE_DIR)/monocypher.o
 	@$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -fsanitize=address,undefined -fno-omit-frame-pointer $(HOST_TEST_INCLUDES) $(addprefix $(CURDIR)/,$(HOST_TEST_CPP_SOURCES)) $(HOST_SANITIZE_DIR)/monocypher.o -o $(HOST_SANITIZE_TARGET)
+
+$(HOST_TSAN_TARGET): Makefile $(HOST_TEST_CPP_SOURCES) $(HOST_TEST_C_SOURCES) $(HOST_TEST_HEADERS)
+	@[ -d $(HOST_TSAN_DIR) ] || mkdir -p $(HOST_TSAN_DIR)
+	@$(HOST_CC) $(HOST_TEST_CFLAGS) -fsanitize=thread -fno-omit-frame-pointer -I$(CURDIR)/src/wireguard/crypto -c $(CURDIR)/src/wireguard/crypto/monocypher.c -o $(HOST_TSAN_DIR)/monocypher.o
+	@$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -fsanitize=thread -fno-omit-frame-pointer $(HOST_TEST_INCLUDES) $(addprefix $(CURDIR)/,$(HOST_TEST_CPP_SOURCES)) $(HOST_TSAN_DIR)/monocypher.o -o $(HOST_TSAN_TARGET)
 
 libs	:
 	@$(foreach lib,$(LIBNAMES),$(MAKE) --no-print-directory -C $(TOPDIR)/lib/$(lib) && ) true
