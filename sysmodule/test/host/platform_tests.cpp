@@ -51,13 +51,11 @@ void TestUdpReceiveClassification(TestContext &context) {
         "zero-length UDP datagram was conflated with a retry");
 
     constexpr std::array RetryConditions{
-        udp_receive_native_condition::none,
         udp_receive_native_condition::would_block,
         udp_receive_native_condition::timed_out,
         udp_receive_native_condition::interrupted,
     };
     constexpr std::array<std::uint32_t, RetryConditions.size()> NativeErrors{
-        0,
         11,
         60,
         4,
@@ -79,6 +77,22 @@ void TestUdpReceiveClassification(TestContext &context) {
                 retry.native_error == NativeErrors[index],
             "retryable receive did not preserve its closed outcome");
     }
+
+    const auto missing_errno = classify_udp_receive_result(
+        -1,
+        udp_receive_native_condition::none,
+        0,
+        source);
+    WGNX_TEST_REQUIRE(
+        context,
+        missing_errno.disposition == udp_receive_disposition::failure &&
+            missing_errno.native_condition == udp_receive_native_condition::none &&
+            missing_errno.bytes_received == 0 &&
+            missing_errno.source.family == address_family::unspecified &&
+            missing_errno.error == socket_error::receive_failed &&
+            missing_errno.native_result == -1 &&
+            missing_errno.native_error == 0,
+        "negative receive without a classified errno was retried");
 
     const auto failure = classify_udp_receive_result(
         -1,

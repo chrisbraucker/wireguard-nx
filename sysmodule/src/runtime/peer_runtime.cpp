@@ -644,7 +644,7 @@ void PeerRuntime::HandlePendingDatagramCompletion(
             event.peer.activation_generation.Value(),
             wgnx::GetPeerRuntimeStateName(m_lifecycle.state),
             wgnx::GetPeerErrorCodeName(wgnx::PeerErrorCode::TransportSendFailed));
-        if constexpr (development_config::SuspendUdpTransportOnFirstSendFailure) {
+        if constexpr (development_config::SuspendUdpTransportOnFirstIoFailure) {
             SuspendTransport(event.peer, effects);
         }
         return;
@@ -768,7 +768,7 @@ void PeerRuntime::SuspendTransport(
 
     const auto binding = m_binding.StateSnapshot();
     logger::Log(
-        "EXPERIMENT suspending UDP transport after send failure peer=%u activation=%u socket_generation=%u socket=%d; preserving peer and protocol state",
+        "EXPERIMENT suspending UDP transport after I/O failure peer=%u activation=%u socket_generation=%u socket=%d; preserving peer and protocol state",
         identity.peer_index.Value(),
         identity.activation_generation.Value(),
         binding.generation.Value(),
@@ -1274,6 +1274,9 @@ EffectBatch PeerRuntime::Handle(const PeerEvent &event) {
                             ? "receive worker"
                             : "unknown",
                         wgnx::GetPeerErrorCodeName(code));
+                    if constexpr (development_config::SuspendUdpTransportOnFirstIoFailure) {
+                        SuspendTransport(value.peer, effects);
+                    }
                     return effects;
                 }
                 EnterActivationError(

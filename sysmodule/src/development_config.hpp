@@ -29,7 +29,7 @@ constexpr inline bool VerboseHeartbeatLogging = false;
 
 // Diagnostic mode: isolate stale BSD socket state after an uplink loss while
 // preserving the active peer, WireGuard protocol state, and NIFM session.
-constexpr inline bool SuspendUdpTransportOnFirstSendFailure = true;
+constexpr inline bool SuspendUdpTransportOnFirstIoFailure = true;
 
 constexpr inline const char *GetNifmPathObserverModeName() {
     switch (NifmPathObserver) {

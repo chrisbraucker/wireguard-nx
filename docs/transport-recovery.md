@@ -114,8 +114,8 @@ bump or tunnel traffic to the local peer.
 ## BSD socket suspension experiment
 
 The current development build enables
-`SuspendUdpTransportOnFirstSendFailure`. On the first recoverable UDP send
-failure, the sysmodule cancels transport timers and closes only the active UDP
+`SuspendUdpTransportOnFirstIoFailure`. On the first UDP I/O failure, the
+sysmodule cancels transport timers and closes only the active UDP
 socket. It deliberately preserves the selected peer, WireGuard keys and
 protocol state, and the retained NIFM session.
 
@@ -144,7 +144,7 @@ The Horizon UDP sends continued to return success while the uplink was absent.
 That return value proves only that BSD accepted a datagram locally; it does not
 prove that the encrypted packet reached the peer or that an authenticated
 WireGuard packet was received. Consequently,
-`SuspendUdpTransportOnFirstSendFailure` is useful for failures surfaced by BSD,
+`SuspendUdpTransportOnFirstIoFailure` is useful for failures surfaced by BSD,
 but cannot detect this class of silent path outage.
 
 The current simulated protocol timers make stale cryptographic state a leading

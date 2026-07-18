@@ -87,7 +87,9 @@ struct udp_receive_result {
         };
     }
 
-    if (native_condition != udp_receive_native_condition::other) {
+    if (native_condition == udp_receive_native_condition::would_block ||
+        native_condition == udp_receive_native_condition::timed_out ||
+        native_condition == udp_receive_native_condition::interrupted) {
         return {
             .disposition = udp_receive_disposition::retry,
             .native_condition = native_condition,

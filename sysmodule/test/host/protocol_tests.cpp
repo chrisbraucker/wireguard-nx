@@ -1706,26 +1706,25 @@ void TestRuntimeCoordinatorDispatch(TestContext &context) {
         .error = wgnx::platform::socket_error::receive_failed,
         .occurred_at = 5'000,
     });
+    std::size_t canceled_timer_count = 0;
+    const CloseUdpSocketEffect *closed_socket = nullptr;
+    for (const auto &effect : failure) {
+        if (std::get_if<CancelProtocolTimerEffect>(&effect) != nullptr) {
+            ++canceled_timer_count;
+        }
+        if (const auto *candidate = std::get_if<CloseUdpSocketEffect>(&effect)) {
+            closed_socket = candidate;
+        }
+    }
+    const auto suspended_binding = coordinator.BindingSnapshot(0);
     WGNX_TEST_REQUIRE(
         context,
-        stale_failure.Empty() && failure.Empty() &&
+        stale_failure.Empty() && failure.Size() == 4 &&
+            canceled_timer_count == 3 && closed_socket != nullptr &&
+            closed_socket->socket == binding.socket &&
+            suspended_binding.suspended && !suspended_binding.IsOpen() &&
             coordinator.Lifecycle(0)->state == wgnx::PeerRuntimeState::Handshaking,
-        "receive failure event did not reject staleness or preserve nonterminal state");
-
-    const auto fatal = coordinator.Dispatch(TransportFailureEvent{
-        .peer = {.peer_index = PeerIndex{0}, .activation_generation = ActivationGeneration{1}},
-        .socket = binding.socket,
-        .socket_generation = binding.generation,
-        .error = wgnx::platform::socket_error::transport_init_failed,
-        .occurred_at = 5'500,
-    });
-    WGNX_TEST_REQUIRE(
-        context,
-        !fatal.Empty() &&
-            coordinator.Lifecycle(0)->state == wgnx::PeerRuntimeState::Error &&
-            coordinator.Lifecycle(0)->last_error_code == static_cast<std::uint32_t>(
-                wgnx::PeerErrorCode::TransportInitFailed),
-        "terminal transport failure did not enter peer-owned error state");
+        "receive failure event did not reject staleness and suspend the failed UDP binding");
 
     static_cast<void>(coordinator.Dispatch(DeactivationRequestedEvent{
         .peer = {.peer_index = PeerIndex{0}, .activation_generation = ActivationGeneration{1}},

@@ -517,10 +517,12 @@ packet data plane consume immutable, purpose-specific snapshots rather than
 peer references.
 
 UDP receive failures are reported as socket- and generation-tagged facts.
-Recoverable receive errors remain nonterminal, while terminal mapping and peer
-error entry are peer-owned. Send-failure suspension now cancels peer timers,
+Only explicit would-block, timeout, and interruption conditions are retried; a
+negative receive with no classified socket condition is terminal rather than a
+busy-loop. The diagnostic I/O-failure suspension policy cancels peer timers,
 detaches the socket, and emits platform effects entirely inside the peer event
-path. Manual rebinding similarly produces a peer-owned open request; failed
+path while preserving peer and protocol state. Manual rebinding similarly
+produces a peer-owned open request; failed
 opens preserve the old socket, stale completions close only their candidate,
 and a successful completion atomically adopts the new generation before the
 peer chooses keepalive or handshake recovery. Host tests cover those policies,

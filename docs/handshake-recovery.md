@@ -89,6 +89,6 @@ The milestone's real-peer gate is:
    replacement.
 
 If the Horizon UDP send itself returns an error, the current development flag
-`SuspendUdpTransportOnFirstSendFailure` deliberately closes that socket. That
+`SuspendUdpTransportOnFirstIoFailure` deliberately closes that socket. That
 diagnostic path is outside this milestone's existing-socket recovery claim and
 still requires the separate bind-recovery experiment.

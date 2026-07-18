@@ -163,10 +163,13 @@ frame cannot accumulate with UDP send effects.
 The UDP platform boundary returns a `[[nodiscard]]` closed receive result.
 `Datagram`, `Retry`, and `Failure` are separate outcomes; byte count is therefore
 not used as an error channel, and a zero-length UDP datagram remains a datagram.
-The Horizon adapter normalizes retryable socket conditions but preserves the
-native result and errno value for diagnostics. The receive pump continues on a
-retry and publishes a generation-tagged transport failure only for a terminal
-outcome, preserving peer recovery policy outside the platform adapter.
+The Horizon adapter normalizes only explicit would-block, timeout, and
+interruption conditions as retryable while preserving the native result and
+errno value for diagnostics. A negative result without a classified condition
+is terminal, so a stale Horizon BSD socket cannot become a hot retry loop. The
+receive pump continues on a retry and publishes a generation-tagged transport
+failure only for a terminal outcome, preserving peer recovery policy outside
+the platform adapter.
 
 Every peer event declares its maximum effect count. The coordinator checks the
 actual count against that event budget, and all budgets fit the fixed
