@@ -1,185 +1,61 @@
 #include "protocol_tests.hpp"
 #include "protocol_test_support.hpp"
+#include "scripted_platform.hpp"
+
+#include <algorithm>
 
 namespace wgnx::test {
 
-void TestRuntimeCompositionFailureInjection(TestContext &context) {
-    using namespace wgnx::sysmodule::runtime;
-    using namespace wgnx::wireguard;
+namespace {
 
-    runtime::Reset(InitialRuntimeState);
-    std::array<wgnx::PeerConfigEntry, 1> configured{};
-    FillConfig(
-        &configured[0],
-        "composition",
-        "10.66.66.2/32",
-        InitiatorPrivateKey,
-        ResponderPublicKey);
+using namespace wgnx::sysmodule::runtime;
 
-    PeerRegistry registry{};
-    RuntimeCoordinator coordinator{registry};
-    WGNX_TEST_REQUIRE(
-        context,
-        ConfigureTestPeers(coordinator, configured, 0),
-        "composition failure-injection setup failed");
-
-    const auto activation = coordinator.Dispatch(ActivationRequestedEvent{
-        .peer_index = PeerIndex{0},
-        .occurred_at = 1'000,
-    });
-    const auto *resolve = activation.Size() == 1
-        ? std::get_if<ResolveEndpointEffect>(activation.begin())
-        : nullptr;
-    WGNX_TEST_REQUIRE(
-        context,
-        resolve != nullptr,
-        "composition failure-injection did not produce an endpoint request");
-    if (resolve == nullptr) {
-        return;
-    }
-
-    // This is the host representation of queued resolver work which becomes
-    // stale during shutdown before the worker receives CPU time.
-    EndpointResolver resolver{};
-    static_cast<void>(resolver.Queue(*resolve));
-    resolver.Cancel(resolve->peer);
-    const auto shutdown = coordinator.Dispatch(DeactivationRequestedEvent{
-        .peer = resolve->peer,
-        .occurred_at = 1'100,
-    });
-    const wgnx::platform::endpoint_resolution_result resolved{
-        .success = true,
-        .resolved = {
-            .family = wgnx::platform::address_family::inet,
-            .port = 51820,
-            .address = {192, 0, 2, 1},
-        },
-    };
-    const auto stale_resolution = coordinator.Dispatch(EndpointResolvedEvent{
-        .peer = resolve->peer,
-        .result = resolved,
-        .occurred_at = 1'200,
-    });
-    const auto resolver_statistics = resolver.Statistics();
-    WGNX_TEST_REQUIRE(
-        context,
-        resolver_statistics.cancelled == 1 && resolver_statistics.depth == 0 &&
-            !resolver.Take().has_value() && stale_resolution.Empty() &&
-            coordinator.Lifecycle(0)->state == wgnx::PeerRuntimeState::Inactive,
-        "cancelled resolver work or its stale completion escaped shutdown");
-    static_cast<void>(shutdown);
-
-    const auto failed_activation = coordinator.Dispatch(ActivationRequestedEvent{
-        .peer_index = PeerIndex{0},
-        .occurred_at = 1'300,
-    });
-    const auto *failed_resolve = failed_activation.Size() == 1
-        ? std::get_if<ResolveEndpointEffect>(failed_activation.begin())
-        : nullptr;
-    wgnx::platform::endpoint_resolution_result resolution_failure{
+wgnx::platform::endpoint_resolution_result ResolutionFailure() {
+    return {
         .success = false,
         .error_stage = wgnx::PeerErrorStage::ResolveEndpoint,
         .error_code = wgnx::PeerErrorCode::EndpointResolutionFailed,
     };
-    const auto resolution_failure_effects = failed_resolve != nullptr
-        ? coordinator.Dispatch(EndpointResolvedEvent{
-              .peer = failed_resolve->peer,
-              .result = resolution_failure,
-              .occurred_at = 1'400,
-          })
-        : EffectBatch{};
-    WGNX_TEST_REQUIRE(
-        context,
-        failed_resolve != nullptr && resolution_failure_effects.Size() == 4 &&
-            coordinator.Lifecycle(0)->state == wgnx::PeerRuntimeState::Error &&
-            coordinator.Lifecycle(0)->error_stage ==
-                wgnx::PeerErrorStage::ResolveEndpoint &&
-            coordinator.Lifecycle(0)->last_error_code == static_cast<std::uint32_t>(
-                wgnx::PeerErrorCode::EndpointResolutionFailed),
-        "endpoint-resolution failure did not remain a peer-owned terminal event");
+}
 
-    const auto retry_activation = coordinator.Dispatch(ActivationRequestedEvent{
+PeerIdentity BeginActivation(
+    RuntimeCoordinator &coordinator,
+    ScriptedPlatform &platform,
+    wgnx::platform::ktime_t now) {
+    platform.Execute(coordinator.Dispatch(ActivationRequestedEvent{
         .peer_index = PeerIndex{0},
-        .occurred_at = 1'500,
-    });
-    const auto *retry_resolve = retry_activation.Size() == 1
-        ? std::get_if<ResolveEndpointEffect>(retry_activation.begin())
-        : nullptr;
-    const auto open_request = retry_resolve != nullptr
-        ? coordinator.Dispatch(EndpointResolvedEvent{
-              .peer = retry_resolve->peer,
-              .result = resolved,
-              .occurred_at = 1'600,
-          })
-        : EffectBatch{};
-    const auto *open = open_request.Size() == 1
-        ? std::get_if<OpenUdpBindEffect>(open_request.begin())
-        : nullptr;
-    const auto open_failure_effects = open != nullptr
-        ? coordinator.Dispatch(UdpBindOpenedEvent{
-              .peer = open->peer,
-              .endpoint = open->endpoint,
-              .endpoint_text = open->endpoint_text,
-              .socket = wgnx::platform::InvalidSocket,
-              .error = wgnx::platform::socket_error::open_failed,
-              .socket_generation = open->socket_generation,
-              .purpose = open->purpose,
-              .timer_facts = {.now = TimerDeadlineFromJiffies(10)},
-              .occurred_at = 1'700,
-          })
-        : EffectBatch{};
-    WGNX_TEST_REQUIRE(
-        context,
-        retry_resolve != nullptr && open != nullptr && open_failure_effects.Size() == 4 &&
-            coordinator.Lifecycle(0)->state == wgnx::PeerRuntimeState::Error &&
-            coordinator.Lifecycle(0)->error_stage == wgnx::PeerErrorStage::Transport &&
-            coordinator.Lifecycle(0)->last_error_code == static_cast<std::uint32_t>(
-                wgnx::PeerErrorCode::TransportOpenFailed),
-        "UDP-open failure did not preserve the resolved endpoint and enter transport error");
-
-    const auto live_effects = ActivateTestPeer(coordinator, 0, 91, 1'800);
-    const PeerIdentity live_peer{
+        .occurred_at = now,
+    }));
+    return {
         .peer_index = PeerIndex{0},
         .activation_generation = coordinator.Lifecycle(0)->activation_generation,
     };
-    const auto *timer = live_effects.Empty()
-        ? nullptr
-        : std::get_if<ArmProtocolTimerEffect>(live_effects.begin());
-    UdpRebindQueue rebinds{};
-    static_cast<void>(rebinds.Queue({
-        .peer_index = live_peer.peer_index,
-        .activation_generation = live_peer.activation_generation,
-    }));
-    const auto deactivate_effects = coordinator.Dispatch(DeactivationRequestedEvent{
-        .peer = live_peer,
-        .occurred_at = 1'900,
-    });
-    const auto pending_rebind = rebinds.Take();
-    const auto stale_rebind = pending_rebind.has_value()
-        ? coordinator.Dispatch(UdpRebindRequestedEvent{
-              .peer = {
-                  .peer_index = pending_rebind->peer_index,
-                  .activation_generation = pending_rebind->activation_generation,
-              },
-              .occurred_at = 2'000,
-          })
-        : EffectBatch{};
-    TimerSchedule schedule{};
-    const bool timer_armed = timer != nullptr && schedule.Arm(timer->token, timer->deadline);
-    schedule.CancelAll();
-    WGNX_TEST_REQUIRE(
-        context,
-        timer_armed && !deactivate_effects.Empty() && pending_rebind.has_value() &&
-            stale_rebind.Empty() && !schedule.CaptureExpiration(timer->hook) &&
-            !schedule.TakeDelivery(timer->hook).IsValid() &&
-            coordinator.Lifecycle(0)->state == wgnx::PeerRuntimeState::Inactive,
-        "pending rebind or timer work remained actionable after deactivation");
+}
 
-    // Exercise the production effect-drain primitive with more generated
-    // batches than fit in one effect batch. The callback's active depth stays
-    // one, demonstrating that completion batches are not recursively invoked.
+void Deactivate(
+    RuntimeCoordinator &coordinator,
+    ScriptedPlatform &platform,
+    const PeerIdentity &peer,
+    wgnx::platform::ktime_t now) {
+    platform.Execute(coordinator.Dispatch(DeactivationRequestedEvent{
+        .peer = peer,
+        .occurred_at = now,
+    }));
+}
+
+} // namespace
+
+void TestRuntimeCompositionFailureInjection(TestContext &context) {
+    using namespace wgnx::sysmodule::runtime;
+
+    // This keeps the production drain primitive independently covered. The
+    // platform-failure test below drives concrete completion boundaries.
+    const PeerIdentity peer{
+        .peer_index = PeerIndex{0},
+        .activation_generation = ActivationGeneration{1},
+    };
     EffectBatch initial{};
-    initial.Add(QueueReceiveEffect{.peer = live_peer});
+    initial.Add(QueueReceiveEffect{.peer = peer});
     std::size_t processed = 0;
     std::size_t active_depth = 0;
     std::size_t maximum_depth = 0;
@@ -189,7 +65,7 @@ void TestRuntimeCompositionFailureInjection(TestContext &context) {
         maximum_depth = std::max(maximum_depth, active_depth);
         ++processed;
         if (processed < EffectChainLength) {
-            generated.Add(QueueReceiveEffect{.peer = live_peer});
+            generated.Add(QueueReceiveEffect{.peer = peer});
         }
         --active_depth;
     });
@@ -197,6 +73,165 @@ void TestRuntimeCompositionFailureInjection(TestContext &context) {
         context,
         processed == EffectChainLength && maximum_depth == 1,
         "effect completion batches were not drained iteratively");
+}
+
+void TestRuntimeScriptedPlatformFailureCoverage(TestContext &context) {
+    using namespace wgnx::sysmodule::runtime;
+
+    runtime::Reset(InitialRuntimeState);
+    std::array<wgnx::PeerConfigEntry, 1> configured{};
+    FillConfig(
+        &configured[0],
+        "scripted-platform",
+        "10.66.66.2/32",
+        InitiatorPrivateKey,
+        ResponderPublicKey);
+
+    PeerRegistry registry{};
+    RuntimeCoordinator coordinator{registry};
+    WGNX_TEST_REQUIRE(
+        context,
+        ConfigureTestPeers(coordinator, configured, 0),
+        "scripted platform setup failed");
+    ScriptedPlatform platform{coordinator};
+
+    // A cancelled resolver request does not escape shutdown. A separately
+    // delivered request after shutdown is still harmless at the coordinator.
+    const PeerIdentity cancelled = BeginActivation(coordinator, platform, 1'000);
+    const bool cancellation_observed = platform.HasPendingResolution() &&
+        platform.CancelResolution(cancelled) && !platform.HasPendingResolution();
+    Deactivate(coordinator, platform, cancelled, 1'010);
+
+    const PeerIdentity stale_resolve = BeginActivation(coordinator, platform, 1'020);
+    Deactivate(coordinator, platform, stale_resolve, 1'030);
+    const bool stale_resolution_delivered = platform.CompleteNextResolution();
+    WGNX_TEST_REQUIRE(
+        context,
+        cancellation_observed && stale_resolution_delivered &&
+            !platform.HasPendingUdpOpen() &&
+            coordinator.Lifecycle(0)->state == wgnx::PeerRuntimeState::Inactive,
+        "resolver cancellation or stale completion escaped peer teardown");
+
+    platform.QueueUdpOpenResult({.socket = 90});
+    const PeerIdentity stale_open = BeginActivation(coordinator, platform, 1'035);
+    const bool stale_open_resolution = platform.CompleteNextResolution();
+    Deactivate(coordinator, platform, stale_open, 1'037);
+    const bool stale_open_delivered = platform.CompleteNextUdpOpen();
+    WGNX_TEST_REQUIRE(
+        context,
+        stale_open_resolution && stale_open_delivered &&
+            std::ranges::find(platform.ClosedSockets(), 90) != platform.ClosedSockets().end() &&
+            coordinator.Lifecycle(0)->state == wgnx::PeerRuntimeState::Inactive,
+        "stale UDP-open completion did not retire its newly created socket");
+
+    platform.QueueResolutionResult(ResolutionFailure());
+    const PeerIdentity resolution_failure = BeginActivation(coordinator, platform, 1'040);
+    const bool resolution_failed = platform.CompleteNextResolution();
+    WGNX_TEST_REQUIRE(
+        context,
+        resolution_failed &&
+            coordinator.Lifecycle(0)->activation_generation ==
+                resolution_failure.activation_generation &&
+            coordinator.Lifecycle(0)->state == wgnx::PeerRuntimeState::Error &&
+            coordinator.Lifecycle(0)->error_stage == wgnx::PeerErrorStage::ResolveEndpoint &&
+            coordinator.Lifecycle(0)->last_error_code == static_cast<std::uint32_t>(
+                wgnx::PeerErrorCode::EndpointResolutionFailed),
+        "scripted endpoint failure did not become a peer-owned activation error");
+
+    platform.QueueUdpOpenResult({
+        .socket = wgnx::platform::InvalidSocket,
+        .error = wgnx::platform::socket_error::open_failed,
+    });
+    const PeerIdentity open_failure = BeginActivation(coordinator, platform, 1'050);
+    const bool resolution_opened = platform.CompleteNextResolution();
+    const bool open_failed = platform.CompleteNextUdpOpen();
+    WGNX_TEST_REQUIRE(
+        context,
+        resolution_opened && open_failed &&
+            coordinator.Lifecycle(0)->activation_generation == open_failure.activation_generation &&
+            coordinator.Lifecycle(0)->state == wgnx::PeerRuntimeState::Error &&
+            coordinator.Lifecycle(0)->error_stage == wgnx::PeerErrorStage::Transport &&
+            coordinator.Lifecycle(0)->last_error_code == static_cast<std::uint32_t>(
+                wgnx::PeerErrorCode::TransportOpenFailed),
+        "scripted UDP-open failure did not become a transport activation error");
+
+    platform.QueueUdpOpenResult({.socket = 91});
+    platform.QueueUdpSendResult({.error = wgnx::platform::socket_error::send_failed});
+    const PeerIdentity send_failure = BeginActivation(coordinator, platform, 1'060);
+    const bool send_resolution = platform.CompleteNextResolution();
+    const bool send_open = platform.CompleteNextUdpOpen();
+    const bool send_completed = platform.CompleteNextUdpSend();
+    const auto send_binding = coordinator.BindingSnapshot(0);
+    WGNX_TEST_REQUIRE(
+        context,
+        send_resolution && send_open && send_completed && send_binding.suspended &&
+            !send_binding.IsOpen() &&
+            coordinator.Lifecycle(0)->activation_generation == send_failure.activation_generation &&
+            coordinator.Lifecycle(0)->state == wgnx::PeerRuntimeState::Handshaking &&
+            std::ranges::find(platform.ClosedSockets(), 91) != platform.ClosedSockets().end(),
+        "scripted UDP-send failure did not preserve peer state and suspend transport");
+
+    platform.QueueUdpOpenResult({.socket = 92});
+    platform.QueueUdpSendResult({});
+    platform.QueueUdpReceiveResult({
+        .kind = ScriptedPlatform::UdpReceiveResult::Kind::Failure,
+        .error = wgnx::platform::socket_error::receive_failed,
+    });
+    const PeerIdentity receive_failure = BeginActivation(coordinator, platform, 1'070);
+    const bool receive_resolution = platform.CompleteNextResolution();
+    const bool receive_open = platform.CompleteNextUdpOpen();
+    const bool initial_send_completed = platform.CompleteNextUdpSend();
+    const bool receive_completed = platform.CompleteNextUdpReceive();
+    const auto receive_binding = coordinator.BindingSnapshot(0);
+    WGNX_TEST_REQUIRE(
+        context,
+        receive_resolution && receive_open && initial_send_completed && receive_completed &&
+            receive_binding.suspended && !receive_binding.IsOpen() &&
+            coordinator.Lifecycle(0)->activation_generation ==
+                receive_failure.activation_generation &&
+            coordinator.Lifecycle(0)->state == wgnx::PeerRuntimeState::Handshaking &&
+            std::ranges::find(platform.ClosedSockets(), 92) != platform.ClosedSockets().end(),
+        "scripted UDP-receive failure did not preserve peer state and suspend transport");
+
+    platform.QueueUdpOpenResult({.socket = 93});
+    platform.QueueUdpSendResult({});
+    const PeerIdentity timer_peer = BeginActivation(coordinator, platform, 1'080);
+    const bool timer_resolution = platform.CompleteNextResolution();
+    const bool timer_open = platform.CompleteNextUdpOpen();
+    const bool timer_send = platform.CompleteNextUdpSend();
+    const bool timer_captured = platform.CaptureTimerExpiration(
+        wgnx::wireguard::TimerHook::RetransmitHandshake);
+    Deactivate(coordinator, platform, timer_peer, 1'090);
+    const bool stale_timer_delivered = platform.DeliverCapturedTimer(
+        wgnx::wireguard::TimerHook::RetransmitHandshake);
+    WGNX_TEST_REQUIRE(
+        context,
+        timer_resolution && timer_open && timer_send && timer_captured &&
+            stale_timer_delivered &&
+            !platform.IsTimerArmed(wgnx::wireguard::TimerHook::RetransmitHandshake) &&
+            coordinator.Lifecycle(0)->state == wgnx::PeerRuntimeState::Inactive,
+        "captured timer delivery remained actionable after peer teardown");
+
+    AutoStartPersistenceState persistence{};
+    const auto failed_store = persistence.Begin(0, "scripted-platform");
+    platform.QueuePersistenceResult(false);
+    const bool persistence_failed = !platform.PersistAutoStart(persistence, failed_store) &&
+        coordinator.AutoStartPeerIndex() == -1;
+    const auto committed_store = persistence.Begin(0, "scripted-platform");
+    platform.QueuePersistenceResult(true);
+    const bool persistence_committed =
+        platform.PersistAutoStart(persistence, committed_store) &&
+        coordinator.SetAutoStartPeerIndex(committed_store.peer_index) &&
+        coordinator.AutoStartPeerIndex() == committed_store.peer_index;
+    const auto stale_store = persistence.Begin(-1, nullptr);
+    const bool stale_persistence_rejected =
+        !platform.PersistAutoStart(persistence, committed_store) &&
+        persistence.IsCurrent(stale_store);
+    WGNX_TEST_REQUIRE(
+        context,
+        persistence_failed && persistence_committed && stale_persistence_rejected &&
+            platform.GetStatistics().persistence_attempts == 2,
+        "scripted autostart persistence did not preserve failure and stale-request boundaries");
 }
 
 } // namespace wgnx::test

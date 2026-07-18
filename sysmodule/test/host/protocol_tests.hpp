@@ -34,5 +34,6 @@ void TestHandshakeRetryLifecycle(TestContext &context);
 void TestAutoStartPersistenceGeneration(TestContext &context);
 void TestUdpBindingOwnership(TestContext &context);
 void TestRuntimeCompositionFailureInjection(TestContext &context);
+void TestRuntimeScriptedPlatformFailureCoverage(TestContext &context);
 
 } // namespace wgnx::test

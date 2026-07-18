@@ -86,6 +86,7 @@ HOST_TEST_CPP_SOURCES := \
 	test/host/host_stubs.cpp \
 	test/host/legacy_self_tests.cpp \
 	test/host/platform_tests.cpp \
+	test/host/scripted_platform.cpp \
 	test/host/packet_data_plane_tests.cpp \
 	test/host/protocol_tests.cpp \
 	test/host/runtime_lifecycle_tests.cpp \

@@ -52,6 +52,16 @@ make -C sysmodule test-tsan
 Run it only on a host/compiler combination with a supported TSan runtime; it
 is deliberately not part of `verify`.
 
+## Scripted Platform Failures
+
+The host suite includes a scripted platform adapter that consumes production
+runtime effects and drives the corresponding completion events.
+`RuntimeCoordinator` remains the production state owner while tests defer and
+fail endpoint resolution, UDP open/send/receive work, protocol timer delivery,
+and autostart persistence deterministically. This supplies cancellation and
+stale-completion coverage without this composed test assembling completion
+events directly.
+
 ## Deterministic Boundary
 
 The host target links the production protocol sources against controlled test

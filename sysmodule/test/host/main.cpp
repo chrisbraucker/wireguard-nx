@@ -50,9 +50,8 @@ int main() {
         TestCase{"protocol.handshake-retry-lifecycle", wgnx::test::TestHandshakeRetryLifecycle},
         TestCase{"runtime.autostart-persistence-generation", wgnx::test::TestAutoStartPersistenceGeneration},
         TestCase{"runtime.udp-binding-ownership", wgnx::test::TestUdpBindingOwnership},
-        TestCase{
-            "runtime.composition-failure-injection",
-            wgnx::test::TestRuntimeCompositionFailureInjection},
+        TestCase{"runtime.composition-failure-injection", wgnx::test::TestRuntimeCompositionFailureInjection},
+        TestCase{"runtime.scripted-platform-failure-coverage", wgnx::test::TestRuntimeScriptedPlatformFailureCoverage},
     };
 
     return wgnx::test::RunTests(tests);
