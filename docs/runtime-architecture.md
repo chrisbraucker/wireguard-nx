@@ -63,7 +63,8 @@ IPC and WireGuard wire contracts remain unchanged; the separation is internal.
   activation-tagged completion instead of mutating daemon-owned request state.
 - `runtime/horizon_dispatcher.*` owns Atmosphere ordered work queues only. It
   executes work supplied by runtime components and contains no timer or peer
-  policy.
+  policy. Each lane has an explicit pending capacity and exposes high-water,
+  coalescing, rerun, rejection, and completion statistics.
 - `runtime/timer_scheduler.*` owns concrete Horizon protocol and auxiliary
   timers. `runtime/timer_schedule.*` tracks bounded physical arm and queued
   delivery state independently of Horizon. Expirations retain their complete
@@ -178,7 +179,8 @@ The host suite links the production `PeerRegistry`, `PeerRuntime`,
 `RuntimeCoordinator`, `EndpointResolver`, `UdpBinding`, `PeerController`,
 `TimerCoordinator`, `TimerSchedule`, `PacketDataPlane`, `PacketChannel`,
 `DebugProbeRunner`, `NetworkPathObserver`, and `UdpRebindQueue`.
-Its 30 deterministic cases characterize UDP receive outcomes, selection,
+Its 32 deterministic cases characterize UDP receive and work-admission
+outcomes, selection,
 activation, lifecycle transitions, status projection, stale event rejection,
 timer arming/replacement/cancellation, queued stale delivery,
 bounded effects, generation matching, per-peer ownership, packet IDs, PID
@@ -203,6 +205,10 @@ Horizon work-queue execution, synchronous platform timer cancellation, BSD
 socket lifetime, and real callback races remain on-device validation
 responsibilities.
 
+Fixed storage, queue pressure, lock order, lock-required methods, and worker
+execution contexts are specified in
+[Runtime Resource And Concurrency Budgets](runtime-resource-budgets.md).
+
 ## Stack Budget
 
 The sysmodule main thread has a 16 KiB stack. `wg_device` and `wg_peer` include
@@ -218,6 +224,12 @@ and send-snapshot frames through recursive effect execution and overflowed the
 bind opening, and 4,048 bytes for datagram send. Host ASan/UBSan coverage
 verifies object lifetime and bounded effect chaining, while generated target
 code verifies each constrained frame.
+
+Chunk 14 enables compiler stack-usage output and checks the known cumulative
+paths with `tools/check_stack_usage.py`. The resolver -> activation ->
+handshake -> logging path is currently the tightest at 14,448 bytes, leaving
+1,936 bytes on its 16 KiB worker stack. Receive commit, generated send, and
+failure-publication chains retain 8,032, 6,128, and 5,440 bytes respectively.
 
 An on-device fatal after Chunk 5 exposed another cumulative-stack case on the
 receive worker: its 4 KiB local datagram buffer remained live while inbound

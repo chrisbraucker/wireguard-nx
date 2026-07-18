@@ -40,6 +40,7 @@ LIBNAMES	:= Atmosphere-libs/libstratosphere
 
 HOST_CXX	?= g++
 HOST_CC		?= cc
+PYTHON		?= python3
 HOST_TEST_CXXFLAGS := -std=c++23 -Wall -Wextra -Wpedantic -Werror
 HOST_TEST_CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -Werror
 HOST_TEST_DIR	:= $(OUTDIR)/host-test
@@ -96,7 +97,7 @@ DEFINES	+=	-DDISABLE_IPC -D__SWITCH__ \
 	-DTARGET="\"$(TARGET)\"" \
 	-DVERSION="\"$(APP_VERSION)\""
 
-CFLAGS	+= $(INCLUDE) -Wno-unused-result
+CFLAGS	+= $(INCLUDE) -Wno-unused-result -fstack-usage
 
 CXXFLAGS	+= $(CFLAGS) -std=c++23 -Werror=frame-larger-than=8192
 
@@ -156,7 +157,8 @@ export BUILD_EXEFS_SRC := $(TOPDIR)/$(EXEFS_SRC)
 
 export APP_JSON := $(TOPDIR)/res/module.json
 
-.PHONY	: $(BUILD) clean clean-libs clean-build all libs dist test test-sanitize prepare-build-id
+.PHONY	: $(BUILD) clean clean-libs clean-build all libs dist test test-sanitize \
+		prepare-build-id check-stack report-footprint resource-report
 
 #---------------------------------------------------------------------------------
 all	: $(BUILD)
@@ -173,6 +175,14 @@ test: $(HOST_TEST_TARGET)
 
 test-sanitize: $(HOST_SANITIZE_TARGET)
 	@ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 $(HOST_SANITIZE_TARGET)
+
+check-stack: $(BUILD)
+	@$(PYTHON) $(TOPDIR)/../tools/check_stack_usage.py
+
+report-footprint: $(BUILD)
+	@$(PYTHON) $(TOPDIR)/../tools/report_footprint.py
+
+resource-report: check-stack report-footprint
 
 $(HOST_TEST_TARGET): Makefile $(HOST_TEST_CPP_SOURCES) $(HOST_TEST_C_SOURCES) $(HOST_TEST_HEADERS)
 	@[ -d $(HOST_TEST_DIR) ] || mkdir -p $(HOST_TEST_DIR)

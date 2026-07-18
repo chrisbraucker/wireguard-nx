@@ -1,11 +1,13 @@
 #include "wgnx/platform/work.hpp"
 
 #include "wgnx/platform/clock.hpp"
+#include "wgnx/resource_budget.hpp"
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
 #include <new>
 #include <utility>
 
@@ -13,12 +15,15 @@
 
 namespace wgnx::platform {
 
-constexpr inline std::size_t WorkqueueThreadStackSize = 16 * 1024;
-constexpr inline std::size_t TimerThreadStackSize = 16 * 1024;
+constexpr inline std::size_t WorkqueueThreadStackSize =
+    wgnx::resource_budget::WorkqueueThreadStackBytes;
+constexpr inline std::size_t TimerThreadStackSize =
+    wgnx::resource_budget::TimerThreadStackBytes;
 constexpr inline s32 WorkerThreadPriority = ams::os::DefaultThreadPriority;
 constexpr inline std::size_t WorkqueueNameSize = 32;
 constexpr inline ktime_t NSEC_PER_JIFFY = NSEC_PER_SEC / HZ;
-constexpr inline std::size_t MaxOrderedWorkqueues = 4;
+constexpr inline std::size_t MaxOrderedWorkqueues =
+    wgnx::resource_budget::OrderedWorkqueueSlots;
 
 struct WorkqueueSlot;
 struct workqueue_struct;
@@ -37,7 +42,10 @@ struct workqueue_struct {
     ams::os::ConditionVariable cv{};
     WorkInternal *head{nullptr};
     WorkInternal *tail{nullptr};
+    std::size_t pending_count{0};
+    std::size_t pending_capacity{0};
     std::size_t active_count{0};
+    workqueue_statistics statistics{};
     bool stopping{false};
     void *stack{nullptr};
     std::size_t stack_size{0};
@@ -76,6 +84,9 @@ constinit TimerManager g_timer_manager = {};
 ams::os::Mutex g_workqueue_pool_mutex(false);
 constinit WorkqueueSlot g_workqueue_slots[MaxOrderedWorkqueues] = {};
 
+static_assert(sizeof(TimerManager) == wgnx::resource_budget::TimerManagerBytes);
+static_assert(
+    sizeof(g_workqueue_slots) == wgnx::resource_budget::WorkqueuePoolBytes);
 static_assert(sizeof(WorkInternal) <= sizeof(work_struct));
 static_assert(alignof(WorkInternal) <= alignof(work_struct));
 
@@ -92,7 +103,10 @@ const Impl *GetImpl(const Public *object) {
     return std::launder(reinterpret_cast<const Impl *>(object->storage));
 }
 
-void EnqueueWorkLocked(workqueue_struct *wq, WorkInternal *work) {
+void EnqueueWorkLocked(
+    workqueue_struct *wq,
+    WorkInternal *work,
+    bool reserve_capacity = true) {
     work->next = nullptr;
     if (wq->tail != nullptr) {
         wq->tail->next = work;
@@ -102,6 +116,12 @@ void EnqueueWorkLocked(workqueue_struct *wq, WorkInternal *work) {
     wq->tail = work;
     work->queued = true;
     work->owner = wq;
+    if (reserve_capacity) {
+        ++wq->pending_count;
+    }
+    wq->statistics.pending = wq->pending_count;
+    wq->statistics.high_watermark =
+        std::max(wq->statistics.high_watermark, wq->pending_count);
 }
 
 WorkInternal *DequeueWorkLocked(workqueue_struct *wq) {
@@ -118,6 +138,8 @@ WorkInternal *DequeueWorkLocked(workqueue_struct *wq) {
     work->next = nullptr;
     work->queued = false;
     work->running = true;
+    --wq->pending_count;
+    wq->statistics.pending = wq->pending_count;
     ++wq->active_count;
     return work;
 }
@@ -125,34 +147,33 @@ WorkInternal *DequeueWorkLocked(workqueue_struct *wq) {
 void WorkqueueThreadMain(void *argument) {
     auto *wq = static_cast<workqueue_struct *>(argument);
     while (true) {
-        wq->mutex.lock();
+        std::unique_lock lock(wq->mutex);
         while (!wq->stopping && wq->head == nullptr) {
             wq->cv.Wait(*wq->mutex.GetBase());
         }
 
         if (wq->stopping && wq->head == nullptr) {
-            wq->mutex.unlock();
             break;
         }
 
         WorkInternal *work = DequeueWorkLocked(wq);
-        wq->mutex.unlock();
+        lock.unlock();
         if (work == nullptr) {
             continue;
         }
 
         work->func(reinterpret_cast<work_struct *>(work));
 
-        wq->mutex.lock();
+        lock.lock();
         work->running = false;
         --wq->active_count;
+        ++wq->statistics.completed;
         if (work->rerun && !wq->stopping) {
             work->rerun = false;
-            EnqueueWorkLocked(wq, work);
+            EnqueueWorkLocked(wq, work, false);
             wq->cv.Signal();
         }
         wq->cv.Broadcast();
-        wq->mutex.unlock();
     }
 }
 
@@ -180,13 +201,12 @@ void InsertTimerLocked(TimerInternal *timer) {
 
 void TimerThreadMain(void *) {
     while (true) {
-        g_timer_manager.mutex.lock();
+        std::unique_lock lock(g_timer_manager.mutex);
         while (!g_timer_manager.stopping && g_timer_manager.head == nullptr) {
             g_timer_manager.cv.Wait(*g_timer_manager.mutex.GetBase());
         }
 
         if (g_timer_manager.stopping && g_timer_manager.head == nullptr) {
-            g_timer_manager.mutex.unlock();
             break;
         }
 
@@ -196,12 +216,10 @@ void TimerThreadMain(void *) {
             const jiffies_t wait_jiffies = timer->expires - now;
             const auto timeout = ams::TimeSpan::FromMilliSeconds(static_cast<s64>(wait_jiffies));
             g_timer_manager.cv.TimedWait(*g_timer_manager.mutex.GetBase(), timeout);
-            g_timer_manager.mutex.unlock();
             continue;
         }
 
         if (timer == nullptr) {
-            g_timer_manager.mutex.unlock();
             continue;
         }
 
@@ -209,21 +227,19 @@ void TimerThreadMain(void *) {
         timer->next = nullptr;
         timer->armed = false;
         timer->running = true;
-        g_timer_manager.mutex.unlock();
+        lock.unlock();
 
         timer->func(reinterpret_cast<timer_list *>(timer));
 
-        g_timer_manager.mutex.lock();
+        lock.lock();
         timer->running = false;
         g_timer_manager.cv.Broadcast();
-        g_timer_manager.mutex.unlock();
     }
 }
 
 void EnsureTimerManagerStarted() {
-    g_timer_manager.mutex.lock();
+    std::scoped_lock lock(g_timer_manager.mutex);
     if (g_timer_manager.started) {
-        g_timer_manager.mutex.unlock();
         return;
     }
 
@@ -237,7 +253,6 @@ void EnsureTimerManagerStarted() {
     ams::os::SetThreadNamePointer(std::addressof(g_timer_manager.thread), "wgnx-timer");
     ams::os::StartThread(std::addressof(g_timer_manager.thread));
     g_timer_manager.started = true;
-    g_timer_manager.mutex.unlock();
 }
 
 } // namespace
@@ -248,7 +263,12 @@ void INIT_WORK(work_struct *work, work_func_t func) {
     impl->func = func;
 }
 
-workqueue_struct *alloc_ordered_workqueue(const char *name) {
+workqueue_struct *alloc_ordered_workqueue(
+    const char *name,
+    std::size_t pending_capacity) {
+    if (pending_capacity == 0) {
+        return nullptr;
+    }
     WorkqueueSlot *slot = nullptr;
     {
         std::scoped_lock lock(g_workqueue_pool_mutex);
@@ -269,6 +289,8 @@ workqueue_struct *alloc_ordered_workqueue(const char *name) {
     wq->stack = slot->stack;
     wq->stack_size = WorkqueueThreadStackSize;
     wq->slot = slot;
+    wq->pending_capacity = pending_capacity;
+    wq->statistics.capacity = pending_capacity;
 
     if (name != nullptr) {
         std::snprintf(wq->name, sizeof(wq->name), "%s", name);
@@ -285,7 +307,7 @@ workqueue_struct *alloc_ordered_workqueue(const char *name) {
      * Workqueues are allocated from a fixed static pool with preallocated
      * thread stacks instead of dynamic stack allocation. The implication is
      * that creation is more predictable on Horizon, but the number of queues is
-     * capped by `MaxOrderedWorkqueues`.
+     * capped by `resource_budget::OrderedWorkqueueSlots`.
      */
     const ams::Result create_rc = ams::os::CreateThread(
         std::addressof(wq->thread),
@@ -312,10 +334,11 @@ void destroy_workqueue(workqueue_struct *wq) {
     }
 
     flush_workqueue(wq);
-    wq->mutex.lock();
-    wq->stopping = true;
-    wq->cv.Broadcast();
-    wq->mutex.unlock();
+    {
+        std::scoped_lock lock(wq->mutex);
+        wq->stopping = true;
+        wq->cv.Broadcast();
+    }
     ams::os::WaitThread(std::addressof(wq->thread));
     ams::os::DestroyThread(std::addressof(wq->thread));
     WorkqueueSlot *slot = wq->slot;
@@ -326,28 +349,56 @@ void destroy_workqueue(workqueue_struct *wq) {
     }
 }
 
-bool queue_work(workqueue_struct *wq, work_struct *work) {
+queue_work_result queue_work(workqueue_struct *wq, work_struct *work) {
     if (wq == nullptr || work == nullptr) {
-        return false;
+        return queue_work_result::unavailable;
     }
 
     auto *impl = GetImpl<WorkInternal>(work);
-    wq->mutex.lock();
+    std::scoped_lock lock(wq->mutex);
+    ++wq->statistics.requests;
 
-    bool queued = false;
-    if (impl->queued || impl->rerun) {
-        queued = false;
-    } else if (impl->running) {
-        impl->rerun = true;
-        queued = true;
-    } else {
-        EnqueueWorkLocked(wq, impl);
-        queued = true;
-        wq->cv.Signal();
+    const auto result = classify_queue_work_request(
+        !wq->stopping && (impl->owner == nullptr || impl->owner == wq),
+        impl->queued || impl->rerun,
+        impl->running,
+        wq->pending_count,
+        wq->pending_capacity);
+    switch (result) {
+        case queue_work_result::queued:
+            EnqueueWorkLocked(wq, impl);
+            ++wq->statistics.enqueued;
+            wq->cv.Signal();
+            break;
+        case queue_work_result::rerun_queued:
+            impl->rerun = true;
+            ++wq->pending_count;
+            ++wq->statistics.rerun_queued;
+            wq->statistics.pending = wq->pending_count;
+            wq->statistics.high_watermark =
+                std::max(wq->statistics.high_watermark, wq->pending_count);
+            break;
+        case queue_work_result::already_pending:
+            ++wq->statistics.coalesced;
+            break;
+        case queue_work_result::capacity_exhausted:
+            ++wq->statistics.rejected_capacity;
+            break;
+        case queue_work_result::unavailable:
+            ++wq->statistics.rejected_unavailable;
+            break;
     }
 
-    wq->mutex.unlock();
-    return queued;
+    return result;
+}
+
+workqueue_statistics get_workqueue_statistics(workqueue_struct *wq) {
+    if (wq == nullptr) {
+        return {};
+    }
+
+    std::scoped_lock lock(wq->mutex);
+    return wq->statistics;
 }
 
 void flush_workqueue(workqueue_struct *wq) {
@@ -355,11 +406,10 @@ void flush_workqueue(workqueue_struct *wq) {
         return;
     }
 
-    wq->mutex.lock();
+    std::unique_lock lock(wq->mutex);
     while (wq->head != nullptr || wq->active_count != 0) {
         wq->cv.Wait(*wq->mutex.GetBase());
     }
-    wq->mutex.unlock();
 }
 
 jiffies_t get_jiffies_64() {
@@ -380,7 +430,7 @@ bool mod_timer(timer_list *timer, jiffies_t expires) {
     EnsureTimerManagerStarted();
 
     auto *impl = GetImpl<TimerInternal>(timer);
-    g_timer_manager.mutex.lock();
+    std::scoped_lock lock(g_timer_manager.mutex);
     const bool was_pending = impl->armed;
     if (impl->armed) {
         RemoveTimerLocked(impl);
@@ -390,7 +440,6 @@ bool mod_timer(timer_list *timer, jiffies_t expires) {
     impl->armed = true;
     InsertTimerLocked(impl);
     g_timer_manager.cv.Broadcast();
-    g_timer_manager.mutex.unlock();
     return was_pending;
 }
 
@@ -399,6 +448,7 @@ bool timer_pending(const timer_list *timer) {
         return false;
     }
 
+    std::scoped_lock lock(g_timer_manager.mutex);
     return GetImpl<TimerInternal>(timer)->armed;
 }
 
@@ -414,13 +464,12 @@ void timer_delete(timer_list *timer) {
      * strict callback completion guarantees must use a stronger primitive.
      */
     auto *impl = GetImpl<TimerInternal>(timer);
-    g_timer_manager.mutex.lock();
+    std::scoped_lock lock(g_timer_manager.mutex);
     if (impl->armed) {
         RemoveTimerLocked(impl);
         impl->armed = false;
     }
     g_timer_manager.cv.Broadcast();
-    g_timer_manager.mutex.unlock();
 }
 
 void timer_delete_sync(timer_list *timer) {
@@ -429,7 +478,7 @@ void timer_delete_sync(timer_list *timer) {
     }
 
     auto *impl = GetImpl<TimerInternal>(timer);
-    g_timer_manager.mutex.lock();
+    std::unique_lock lock(g_timer_manager.mutex);
     if (impl->armed) {
         RemoveTimerLocked(impl);
         impl->armed = false;
@@ -438,7 +487,6 @@ void timer_delete_sync(timer_list *timer) {
         g_timer_manager.cv.Wait(*g_timer_manager.mutex.GetBase());
     }
     g_timer_manager.cv.Broadcast();
-    g_timer_manager.mutex.unlock();
 }
 
 } // namespace wgnx::platform

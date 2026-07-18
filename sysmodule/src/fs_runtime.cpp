@@ -1,4 +1,5 @@
 #include "fs_runtime.hpp"
+#include "wgnx/resource_budget.hpp"
 
 #include <array>
 #include <cstdio>
@@ -12,7 +13,8 @@ namespace {
 
 constexpr const char *SdMountName = "sdmc";
 
-alignas(ams::os::MemoryPageSize) constinit u8 g_fs_heap[32 * 1024] = {};
+alignas(ams::os::MemoryPageSize) constinit
+    u8 g_fs_heap[wgnx::resource_budget::FilesystemHeapBytes] = {};
 constinit ams::lmem::HeapHandle g_fs_heap_handle = nullptr;
 constinit bool g_fs_core_ready = false;
 constinit bool g_fs_ready = false;

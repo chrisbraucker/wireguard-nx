@@ -3,6 +3,7 @@
 #include "runtime/timer_schedule.hpp"
 #include "wgnx/platform/sync.hpp"
 #include "wgnx/platform/work.hpp"
+#include "wgnx/resource_budget.hpp"
 
 #include <array>
 #include <cstddef>
@@ -57,7 +58,9 @@ private:
     HorizonDispatcher *m_dispatcher{nullptr};
     TimerSchedulerCallbacks m_callbacks{};
     TimerSchedule m_schedule{};
-    std::array<ProtocolTimerSlot, 4> m_protocol_timers{{
+    std::array<
+        ProtocolTimerSlot,
+        wgnx::resource_budget::ProtocolTimerSlots> m_protocol_timers{{
         {.hook = wgnx::wireguard::TimerHook::RetransmitHandshake},
         {.hook = wgnx::wireguard::TimerHook::SendKeepalive},
         {.hook = wgnx::wireguard::TimerHook::Rekey},
@@ -73,5 +76,9 @@ private:
     bool m_initialized{false};
     bool m_network_observer_enabled{false};
 };
+
+static_assert(
+    sizeof(TimerScheduler) <=
+    wgnx::resource_budget::MaximumTimerSchedulerBytes);
 
 } // namespace wgnx::sysmodule::runtime

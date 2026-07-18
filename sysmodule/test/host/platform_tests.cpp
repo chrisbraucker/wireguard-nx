@@ -2,6 +2,7 @@
 
 #include "test_framework.hpp"
 #include "wgnx/platform/udp.hpp"
+#include "wgnx/platform/work.hpp"
 
 #include <array>
 #include <cstdint>
@@ -94,6 +95,27 @@ void TestUdpReceiveClassification(TestContext &context) {
             failure.native_result == -1 &&
             failure.native_error == 54,
         "terminal receive did not preserve failure diagnostics");
+}
+
+void TestWorkqueueAdmission(TestContext &context) {
+    using wgnx::platform::classify_queue_work_request;
+    using wgnx::platform::queue_work_result;
+
+    WGNX_TEST_REQUIRE(
+        context,
+        classify_queue_work_request(true, false, false, 0, 1) ==
+            queue_work_result::queued &&
+        classify_queue_work_request(true, false, true, 0, 1) ==
+            queue_work_result::rerun_queued &&
+        classify_queue_work_request(true, true, false, 1, 1) ==
+            queue_work_result::already_pending &&
+        classify_queue_work_request(true, false, false, 1, 1) ==
+            queue_work_result::capacity_exhausted &&
+        classify_queue_work_request(false, false, false, 0, 1) ==
+            queue_work_result::unavailable &&
+        classify_queue_work_request(true, false, false, 0, 0) ==
+            queue_work_result::unavailable,
+        "ordered workqueue admission did not expose its closed pressure outcomes");
 }
 
 } // namespace wgnx::test

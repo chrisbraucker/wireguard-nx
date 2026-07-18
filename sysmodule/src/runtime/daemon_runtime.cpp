@@ -19,6 +19,7 @@
 #include "wgnx/platform/clock.hpp"
 #include "wgnx/platform/random.hpp"
 #include "wgnx/platform/work.hpp"
+#include "wgnx/resource_budget.hpp"
 #include "wireguard/peer_controller.hpp"
 #include "wireguard/timers.hpp"
 
@@ -94,6 +95,10 @@ private:
     runtime::EncryptedReceivePump m_receive_pump;
     runtime::RuntimeEffectExecutor m_effect_executor;
 };
+
+static_assert(
+    sizeof(DaemonRuntime) <=
+    wgnx::resource_budget::MaximumDaemonRuntimeBytes);
 
 DaemonRuntime *DaemonRuntime::s_instance = nullptr;
 

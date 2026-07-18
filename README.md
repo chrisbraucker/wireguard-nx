@@ -37,8 +37,16 @@ Run the deterministic protocol suite on the development host with:
 make -C sysmodule test
 ```
 
+Build the target and report cumulative stack and image-footprint budgets with:
+
+```bash
+make -C sysmodule resource-report
+```
+
 See [Protocol Testing](docs/protocol-testing.md) for the deterministic boundary,
 covered state transitions, and the final on-device interoperability gate.
+See [Runtime Resource And Concurrency Budgets](docs/runtime-resource-budgets.md)
+for fixed capacities, queue pressure, lock order, and worker contexts.
 
 
 ### Devcontainers

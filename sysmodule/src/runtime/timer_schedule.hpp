@@ -1,5 +1,6 @@
 #pragma once
 
+#include "wgnx/resource_budget.hpp"
 #include "wireguard/timer_coordinator.hpp"
 
 #include <array>
@@ -31,7 +32,8 @@ private:
         bool armed{false};
     };
 
-    static constexpr std::size_t HookCount = 4;
+    static constexpr std::size_t HookCount =
+        wgnx::resource_budget::ProtocolTimerSlots;
     static std::size_t HookIndex(wgnx::wireguard::TimerHook hook);
 
     std::array<Slot, HookCount> m_slots{};

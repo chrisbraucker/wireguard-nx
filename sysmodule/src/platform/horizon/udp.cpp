@@ -2,6 +2,7 @@
 
 #include "development_config.hpp"
 #include "logger.hpp"
+#include "wgnx/resource_budget.hpp"
 
 #include <arpa/inet.h>
 #include <cstdio>
@@ -20,13 +21,17 @@ namespace {
 
 using SocketConfigType = ams::socket::SystemConfigLightDefault;
 
-constexpr inline size_t SocketAllocatorSize = 128 * 1024;
+constexpr inline size_t SocketAllocatorSize =
+    wgnx::resource_budget::SocketAllocatorBytes;
 constexpr inline long ReceiveTimeoutSeconds = 1;
 constexpr inline long ReceiveTimeoutMicroseconds = 0;
 constexpr inline size_t SocketMemoryPoolSize = ams::util::AlignUp(
     SocketConfigType::PerTcpSocketWorstCaseMemoryPoolSize + SocketConfigType::PerUdpSocketWorstCaseMemoryPoolSize,
     ams::os::MemoryPageSize);
 constexpr inline size_t SocketRequiredSize = ams::util::AlignUp(SocketMemoryPoolSize + SocketAllocatorSize, ams::os::MemoryPageSize);
+
+static_assert(
+    SocketRequiredSize == wgnx::resource_budget::SocketArenaBytes);
 
 alignas(ams::os::MemoryPageSize) constinit std::uint8_t g_socket_memory[SocketRequiredSize] = {};
 constinit bool g_socket_initialized = false;
@@ -38,7 +43,11 @@ ams::os::Mutex g_runtime_mutex(false);
 ams::Result EnsureUdpRuntimeInitialized() {
     std::scoped_lock lock(g_runtime_mutex);
     if (!g_socket_initialized) {
-        constexpr SocketConfigType SocketConfig(g_socket_memory, sizeof(g_socket_memory), SocketAllocatorSize, 2);
+        constexpr SocketConfigType SocketConfig(
+            g_socket_memory,
+            sizeof(g_socket_memory),
+            SocketAllocatorSize,
+            wgnx::resource_budget::SocketConcurrency);
         R_TRY(ams::socket::Initialize(SocketConfig));
         g_socket_initialized = true;
     }

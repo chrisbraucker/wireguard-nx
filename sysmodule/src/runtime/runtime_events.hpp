@@ -1,6 +1,7 @@
 #pragma once
 
 #include "runtime/domain_types.hpp"
+#include "wgnx/resource_budget.hpp"
 #include "wgnx/platform/udp.hpp"
 #include "wgnx/platform/clock.hpp"
 #include "wgnx/protocol.hpp"
@@ -235,7 +236,8 @@ using RuntimeEffect = std::variant<
 
 class EffectBatch {
 public:
-    static constexpr std::size_t Capacity = 8;
+    static constexpr std::size_t Capacity =
+        wgnx::resource_budget::EffectBatchSlots;
 
     enum class InsertionResult : std::uint8_t {
         Inserted = 0,
@@ -284,6 +286,9 @@ private:
     std::array<RuntimeEffect, Capacity> m_effects{};
     std::size_t m_size{0};
 };
+
+static_assert(
+    sizeof(EffectBatch) <= wgnx::resource_budget::MaximumEffectBatchBytes);
 
 static_assert(!std::is_constructible_v<RuntimeEffect, SynchronousPacketView>);
 static_assert(MaxEffectsForEvent<ActivationRequestedEvent>() <= EffectBatch::Capacity);

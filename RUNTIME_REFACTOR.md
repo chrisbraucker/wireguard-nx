@@ -632,7 +632,8 @@ retained by an asynchronous queue; IPC layout and API v4 remain unchanged.
 
 ### Chunk 14: Enforce Resource And Concurrency Budgets
 
-**Status:** Planned.
+**Status:** Locally complete; focused long-lived and path-transition on-device
+validation remains.
 
 Centralize the fixed capacities and memory budgets for peer state, packet
 slots, effect batches, work queues, socket storage, and thread stacks. Add
@@ -647,6 +648,30 @@ Automate target stack-usage inspection with compiler stack-usage output so the
 known cumulative callback chains are checked in addition to the existing 8 KiB
 per-frame guard. Add reproducible ELF/NSO and `text`, `data`, and `bss` delta
 reporting against a named baseline.
+
+The completed local implementation centralizes peer, packet, effect, pending
+request, timer, workqueue, socket, scratch, arena, and thread-stack capacities
+in `common/include/wgnx/resource_budget.hpp`. Compile-time layout ceilings guard
+the peer registry, peer runtime, packet records and queues, effect batch,
+pending request owners, scheduler, dispatcher, receive pump, composed daemon,
+socket arena, timer manager, and workqueue pool.
+
+Packet queues retain reject-new overflow semantics and expose a derived drop
+total. Endpoint and UDP-rebind single-slot owners expose admission,
+replacement, consumption, cancellation, depth, and high-water statistics.
+Endpoint replacement is a distinct closed result. Ordered workqueues have
+per-lane pending capacities and expose queued, rerun, coalesced,
+capacity-exhausted, and unavailable outcomes plus pressure and completion
+statistics. Their admission policy has deterministic host coverage.
+
+All remaining manual runtime and work/timer backend lock pairs use scoped lock
+ownership. The lock hierarchy, lock-required methods, and worker contexts are
+specified in `docs/runtime-resource-budgets.md`. Compiler stack-usage output is
+retained and `tools/check_stack_usage.py` checks every target frame plus four
+known cumulative callback chains. `tools/report_footprint.py` reports target
+image deltas against the named corrected Chunk 13 baseline and enforces
+absolute static-image, NSO, and NSP ceilings. Both checks are available through
+`make -C sysmodule resource-report`.
 
 **Definition of done:** every bounded queue exposes capacity pressure and a
 drop disposition; lock release cannot be skipped by an early return; known
@@ -727,10 +752,10 @@ Every chunk must pass:
 - review that `common/include/wgnx/protocol.hpp` and the CMIF contract remain
   unchanged unless an API change is intentional
 
-The current local gate contains 30 deterministic host cases, the same 30 cases
+The current local gate contains 32 deterministic host cases, the same 32 cases
 under ASan/UBSan, the devkitA64 target build, the 8 KiB frame guard, and
-`git diff --check`. IPC API v4 and `common/include/wgnx/protocol.hpp` are
-unchanged.
+`git diff --check`. Chunk 14 adds cumulative stack-chain and named-baseline
+footprint gates. IPC API v4 and `common/include/wgnx/protocol.hpp` are unchanged.
 
 ## Footprint Comparison
 
@@ -750,6 +775,7 @@ on-device measurement.
 | After Chunk 12 | 304,960 | 50,776 | 713,304 | 1,069,040 | 206,979 |
 | Chunk 13 receive contract | 304,992 | 50,776 | 713,304 | 1,069,072 | 207,141 |
 | After Chunk 13 correction | 305,152 | 50,776 | 713,304 | 1,069,232 | 207,203 |
+| Chunk 14 local | 306,160 | 50,776 | 713,304 | 1,070,240 | 208,322 |
 
 The data-to-BSS shift after Chunk 8 is caused primarily by composing prior
 independent globals into the zero-initialized `DaemonRuntime`; compare
@@ -799,6 +825,21 @@ chain without weakening the effect-count invariant. The corrected build then
 sustained one real-peer connection for more than 15 minutes and completed
 several requester round trips without instability, satisfying the focused
 Chunk 13 device regression.
+
+Chunk 14 adds 1,008 bytes to the static image and 1,119 bytes to the compressed
+NSO over the corrected Chunk 13 baseline. Initialized data and BSS are
+unchanged: queue statistics preserve the fixed 96 KiB workqueue pool and the
+small pending-slot accounting growth is absorbed by existing section
+alignment. The composed daemon is 209,664 bytes and the current NSP is 209,382
+bytes.
+
+Compiler stack-usage output reports 632 target functions, all within the 8 KiB
+per-frame limit. The conservative resolver -> activation -> handshake ->
+logging chain totals 14,448 bytes and retains 1,936 bytes on its 16 KiB worker.
+Receive commit, generated send, and failure-publication chains total 8,352,
+10,256, and 10,944 bytes, retaining 8,032, 6,128, and 5,440 bytes. These sums
+include explicitly configured nested frames and intentionally leave
+unmeasured ABI/runtime overhead inside the reported margin.
 
 Run focused on-device regressions after chunks 4, 5, 6, 7, 10, 12, 13, 14, and 15.
 At minimum, these runs should cover tunnel activation against a known-good

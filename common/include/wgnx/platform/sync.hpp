@@ -48,6 +48,27 @@ void mutex_lock(mutex *lock);
 bool mutex_trylock(mutex *lock);
 void mutex_unlock(mutex *lock);
 
+class MutexGuard {
+public:
+    explicit MutexGuard(mutex &lock) : m_lock(&lock) {
+        mutex_lock(m_lock);
+    }
+
+    ~MutexGuard() {
+        if (m_lock != nullptr) {
+            mutex_unlock(m_lock);
+        }
+    }
+
+    MutexGuard(const MutexGuard &) = delete;
+    MutexGuard &operator=(const MutexGuard &) = delete;
+    MutexGuard(MutexGuard &&) = delete;
+    MutexGuard &operator=(MutexGuard &&) = delete;
+
+private:
+    mutex *m_lock;
+};
+
 void spin_lock_init(spinlock_t *lock);
 void spin_lock(spinlock_t *lock);
 bool spin_trylock(spinlock_t *lock);

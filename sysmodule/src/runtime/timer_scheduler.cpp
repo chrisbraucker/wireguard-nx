@@ -58,27 +58,26 @@ void TimerScheduler::ArmProtocolTimer(
     }
 
     ProtocolTimerSlot &slot = Slot(token.hook);
-    wgnx::platform::mutex_lock(&m_operation_mutex);
+    wgnx::platform::MutexGuard operation_lock{m_operation_mutex};
     wgnx::platform::timer_delete_sync(&slot.timer);
-    wgnx::platform::mutex_lock(&m_mutex);
-    const bool armed = m_schedule.Arm(token, deadline);
-    wgnx::platform::mutex_unlock(&m_mutex);
+    bool armed = false;
+    {
+        wgnx::platform::MutexGuard schedule_lock{m_mutex};
+        armed = m_schedule.Arm(token, deadline);
+    }
     if (armed) {
         static_cast<void>(wgnx::platform::mod_timer(
             &slot.timer,
             wgnx::wireguard::TimerDeadlineToJiffies(deadline)));
     }
-    wgnx::platform::mutex_unlock(&m_operation_mutex);
 }
 
 void TimerScheduler::CancelProtocolTimer(wgnx::wireguard::TimerHook hook) {
     ProtocolTimerSlot &slot = Slot(hook);
-    wgnx::platform::mutex_lock(&m_operation_mutex);
+    wgnx::platform::MutexGuard operation_lock{m_operation_mutex};
     wgnx::platform::timer_delete_sync(&slot.timer);
-    wgnx::platform::mutex_lock(&m_mutex);
+    wgnx::platform::MutexGuard schedule_lock{m_mutex};
     m_schedule.Cancel(hook);
-    wgnx::platform::mutex_unlock(&m_mutex);
-    wgnx::platform::mutex_unlock(&m_operation_mutex);
 }
 
 void TimerScheduler::CancelProtocolTimer(
@@ -88,40 +87,36 @@ void TimerScheduler::CancelProtocolTimer(
     }
 
     ProtocolTimerSlot &slot = Slot(token.hook);
-    wgnx::platform::mutex_lock(&m_operation_mutex);
-    wgnx::platform::mutex_lock(&m_mutex);
-    const bool current = m_schedule.ArmedToken(token.hook) == token;
-    wgnx::platform::mutex_unlock(&m_mutex);
+    wgnx::platform::MutexGuard operation_lock{m_operation_mutex};
+    bool current = false;
+    {
+        wgnx::platform::MutexGuard schedule_lock{m_mutex};
+        current = m_schedule.ArmedToken(token.hook) == token;
+    }
     if (current) {
         wgnx::platform::timer_delete_sync(&slot.timer);
-        wgnx::platform::mutex_lock(&m_mutex);
+        wgnx::platform::MutexGuard schedule_lock{m_mutex};
         static_cast<void>(m_schedule.Cancel(token));
-        wgnx::platform::mutex_unlock(&m_mutex);
     }
-    wgnx::platform::mutex_unlock(&m_operation_mutex);
 }
 
 void TimerScheduler::CancelAllProtocolTimers() {
-    wgnx::platform::mutex_lock(&m_operation_mutex);
+    wgnx::platform::MutexGuard operation_lock{m_operation_mutex};
     for (auto &slot : m_protocol_timers) {
         wgnx::platform::timer_delete_sync(&slot.timer);
     }
-    wgnx::platform::mutex_lock(&m_mutex);
+    wgnx::platform::MutexGuard schedule_lock{m_mutex};
     m_schedule.CancelAll();
-    wgnx::platform::mutex_unlock(&m_mutex);
-    wgnx::platform::mutex_unlock(&m_operation_mutex);
 }
 
 void TimerScheduler::ArmDebugProbeTimeout(wgnx::platform::jiffies_t deadline) {
-    wgnx::platform::mutex_lock(&m_operation_mutex);
+    wgnx::platform::MutexGuard operation_lock{m_operation_mutex};
     static_cast<void>(wgnx::platform::mod_timer(&m_debug_timeout_timer, deadline));
-    wgnx::platform::mutex_unlock(&m_operation_mutex);
 }
 
 void TimerScheduler::CancelDebugProbeTimeout() {
-    wgnx::platform::mutex_lock(&m_operation_mutex);
+    wgnx::platform::MutexGuard operation_lock{m_operation_mutex};
     wgnx::platform::timer_delete(&m_debug_timeout_timer);
-    wgnx::platform::mutex_unlock(&m_operation_mutex);
 }
 
 void TimerScheduler::ProtocolTimerCallback(wgnx::platform::timer_list *timer) {
@@ -152,9 +147,11 @@ void TimerScheduler::QueueProtocolTimer(ProtocolTimerSlot &slot) {
         return;
     }
 
-    wgnx::platform::mutex_lock(&m_mutex);
-    const bool captured = m_schedule.CaptureExpiration(slot.hook);
-    wgnx::platform::mutex_unlock(&m_mutex);
+    bool captured = false;
+    {
+        wgnx::platform::MutexGuard schedule_lock{m_mutex};
+        captured = m_schedule.CaptureExpiration(slot.hook);
+    }
     if (captured) {
         m_dispatcher->QueueTimerWork(&slot.work);
     }
@@ -169,9 +166,11 @@ void TimerScheduler::TimerWorkCallback(wgnx::platform::work_struct *work) {
 void TimerScheduler::RunTimerWork(wgnx::platform::work_struct *work) {
     for (auto &slot : m_protocol_timers) {
         if (work == &slot.work) {
-            wgnx::platform::mutex_lock(&m_mutex);
-            const auto token = m_schedule.TakeDelivery(slot.hook);
-            wgnx::platform::mutex_unlock(&m_mutex);
+            wgnx::wireguard::TimerToken token{};
+            {
+                wgnx::platform::MutexGuard schedule_lock{m_mutex};
+                token = m_schedule.TakeDelivery(slot.hook);
+            }
             if (token.IsValid() && m_callbacks.protocol_timer != nullptr) {
                 m_callbacks.protocol_timer(slot.hook, token);
             }

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "wgnx/resource_budget.hpp"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -8,7 +10,8 @@
 
 namespace wgnx::wireguard {
 
-constexpr inline std::size_t MaxInnerIpv4PacketSize = 1500;
+constexpr inline std::size_t MaxInnerIpv4PacketSize =
+    wgnx::resource_budget::MaximumInnerPacketBytes;
 constexpr inline std::size_t MaxInnerIpPacketSize = MaxInnerIpv4PacketSize;
 
 enum class InnerIpVersion : std::uint8_t {
@@ -54,6 +57,10 @@ struct InnerPacketRecord {
     std::uint16_t size{0};
 };
 
+static_assert(
+    sizeof(InnerPacketRecord) <=
+    wgnx::resource_budget::MaximumInnerPacketRecordBytes);
+
 enum class QueuePushResult : std::uint8_t {
     Pushed = 0,
     Full,
@@ -83,6 +90,11 @@ struct QueueStatistics {
     std::uint64_t retry_exhausted{0};
     std::uint64_t cleared{0};
     std::size_t high_watermark{0};
+
+    std::uint64_t Dropped() const {
+        return rejected_full + stale + unavailable + send_failed +
+               retry_exhausted + cleared;
+    }
 };
 
 template<std::size_t Capacity>
@@ -168,5 +180,9 @@ private:
     std::size_t m_count{0};
     QueueStatistics m_statistics{};
 };
+
+static_assert(
+    sizeof(InnerPacketQueue<wgnx::resource_budget::PacketQueueSlots>) <=
+    wgnx::resource_budget::MaximumPacketQueueBytes);
 
 } // namespace wgnx::wireguard

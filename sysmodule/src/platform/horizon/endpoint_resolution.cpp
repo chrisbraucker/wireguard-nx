@@ -21,6 +21,7 @@ extern "C" {
 }
 
 #include "logger.hpp"
+#include "wgnx/resource_budget.hpp"
 
 namespace wgnx::platform {
 
@@ -29,7 +30,8 @@ namespace {
 constexpr inline std::size_t MaxEndpointText = sizeof(wgnx::PeerInfo::endpoint);
 constexpr inline std::size_t MaxHostText = MaxEndpointText;
 constexpr inline std::size_t MaxServiceText = 6;
-constexpr inline std::size_t ResolverAddrInfoBufferSize = 16 * 1024;
+constexpr inline std::size_t ResolverAddrInfoBufferSize =
+    wgnx::resource_budget::ResolverScratchBytes;
 
 constinit std::uint8_t g_resolver_addrinfo_buffer[ResolverAddrInfoBufferSize] = {};
 

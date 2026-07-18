@@ -23,10 +23,57 @@ struct workqueue_struct;
 
 using work_func_t = void (*)(work_struct *work);
 
+enum class queue_work_result : std::uint8_t {
+    queued = 0,
+    rerun_queued,
+    already_pending,
+    capacity_exhausted,
+    unavailable,
+};
+
+[[nodiscard]] constexpr queue_work_result classify_queue_work_request(
+    bool available,
+    bool already_pending,
+    bool running,
+    std::size_t pending,
+    std::size_t capacity) {
+    if (!available || capacity == 0) {
+        return queue_work_result::unavailable;
+    }
+    if (already_pending) {
+        return queue_work_result::already_pending;
+    }
+    if (pending >= capacity) {
+        return queue_work_result::capacity_exhausted;
+    }
+    return running
+        ? queue_work_result::rerun_queued
+        : queue_work_result::queued;
+}
+
+struct workqueue_statistics {
+    std::size_t capacity{0};
+    std::size_t pending{0};
+    std::size_t high_watermark{0};
+    std::uint64_t requests{0};
+    std::uint64_t enqueued{0};
+    std::uint64_t rerun_queued{0};
+    std::uint64_t coalesced{0};
+    std::uint64_t rejected_capacity{0};
+    std::uint64_t rejected_unavailable{0};
+    std::uint64_t completed{0};
+};
+
 void INIT_WORK(work_struct *work, work_func_t func);
-workqueue_struct *alloc_ordered_workqueue(const char *name);
+workqueue_struct *alloc_ordered_workqueue(
+    const char *name,
+    std::size_t pending_capacity);
 void destroy_workqueue(workqueue_struct *wq);
-bool queue_work(workqueue_struct *wq, work_struct *work);
+[[nodiscard]] queue_work_result queue_work(
+    workqueue_struct *wq,
+    work_struct *work);
+[[nodiscard]] workqueue_statistics get_workqueue_statistics(
+    workqueue_struct *wq);
 void flush_workqueue(workqueue_struct *wq);
 
 /*

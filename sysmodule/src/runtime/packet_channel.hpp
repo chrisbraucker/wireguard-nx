@@ -1,6 +1,7 @@
 #pragma once
 
 #include "runtime/packet_transport.hpp"
+#include "wgnx/resource_budget.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -9,7 +10,8 @@ namespace wgnx::sysmodule::runtime {
 
 class PacketChannel final : public PacketTransport {
 public:
-    static constexpr std::size_t ReceiveCapacity = 8;
+    static constexpr std::size_t ReceiveCapacity =
+        wgnx::resource_budget::PacketQueueSlots;
 
     ProcessId ConsumerId() const override { return m_owner_process_id; }
     bool AcceptsDelivery(wireguard::InnerIpVersion version) const override {
@@ -63,5 +65,9 @@ private:
     wireguard::InnerPacketQueue<ReceiveCapacity> m_received{};
     ProcessId m_owner_process_id{};
 };
+
+static_assert(
+    sizeof(PacketChannel) <=
+    wgnx::resource_budget::MaximumPacketChannelBytes);
 
 } // namespace wgnx::sysmodule::runtime

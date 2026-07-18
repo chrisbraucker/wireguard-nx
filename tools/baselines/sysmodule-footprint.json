@@ -1,0 +1,17 @@
+{
+  "name": "chunk-13-corrected",
+  "revision": "6808536",
+  "metrics": {
+    "text": 305152,
+    "data": 50776,
+    "bss": 713304,
+    "static_total": 1069232,
+    "nso": 207203,
+    "nsp": 208263
+  },
+  "limits": {
+    "static_total": 1310720,
+    "nso": 262144,
+    "nsp": 270336
+  }
+}

@@ -3,6 +3,7 @@
 #include "runtime/runtime_coordinator.hpp"
 #include "runtime/udp_binding.hpp"
 #include "wgnx/platform/packet.hpp"
+#include "wgnx/resource_budget.hpp"
 
 #include <array>
 #include <cstddef>
@@ -17,7 +18,8 @@ class RuntimeEffectExecutor;
 
 class EncryptedReceivePump {
 public:
-    static constexpr std::size_t PacketCapacity = 4096;
+    static constexpr std::size_t PacketCapacity =
+        wgnx::resource_budget::EncryptedReceiveBytes;
 
     EncryptedReceivePump(
         ams::os::Mutex &state_mutex,
@@ -52,5 +54,9 @@ private:
     std::array<std::uint8_t, PacketCapacity> m_packet_storage{};
     EffectBatch m_receive_effects{};
 };
+
+static_assert(
+    sizeof(EncryptedReceivePump) <=
+    wgnx::resource_budget::MaximumEncryptedReceivePumpBytes);
 
 } // namespace wgnx::sysmodule::runtime

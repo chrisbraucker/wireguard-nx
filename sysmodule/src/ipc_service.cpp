@@ -3,6 +3,7 @@
 #include "build_id.hpp"
 #include "logger.hpp"
 #include "runtime/daemon_runtime.hpp"
+#include "wgnx/resource_budget.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -12,7 +13,8 @@ namespace wgnx::sysmodule {
 
 namespace {
 
-using ServerManager = ams::sf::hipc::ServerManager<1>;
+using ServerManager =
+    ams::sf::hipc::ServerManager<wgnx::resource_budget::IpcServerPorts>;
 
 constinit ams::util::TypedStorage<ServerManager> g_server_manager_storage = {};
 constinit ServerManager *g_server_manager = nullptr;
@@ -90,7 +92,7 @@ void RunIpcServer() {
     R_ABORT_UNLESS(g_server_manager->RegisterObjectForServer(
         g_control_service_object.GetShared(),
         ams::sm::ServiceName::Encode(wgnx::ServiceName),
-        8));
+        wgnx::resource_budget::IpcSessions));
     logger::Log("Registered service '%s'", wgnx::ServiceName);
     logger::Log("Entering server loop");
     g_server_manager->LoopProcess();

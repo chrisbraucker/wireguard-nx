@@ -20,6 +20,7 @@ int main() {
             WGNX_TEST_CHECK(context, wgnx::wireguard::RunCoreSelfTest());
         }},
         TestCase{"platform.udp-receive-classification", wgnx::test::TestUdpReceiveClassification},
+        TestCase{"platform.workqueue-admission", wgnx::test::TestWorkqueueAdmission},
         TestCase{"protocol.deterministic-handshake", wgnx::test::TestDeterministicHandshake},
         TestCase{"protocol.handshake-initiation-admission", wgnx::test::TestHandshakeInitiationAdmission},
         TestCase{"protocol.bidirectional-transport", wgnx::test::TestBidirectionalTransport},
@@ -31,6 +32,7 @@ int main() {
         TestCase{"runtime.packet-channel-ownership", wgnx::test::TestPacketChannelOwnership},
         TestCase{"runtime.packet-data-plane", wgnx::test::TestPacketDataPlane},
         TestCase{"runtime.typed-rejections", wgnx::test::TestRuntimeTypedRejections},
+        TestCase{"runtime.resource-budgets", wgnx::test::TestRuntimeResourceBudgets},
         TestCase{"runtime.auxiliary-workflows", wgnx::test::TestAuxiliaryRuntimeWorkflows},
         TestCase{"runtime.frozen-contracts", wgnx::test::TestRuntimeContracts},
         TestCase{"runtime.peer-registry-ownership", wgnx::test::TestPeerRegistryOwnership},

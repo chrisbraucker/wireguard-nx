@@ -1,7 +1,9 @@
 #pragma once
 
 #include "runtime/domain_types.hpp"
+#include "runtime/resource_observability.hpp"
 #include "wgnx/platform/udp.hpp"
+#include "wgnx/resource_budget.hpp"
 
 #include <array>
 #include <cstddef>
@@ -23,8 +25,12 @@ enum class UdpRebindQueueResult : std::uint8_t {
 
 class UdpRebindQueue {
 public:
+    static constexpr std::size_t RequestCapacity =
+        wgnx::resource_budget::UdpRebindRequestSlots;
+
     [[nodiscard]] UdpRebindQueueResult Queue(const UdpRebindRequest &request) {
         const bool scheduled = !m_pending;
+        m_accounting.RecordAdmission(m_pending);
         m_request = request;
         m_pending = true;
         return scheduled
@@ -37,6 +43,7 @@ public:
             return std::nullopt;
         }
         m_pending = false;
+        m_accounting.RecordTake();
         return m_request;
     }
 
@@ -45,8 +52,15 @@ public:
                m_request.activation_generation == request.activation_generation;
     }
 
+    const PendingSlotStatistics &Statistics() const {
+        return m_accounting.Statistics();
+    }
+
 private:
+    static_assert(RequestCapacity == PendingSlotStatistics::Capacity);
+
     UdpRebindRequest m_request{};
+    PendingSlotAccounting m_accounting{};
     bool m_pending{false};
 };
 
@@ -124,5 +138,9 @@ private:
     bool m_has_endpoint{false};
     bool m_suspended{false};
 };
+
+static_assert(
+    sizeof(UdpRebindQueue) <=
+    wgnx::resource_budget::MaximumUdpRebindQueueBytes);
 
 } // namespace wgnx::sysmodule::runtime

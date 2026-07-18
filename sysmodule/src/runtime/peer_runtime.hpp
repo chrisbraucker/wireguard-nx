@@ -3,6 +3,7 @@
 #include "runtime/runtime_contracts.hpp"
 #include "runtime/runtime_events.hpp"
 #include "runtime/udp_binding.hpp"
+#include "wgnx/resource_budget.hpp"
 
 #include "wgnx/config.hpp"
 #include "wgnx/platform/clock.hpp"
@@ -254,10 +255,15 @@ public:
 private:
     friend class RuntimeCoordinator;
 
-    std::array<PeerRuntime, wgnx::MaxPeers> m_peers{};
+    std::array<PeerRuntime, wgnx::resource_budget::PeerSlots> m_peers{};
     std::uint32_t m_count{0};
     std::int32_t m_active_peer_index{-1};
     std::int32_t m_auto_start_peer_index{-1};
 };
+
+static_assert(
+    sizeof(PeerRuntime) <= wgnx::resource_budget::MaximumPeerRuntimeBytes);
+static_assert(
+    sizeof(PeerRegistry) <= wgnx::resource_budget::MaximumPeerRegistryBytes);
 
 } // namespace wgnx::sysmodule::runtime

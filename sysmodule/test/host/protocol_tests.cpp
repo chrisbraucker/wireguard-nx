@@ -919,6 +919,7 @@ void TestBoundedQueueObservability(TestContext &context) {
         full_statistics.pushed == 2 &&
             full_statistics.popped == 0 &&
             full_statistics.rejected_full == 1 &&
+            full_statistics.Dropped() == 1 &&
             full_statistics.high_watermark == 2,
         "bounded queue statistics diverged at capacity");
 
@@ -937,6 +938,54 @@ void TestBoundedQueueObservability(TestContext &context) {
             queue.Statistics().pushed == queue.Statistics().popped &&
             queue.Statistics().cleared == 1,
         "queue clearing did not preserve depth or disposition accounting");
+}
+
+void TestRuntimeResourceBudgets(TestContext &context) {
+    using namespace wgnx::sysmodule::runtime;
+
+    static_assert(
+        sizeof(PeerRuntime) <=
+        wgnx::resource_budget::MaximumPeerRuntimeBytes);
+    static_assert(
+        sizeof(PeerRegistry) <=
+        wgnx::resource_budget::MaximumPeerRegistryBytes);
+    static_assert(
+        sizeof(EffectBatch) <=
+        wgnx::resource_budget::MaximumEffectBatchBytes);
+    static_assert(
+        sizeof(PacketChannel) <=
+        wgnx::resource_budget::MaximumPacketChannelBytes);
+
+    PendingSlotAccounting accounting{};
+    accounting.RecordAdmission(false);
+    accounting.RecordAdmission(true);
+    const auto pressured = accounting.Statistics();
+    accounting.RecordTake();
+    accounting.RecordAdmission(false);
+    accounting.RecordCancellation();
+    const auto final = accounting.Statistics();
+
+    WGNX_TEST_REQUIRE(
+        context,
+        wgnx::resource_budget::PeerSlots == wgnx::MaxPeers &&
+            wgnx::resource_budget::ActivePeerSlots == 1 &&
+            wgnx::resource_budget::IpcSessions == 8 &&
+            wgnx::resource_budget::PacketQueueSlots ==
+                wgnx::wireguard::PeerStagedPacketCapacity &&
+            wgnx::resource_budget::EffectBatchSlots ==
+                EffectBatch::Capacity &&
+            wgnx::resource_budget::MainThreadStackBytes == 16 * 1024 &&
+            pressured.depth == 1 &&
+            pressured.high_watermark == 1 &&
+            pressured.admitted == 2 &&
+            pressured.replaced == 1 &&
+            pressured.coalesced == 0 &&
+            pressured.taken == 0 &&
+            final.depth == 0 &&
+            final.admitted == 3 &&
+            final.taken == 1 &&
+            final.cancelled == 1,
+        "central runtime capacities or pending-slot pressure accounting diverged");
 }
 
 void TestPacketChannelOwnership(TestContext &context) {
@@ -1314,13 +1363,21 @@ void TestAuxiliaryRuntimeWorkflows(TestContext &context) {
     const UdpRebindRequest rebind{.peer_index = PeerIndex{1}, .activation_generation = ActivationGeneration{9}};
     const auto first_rebind = rebinds.Queue(rebind);
     const auto replacement_rebind = rebinds.Queue(rebind);
+    const auto rebind_statistics = rebinds.Statistics();
     const bool pending_before_take = rebinds.IsPending(rebind);
     const auto taken = rebinds.Take();
+    const auto consumed_rebind_statistics = rebinds.Statistics();
     WGNX_TEST_REQUIRE(
         context,
         first_rebind == UdpRebindQueueResult::Scheduled &&
             replacement_rebind == UdpRebindQueueResult::Replaced &&
+            rebind_statistics.admitted == 2 &&
+            rebind_statistics.replaced == 1 &&
+            rebind_statistics.depth == 1 &&
+            rebind_statistics.high_watermark == 1 &&
             pending_before_take && taken.has_value() &&
+            consumed_rebind_statistics.depth == 0 &&
+            consumed_rebind_statistics.taken == 1 &&
             taken->peer_index == rebind.peer_index &&
             taken->activation_generation == rebind.activation_generation &&
             !rebinds.Take().has_value(),
@@ -1745,14 +1802,33 @@ void TestRuntimePeerActivation(TestContext &context) {
     replacement.peer.activation_generation = ActivationGeneration{2};
     const auto first_resolve = resolver.Queue(*resolve);
     const auto replacement_resolve = resolver.Queue(replacement);
+    const auto resolve_statistics = resolver.Statistics();
     const auto latest_resolve = resolver.Take();
     WGNX_TEST_REQUIRE(
         context,
         first_resolve == EndpointQueueResult::Scheduled &&
-            replacement_resolve == EndpointQueueResult::Coalesced &&
+            replacement_resolve == EndpointQueueResult::Replaced &&
+            resolve_statistics.admitted == 2 &&
+            resolve_statistics.replaced == 1 &&
+            resolve_statistics.coalesced == 1 &&
+            resolve_statistics.depth == 1 &&
+            resolve_statistics.high_watermark == 1 &&
             latest_resolve.has_value() && latest_resolve->peer == replacement.peer &&
             !resolver.Take().has_value(),
         "endpoint resolver did not coalesce pending work under one scheduled worker");
+
+    const auto coalesced_resolve = resolver.Queue(*resolve);
+    const auto coalesced_resolve_statistics = resolver.Statistics();
+    const auto coalesced_take = resolver.Take();
+    WGNX_TEST_REQUIRE(
+        context,
+        coalesced_resolve == EndpointQueueResult::Coalesced &&
+            coalesced_resolve_statistics.admitted == 3 &&
+            coalesced_resolve_statistics.replaced == 1 &&
+            coalesced_resolve_statistics.coalesced == 2 &&
+            coalesced_take.has_value() && coalesced_take->peer == resolve->peer,
+        "endpoint resolver conflated worker coalescing with pending replacement");
+
     resolver.MarkWorkerIdle();
     WGNX_TEST_REQUIRE(
         context,
