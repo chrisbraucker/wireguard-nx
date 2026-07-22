@@ -8,25 +8,25 @@ by updated target footprint and stack reports.
 
 ## Fixed Storage
 
-| Resource | Capacity | Compile-time ceiling |
-| --- | ---: | ---: |
-| Configured peer slots | 8 | 192 KiB `PeerRegistry` |
-| Active tunnel peers | 1 | selection invariant |
-| IPC service sessions | 8 on 1 service port | fixed server manager |
-| One `PeerRuntime` | 1 | 24 KiB |
-| Peer outbound packet queue | 8 x 1500-byte packets | 13 KiB |
-| IPC receive packet queue | 8 x 1500-byte packets | 13 KiB |
-| Runtime effect batch | 8 effects | 2304 bytes |
-| Encrypted receive scratch | 1 x 4096-byte datagram | 4096 bytes |
-| Endpoint request slot | 1 latest request | 512-byte owner |
-| UDP rebind request slot | 1 latest request | 96-byte owner |
-| Protocol timer slots | 4 | 1536-byte scheduler |
-| Ordered work queues | 4 | 96 KiB static pool |
-| Socket arena | 2 concurrent sockets | 304 KiB |
-| Resolver scratch | 1 operation | 16 KiB |
-| Filesystem heap | 1 arena | 32 KiB |
-| Diagnostic producer queue | 16 x 512-byte messages | 8 KiB |
-| Composed daemon | 1 | 216 KiB |
+| Resource                   |               Capacity |   Compile-time ceiling |
+|----------------------------|-----------------------:|-----------------------:|
+| Configured peer slots      |                      8 | 192 KiB `PeerRegistry` |
+| Active tunnel peers        |                      1 |    selection invariant |
+| IPC service sessions       |    8 on 1 service port |   fixed server manager |
+| One `PeerRuntime`          |                      1 |                 24 KiB |
+| Peer outbound packet queue |  8 x 1500-byte packets |                 13 KiB |
+| IPC receive packet queue   |  8 x 1500-byte packets |                 13 KiB |
+| Runtime effect batch       |              8 effects |             2304 bytes |
+| Encrypted receive scratch  | 1 x 4096-byte datagram |             4096 bytes |
+| Endpoint request slot      |       1 latest request |         512-byte owner |
+| UDP rebind request slot    |       1 latest request |          96-byte owner |
+| Protocol timer slots       |                      5 |    1600-byte scheduler |
+| Ordered work queues        |                      4 |     96 KiB static pool |
+| Socket arena               |   2 concurrent sockets |                304 KiB |
+| Resolver scratch           |            1 operation |                 16 KiB |
+| Filesystem heap            |                1 arena |                 32 KiB |
+| Diagnostic producer queue  | 16 x 512-byte messages |                  8 KiB |
+| Composed daemon            |                      1 |                216 KiB |
 
 The four ordered lanes admit at most one resolver request, two submission
 requests, one receive request, and six timer actions. Each queue has one 16 KiB

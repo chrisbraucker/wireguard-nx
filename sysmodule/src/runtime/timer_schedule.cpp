@@ -6,8 +6,9 @@ std::size_t TimerSchedule::HookIndex(wgnx::wireguard::TimerHook hook) {
     switch (hook) {
         case wgnx::wireguard::TimerHook::RetransmitHandshake: return 0;
         case wgnx::wireguard::TimerHook::SendKeepalive: return 1;
-        case wgnx::wireguard::TimerHook::ZeroKeyMaterial: return 2;
-        case wgnx::wireguard::TimerHook::Rekey: return 3;
+        case wgnx::wireguard::TimerHook::NewHandshake: return 2;
+        case wgnx::wireguard::TimerHook::ZeroKeyMaterial: return 3;
+        case wgnx::wireguard::TimerHook::PersistentKeepalive: return 4;
     }
     return 0;
 }

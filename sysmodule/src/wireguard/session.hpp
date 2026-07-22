@@ -158,7 +158,8 @@ public:
         MonotonicTimePoint birth_time,
         const noise_symmetric_key &sending_key,
         const noise_symmetric_key &receiving_key,
-        std::uint64_t send_counter = 0);
+        std::uint64_t send_counter = 0,
+        bool is_initiator = true);
     void Reset();
 
     bool IsValid() const;
@@ -169,6 +170,8 @@ public:
     std::uint32_t LocalIndex() const { return m_local_index; }
     std::uint32_t RemoteIndex() const { return m_remote_index; }
     std::uint64_t SendCounter() const { return m_send_counter; }
+    bool IsInitiator() const { return m_is_initiator; }
+    bool NeedsRekeyAt(MonotonicTimePoint now) const;
     KeypairSendState ReserveSendCounterAt(MonotonicTimePoint now, std::uint64_t &out_counter);
     MonotonicTimePoint BirthTime() const { return m_birth_time; }
     KeypairAgeResult AgeAt(MonotonicTimePoint now) const;
@@ -182,6 +185,7 @@ private:
     std::uint32_t m_local_index{0};
     std::uint32_t m_remote_index{0};
     std::uint64_t m_send_counter{0};
+    bool m_is_initiator{false};
     MonotonicTimePoint m_birth_time{};
     noise_symmetric_key m_sending_key{};
     noise_symmetric_key m_receiving_key{};

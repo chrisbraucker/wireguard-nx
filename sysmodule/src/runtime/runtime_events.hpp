@@ -110,6 +110,7 @@ struct PendingDatagramSentEvent {
     DatagramGeneration datagram_generation{};
     std::size_t bytes_sent{0};
     wgnx::platform::socket_error error{wgnx::platform::socket_error::send_failed};
+    TimerFacts timer_facts{};
     wgnx::platform::ktime_t occurred_at{0};
 };
 
@@ -152,13 +153,15 @@ template<typename Event>
 consteval std::size_t MaxEffectsForEvent() {
     if constexpr (
         std::is_same_v<Event, ActivationRequestedEvent> ||
-        std::is_same_v<Event, DeactivationRequestedEvent> ||
-        std::is_same_v<Event, TransportFailureEvent> ||
         std::is_same_v<Event, EndpointResolvedEvent> ||
         std::is_same_v<Event, PendingDatagramSentEvent> ||
         std::is_same_v<Event, InnerPacketStagedEvent> ||
         std::is_same_v<Event, ProcessOutboundQueueEvent>) {
         return 5;
+    } else if constexpr (
+        std::is_same_v<Event, DeactivationRequestedEvent> ||
+        std::is_same_v<Event, TransportFailureEvent>) {
+        return 6;
     } else if constexpr (std::is_same_v<Event, UdpBindOpenedEvent>) {
         return 7;
     } else if constexpr (std::is_same_v<Event, UdpRebindRequestedEvent>) {

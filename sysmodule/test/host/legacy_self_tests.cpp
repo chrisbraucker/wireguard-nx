@@ -809,7 +809,7 @@ bool TestDeviceAndPeerSkeleton() {
         peer->name);
     wg_timers_schedule(
         &peer->timers,
-        TimerHook::Rekey,
+        TimerHook::NewHandshake,
         TimerDeadlineFromJiffies(4000),
         peer->name);
     if (!wg_timers_any_pending(peer->timers)) {

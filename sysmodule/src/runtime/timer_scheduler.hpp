@@ -63,8 +63,9 @@ private:
         wgnx::resource_budget::ProtocolTimerSlots> m_protocol_timers{{
         {.hook = wgnx::wireguard::TimerHook::RetransmitHandshake},
         {.hook = wgnx::wireguard::TimerHook::SendKeepalive},
-        {.hook = wgnx::wireguard::TimerHook::Rekey},
+        {.hook = wgnx::wireguard::TimerHook::NewHandshake},
         {.hook = wgnx::wireguard::TimerHook::ZeroKeyMaterial},
+        {.hook = wgnx::wireguard::TimerHook::PersistentKeepalive},
     }};
     wgnx::platform::work_struct m_debug_timeout_work{};
     wgnx::platform::timer_list m_debug_timeout_timer{};

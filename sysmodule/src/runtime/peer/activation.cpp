@@ -80,8 +80,9 @@ EffectBatch PeerRuntime::HandleEvent(const DeactivationRequestedEvent &event) {
                     for (const auto hook : {
                              wgnx::wireguard::TimerHook::RetransmitHandshake,
                              wgnx::wireguard::TimerHook::SendKeepalive,
-                             wgnx::wireguard::TimerHook::Rekey,
+                             wgnx::wireguard::TimerHook::NewHandshake,
                              wgnx::wireguard::TimerHook::ZeroKeyMaterial,
+                             wgnx::wireguard::TimerHook::PersistentKeepalive,
                          }) {
                         wgnx::wireguard::wg_timers_cancel(
                             std::addressof(peer->timers), hook, peer->name);
@@ -275,11 +276,6 @@ EffectBatch PeerRuntime::HandleEvent(const UdpBindOpenedEvent &event) {
                         &effects);
                     return effects;
                 }
-                effects.Add(ArmProtocolTimerEffect{
-                    .peer = event.peer,
-                    .hook = wgnx::wireguard::TimerHook::RetransmitHandshake,
-                    .deadline = HandshakeRetryDeadline(event.timer_facts),
-                });
                 effects.Add(SendPendingDatagramEffect{
                     .peer = event.peer,
                     .datagram_generation = m_pending_datagram.generation,

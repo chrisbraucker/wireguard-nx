@@ -39,7 +39,7 @@ private:
         bool armed{false};
     };
 
-    static constexpr std::size_t HookCount = 4;
+    static constexpr std::size_t HookCount = 5;
     static std::size_t HookIndex(TimerHook hook);
     std::uint32_t NextGeneration();
 

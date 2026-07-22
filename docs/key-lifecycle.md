@@ -35,10 +35,11 @@ the old current keypair to previous. The device index registry is refreshed at
 each transition so in-flight packets may still resolve through the retained
 previous keypair while an unconfirmed responder key cannot be used for sends.
 
-`RekeyAfterTime` and `RekeyAfterMessages` remain distinct soft thresholds. The
-existing time-based rekey timer is still provisional, and message-count-driven
-rekey scheduling belongs to Milestone 5. Neither soft threshold permits use
-after a hard rejection limit.
+`RekeyAfterTime` and `RekeyAfterMessages` remain distinct soft thresholds.
+Milestone 5 evaluates them through authenticated outbound activity: initiator
+key age and either-role send-counter pressure start a replacement handshake
+without permitting use after a hard rejection limit. The detailed timer mapping
+is in [`authenticated-activity-timers.md`](authenticated-activity-timers.md).
 
 ## Staged Outbound Traffic
 
@@ -99,4 +100,5 @@ Milestone 4 replaces the proof-of-concept retry state machine. Retry windows,
 attempt exhaustion, later traffic restarting a new sequence, and stale
 handshake-material cleanup are documented in
 [`handshake-recovery.md`](handshake-recovery.md). Authenticated-activity-driven
-rekey and keepalive scheduling remain Milestone 5.
+rekey and keepalive scheduling are documented in
+[`authenticated-activity-timers.md`](authenticated-activity-timers.md).

@@ -17,7 +17,9 @@ constexpr inline std::size_t IpcServerPorts = 1;
 constexpr inline std::size_t IpcSessions = 8;
 constexpr inline std::size_t PacketQueueSlots = 8;
 constexpr inline std::size_t EffectBatchSlots = 8;
-constexpr inline std::size_t ProtocolTimerSlots = 4;
+// WireGuard owns independent retransmit, delayed-keepalive, liveness,
+// stale-key cleanup, and persistent-keepalive deadlines.
+constexpr inline std::size_t ProtocolTimerSlots = 5;
 constexpr inline std::size_t OrderedWorkqueueSlots = 4;
 constexpr inline std::size_t ResolveWorkSlots = 1;
 constexpr inline std::size_t SubmissionWorkSlots = 2;
@@ -50,7 +52,7 @@ constexpr inline std::size_t MaximumPacketChannelBytes =
 constexpr inline std::size_t MaximumEffectBatchBytes = 2304;
 constexpr inline std::size_t MaximumPeerRuntimeBytes = KiB(24);
 constexpr inline std::size_t MaximumPeerRegistryBytes = KiB(192);
-constexpr inline std::size_t MaximumTimerSchedulerBytes = 1536;
+constexpr inline std::size_t MaximumTimerSchedulerBytes = 1600;
 constexpr inline std::size_t MaximumDaemonRuntimeBytes = KiB(216);
 constexpr inline std::size_t MaximumEndpointResolverBytes = 512;
 constexpr inline std::size_t MaximumUdpRebindQueueBytes = 96;
@@ -63,8 +65,7 @@ static_assert(IpcServerPorts == 1);
 static_assert(PacketQueueSlots > 0);
 static_assert(EffectBatchSlots > 0);
 static_assert(OrderedWorkqueueSlots == 4);
-static_assert(
-    ResolveWorkSlots + SubmissionWorkSlots + ReceiveWorkSlots + TimerWorkSlots == 10);
+static_assert(ResolveWorkSlots + SubmissionWorkSlots + ReceiveWorkSlots + TimerWorkSlots == 11);
 static_assert(MainThreadStackBytes == WorkqueueThreadStackBytes);
 static_assert(WorkqueueThreadStackBytes == TimerThreadStackBytes);
 

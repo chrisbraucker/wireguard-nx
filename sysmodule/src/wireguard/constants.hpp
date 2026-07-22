@@ -39,6 +39,7 @@ constexpr inline std::uint64_t RejectAfterMessages =
 constexpr inline auto RekeyAfterTime = std::chrono::seconds{120};
 constexpr inline auto RekeyAttemptTime = std::chrono::seconds{90};
 constexpr inline auto RekeyTimeout = std::chrono::seconds{5};
+constexpr inline auto KeepaliveTimeout = std::chrono::seconds{10};
 constexpr inline auto HandshakeInitiationRate = std::chrono::milliseconds{20};
 constexpr inline std::uint32_t MaxTimerHandshakes =
     static_cast<std::uint32_t>(RekeyAttemptTime / RekeyTimeout);

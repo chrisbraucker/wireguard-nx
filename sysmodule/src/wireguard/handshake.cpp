@@ -1140,7 +1140,9 @@ bool noise_handshake_begin_session(wg_device *device, wg_peer *peer) {
         peer->handshake.remote_index,
         GetMonotonicTime(),
         sending_key,
-        receiving_key);
+        receiving_key,
+        0,
+        state == HandshakeState::ResponseReceived);
     if (!new_keypair.IsValid()) {
         return false;
     }

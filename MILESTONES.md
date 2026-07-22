@@ -203,8 +203,8 @@ is being established.
 
 ## Milestone 4: Handshake Retry And Recovery Lifecycle
 
-**Status:** Implementation and production-controller host coverage complete;
-outage-recovery on-device validation pending.
+**Status:** Implementation, production-controller host coverage, and prolonged
+outage-recovery on-device validation complete.
 
 ### Goal
 
@@ -236,6 +236,9 @@ Recover from a silent path outage without restarting the peer.
   a test-only model
 
 ## Milestone 5: Authenticated-Activity Timers
+
+**Status:** Host implementation and deterministic regression coverage complete;
+real-peer on-device validation complete.
 
 ### Goal
 

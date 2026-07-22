@@ -90,6 +90,8 @@ bool PeerRuntime::StartHandshake(
     const TimerFacts &timer_facts,
     EffectBatch &effects,
     bool retry) {
+    // Retransmission is armed only after the initiation is actually submitted.
+    static_cast<void>(timer_facts);
     auto *peer = ProtocolPeer();
     if (peer == nullptr) {
         logger::Log(
@@ -130,11 +132,6 @@ bool PeerRuntime::StartHandshake(
             static_cast<unsigned int>(transition.action));
         return false;
     }
-    effects.Add(ArmProtocolTimerEffect{
-        .peer = identity,
-        .hook = wgnx::wireguard::TimerHook::RetransmitHandshake,
-        .deadline = HandshakeRetryDeadline(timer_facts),
-    });
     effects.Add(SendPendingDatagramEffect{
         .peer = identity,
         .datagram_generation = m_pending_datagram.generation,
@@ -257,13 +254,32 @@ void PeerRuntime::HandlePendingDatagramCompletion(
     auto *peer = ProtocolPeer();
     if (event.error == wgnx::platform::socket_error::none) {
         RecordTransmittedBytes(event.bytes_sent, event.occurred_at);
+        OnAuthenticatedPacketTraversal(event.peer, event.timer_facts, effects);
+        OnAuthenticatedPacketSent(event.peer, effects);
+        if (kind == PendingDatagramKind::HandshakeInitiation) {
+            effects.Add(ArmProtocolTimerEffect{
+                .peer = event.peer,
+                .hook = wgnx::wireguard::TimerHook::RetransmitHandshake,
+                .deadline = HandshakeRetryDeadline(event.timer_facts),
+            });
+        }
         if (kind == PendingDatagramKind::TransportData && peer != nullptr) {
             static_cast<void>(m_controller.ApplyStagedSendOutcome(
                 *peer,
                 wgnx::wireguard::OutboundSendOutcome::Sent()));
+            OnDataPacketSent(event.peer, event.timer_facts, effects);
             effects.Add(QueueInnerPacketSubmissionEffect{
                 .peer = event.peer,
             });
+            if (peer->current_keypair.NeedsRekeyAt(
+                    wgnx::wireguard::GetMonotonicTime()) &&
+                !StartHandshake(event.peer, event.timer_facts, effects, false)) {
+                EnterActivationError(
+                    wgnx::PeerErrorStage::Handshake,
+                    wgnx::PeerErrorCode::HandshakeInitFailed,
+                    event.occurred_at,
+                    &effects);
+            }
         }
         return;
     }

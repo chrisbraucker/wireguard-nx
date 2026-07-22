@@ -222,10 +222,31 @@ private:
         const TimerFacts &timer_facts) const;
     wgnx::wireguard::TimerDeadline KeepaliveDeadline(
         const TimerFacts &timer_facts) const;
-    wgnx::wireguard::TimerDeadline RekeyDeadline(
+    wgnx::wireguard::TimerDeadline NewHandshakeDeadline(
+        const TimerFacts &timer_facts) const;
+    wgnx::wireguard::TimerDeadline PersistentKeepaliveDeadline(
         const TimerFacts &timer_facts) const;
     wgnx::wireguard::TimerDeadline ZeroKeyMaterialDeadline(
         const TimerFacts &timer_facts) const;
+    void OnAuthenticatedPacketTraversal(
+        const PeerIdentity &identity,
+        const TimerFacts &timer_facts,
+        EffectBatch &effects);
+    void OnAuthenticatedPacketSent(const PeerIdentity &identity, EffectBatch &effects);
+    void OnAuthenticatedPacketReceived(const PeerIdentity &identity, EffectBatch &effects);
+    void OnDataPacketSent(
+        const PeerIdentity &identity,
+        const TimerFacts &timer_facts,
+        EffectBatch &effects);
+    void OnDataPacketReceived(
+        const PeerIdentity &identity,
+        const TimerFacts &timer_facts,
+        EffectBatch &effects);
+    void OnSessionDerived(
+        const PeerIdentity &identity,
+        const TimerFacts &timer_facts,
+        EffectBatch &effects);
+    void OnHandshakeComplete(const PeerIdentity &identity, EffectBatch &effects);
     void SuspendTransport(const PeerIdentity &identity, EffectBatch &effects);
     void RecoverTransport(
         const PeerIdentity &identity,

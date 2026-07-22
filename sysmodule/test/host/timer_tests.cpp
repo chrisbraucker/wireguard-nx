@@ -17,16 +17,25 @@ void TestTimerIntent(TestContext &context) {
         pair.initiator->name);
     wgnx::wireguard::wg_timers_schedule(
         &timers,
-        wgnx::wireguard::TimerHook::Rekey,
+        wgnx::wireguard::TimerHook::NewHandshake,
         wgnx::wireguard::TimerDeadlineFromJiffies(120'000),
+        pair.initiator->name);
+    wgnx::wireguard::wg_timers_schedule(
+        &timers,
+        wgnx::wireguard::TimerHook::PersistentKeepalive,
+        wgnx::wireguard::TimerDeadlineFromJiffies(25'000),
         pair.initiator->name);
     WGNX_TEST_REQUIRE(
         context,
         timers.retransmit_handshake.pending &&
             timers.retransmit_handshake.deadline ==
                 wgnx::wireguard::TimerDeadlineFromJiffies(5'000) &&
-            timers.rekey.pending &&
-            timers.rekey.deadline == wgnx::wireguard::TimerDeadlineFromJiffies(120'000),
+            timers.new_handshake.pending &&
+            timers.new_handshake.deadline ==
+                wgnx::wireguard::TimerDeadlineFromJiffies(120'000) &&
+            timers.persistent_keepalive.pending &&
+            timers.persistent_keepalive.deadline ==
+                wgnx::wireguard::TimerDeadlineFromJiffies(25'000),
         "timer schedule state or deadline diverged");
 
     wgnx::wireguard::wg_timers_schedule(
@@ -49,7 +58,7 @@ void TestTimerIntent(TestContext &context) {
         context,
         !timers.retransmit_handshake.pending &&
             timers.retransmit_handshake.deadline == wgnx::wireguard::TimerDeadline{} &&
-            timers.rekey.pending,
+            timers.new_handshake.pending && timers.persistent_keepalive.pending,
         "single timer cancellation changed the wrong timer state");
     wgnx::wireguard::wg_timers_cancel_all(&timers, pair.initiator->name);
     WGNX_TEST_REQUIRE(context, !wgnx::wireguard::wg_timers_any_pending(timers), "cancel-all left timer intent pending");
@@ -107,6 +116,23 @@ void TestTimerCoordinator(TestContext &context) {
         context,
         !coordinator.IsCurrent(retry, next_sequence),
         "retry timer token crossed a handshake-sequence boundary");
+
+    for (const TimerHook hook : {
+             TimerHook::SendKeepalive,
+             TimerHook::NewHandshake,
+             TimerHook::PersistentKeepalive,
+         }) {
+        const TimerToken first_hook_token = coordinator.Arm(hook, first_owner);
+        const TimerToken replacement_hook_token = coordinator.Arm(hook, first_owner);
+        coordinator.Cancel(hook);
+        WGNX_TEST_REQUIRE(
+            context,
+            first_hook_token.IsValid() && replacement_hook_token.IsValid() &&
+                first_hook_token != replacement_hook_token &&
+                !coordinator.IsCurrent(first_hook_token, first_owner) &&
+                !coordinator.IsCurrent(replacement_hook_token, first_owner),
+            "authenticated-activity timer replacement or cancellation retained stale work");
+    }
 }
 
 void TestTimerSchedule(TestContext &context) {
@@ -175,6 +201,15 @@ void TestTimerSchedule(TestContext &context) {
         !schedule.Arm({}, TimerDeadlineFromJiffies(400)) &&
             !schedule.CaptureExpiration(TimerHook::SendKeepalive),
         "timer schedule accepted invalid or unarmed work");
+
+    const TimerToken persistent = coordinator.Arm(TimerHook::PersistentKeepalive, owner);
+    WGNX_TEST_REQUIRE(
+        context,
+        schedule.Arm(persistent, TimerDeadlineFromJiffies(500)) &&
+            schedule.CaptureExpiration(TimerHook::PersistentKeepalive) &&
+            schedule.TakeDelivery(TimerHook::PersistentKeepalive) == persistent &&
+            !schedule.IsArmed(TimerHook::PersistentKeepalive),
+        "persistent keepalive timer did not preserve captured delivery ownership");
 }
 
 } // namespace wgnx::test

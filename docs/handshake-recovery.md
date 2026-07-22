@@ -58,9 +58,9 @@ staged packets. It preserves configured static identity, static-static
 precomputation, cookie state, endpoint configuration, and the UDP binding.
 
 This timer remains active when the development transport-suspension experiment
-cancels retransmit, keepalive, and rekey activity. Full authenticated-activity
-timer semantics, including new-handshake and persistent-keepalive interactions,
-remain Milestone 5 work.
+cancels retransmit, delayed-keepalive, new-handshake, and persistent-keepalive
+activity. The authenticated-activity timer semantics are documented in
+[`authenticated-activity-timers.md`](authenticated-activity-timers.md).
 
 ## Stale Timer Rejection
 

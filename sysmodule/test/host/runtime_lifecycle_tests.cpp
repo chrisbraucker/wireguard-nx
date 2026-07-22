@@ -348,8 +348,8 @@ void TestRuntimeContracts(TestContext &context) {
     WGNX_TEST_REQUIRE(
         context,
         MaxEffectsForEvent<ActivationRequestedEvent>() == 5 &&
-            MaxEffectsForEvent<DeactivationRequestedEvent>() == 5 &&
-            MaxEffectsForEvent<TransportFailureEvent>() == 5 &&
+            MaxEffectsForEvent<DeactivationRequestedEvent>() == 6 &&
+            MaxEffectsForEvent<TransportFailureEvent>() == 6 &&
             MaxEffectsForEvent<EndpointResolvedEvent>() == 5 &&
             MaxEffectsForEvent<UdpBindOpenedEvent>() == 7 &&
             MaxEffectsForEvent<UdpRebindRequestedEvent>() == 1 &&
@@ -403,15 +403,12 @@ void TestPeerRegistryOwnership(TestContext &context) {
         .occurred_at = 6,
     });
     const auto second_activation = ActivateTestPeer(coordinator, 1, 41, 8);
-    const auto *timer = second_activation.Size() > 0
-        ? std::get_if<ArmProtocolTimerEffect>(second_activation.begin())
-        : nullptr;
     const auto first_protocol = coordinator.ProtocolSnapshot(0);
     const auto second_protocol = coordinator.ProtocolSnapshot(1);
 
     WGNX_TEST_REQUIRE(
         context,
-        first_activation.Empty() && timer != nullptr &&
+        first_activation.Empty() && second_activation.Size() == 2 &&
             coordinator.ActivePeerIndex() == 1 &&
             coordinator.AutoStartPeerIndex() == 0 &&
             coordinator.Lifecycle(0)->state == wgnx::PeerRuntimeState::Error &&
@@ -419,8 +416,7 @@ void TestPeerRegistryOwnership(TestContext &context) {
             !first_protocol.instantiated &&
             coordinator.Lifecycle(1)->state == wgnx::PeerRuntimeState::Handshaking &&
             coordinator.Lifecycle(1)->activation_generation == ActivationGeneration{1} &&
-            second_protocol.instantiated &&
-            coordinator.IsCurrentTimerEffect(*timer),
+            second_protocol.instantiated,
         "peer runtime slots did not isolate index-correlated mutable state");
 
     static_cast<void>(coordinator.ClearConfiguration(20));
@@ -475,7 +471,7 @@ void TestPeerRuntimeLifecycle(TestContext &context) {
     const auto binding = coordinator.BindingSnapshot(0);
     WGNX_TEST_REQUIRE(
         context,
-        opened.Size() == 3 &&
+        opened.Size() == 2 &&
             coordinator.Lifecycle(0)->state == wgnx::PeerRuntimeState::Handshaking &&
             binding.IsOpen(),
         "activation did not enter peer-owned handshaking state");
@@ -591,8 +587,8 @@ void TestRuntimeCoordinatorDispatch(TestContext &context) {
     const auto suspended_binding = coordinator.BindingSnapshot(0);
     WGNX_TEST_REQUIRE(
         context,
-        stale_failure.Empty() && failure.Size() == 4 &&
-            canceled_timer_count == 3 && closed_socket != nullptr &&
+        stale_failure.Empty() && failure.Size() == 5 &&
+            canceled_timer_count == 4 && closed_socket != nullptr &&
             closed_socket->socket == binding.socket &&
             suspended_binding.suspended && !suspended_binding.IsOpen() &&
             coordinator.Lifecycle(0)->state == wgnx::PeerRuntimeState::Handshaking,
@@ -776,19 +772,13 @@ void TestRuntimePeerActivation(TestContext &context) {
         },
         .occurred_at = 3'000,
     });
-    const auto *send = opened.Size() > 1
-        ? std::get_if<SendPendingDatagramEffect>(opened.begin() + 1)
-        : nullptr;
-    const auto *handshake_timer = opened.Size() > 0
-        ? std::get_if<ArmProtocolTimerEffect>(opened.begin())
+    const auto *send = opened.Size() > 0
+        ? std::get_if<SendPendingDatagramEffect>(opened.begin())
         : nullptr;
     WGNX_TEST_REQUIRE(
         context,
-        opened.Size() == 3 && send != nullptr && handshake_timer != nullptr &&
-            handshake_timer->deadline ==
-                TimerDeadlineFromJiffies(500) +
-                    GetHandshakeRetryDelay(HandshakeRetryEntropy) &&
-            std::get_if<QueueReceiveEffect>(opened.begin() + 2) != nullptr &&
+        opened.Size() == 2 && send != nullptr &&
+            std::get_if<QueueReceiveEffect>(opened.begin() + 1) != nullptr &&
             coordinator.Lifecycle(0)->state == wgnx::PeerRuntimeState::Handshaking &&
             coordinator.ProtocolSnapshot(0).instantiated &&
             coordinator.BindingSnapshot(0).Matches(open->socket_generation, 42),
@@ -808,11 +798,23 @@ void TestRuntimePeerActivation(TestContext &context) {
         .datagram_generation = send->datagram_generation,
         .bytes_sent = snapshot.size,
         .error = wgnx::platform::socket_error::none,
+        .timer_facts = {
+            .now = TimerDeadlineFromJiffies(500),
+            .random_u32 = HandshakeRetryEntropy,
+        },
         .occurred_at = 4'000,
     });
+    const auto *handshake_timer = sent.Size() > 2
+        ? std::get_if<ArmProtocolTimerEffect>(sent.begin() + 2)
+        : nullptr;
     WGNX_TEST_REQUIRE(
         context,
-        sent.Empty() &&
+        sent.Size() == 3 && handshake_timer != nullptr &&
+            handshake_timer->hook == TimerHook::RetransmitHandshake &&
+            handshake_timer->deadline ==
+                TimerDeadlineFromJiffies(500) +
+                    GetHandshakeRetryDelay(HandshakeRetryEntropy) &&
+            coordinator.IsCurrentTimerEffect(*handshake_timer) &&
             coordinator.Lifecycle(0)->tx_bytes == HandshakeInitiationSize &&
             !coordinator.SnapshotPendingDatagram(
                 expected_activation,
@@ -867,6 +869,34 @@ void TestRuntimeOutboundLifecycle(TestContext &context) {
     const TimerFacts timer_facts{
         .now = TimerDeadlineFromJiffies(500),
     };
+    const auto *initial_send = effects.Size() > 0
+        ? std::get_if<SendPendingDatagramEffect>(effects.begin())
+        : nullptr;
+    PendingDatagramSnapshot snapshot{};
+    const SendPendingDatagramEffect *send = nullptr;
+    WGNX_TEST_REQUIRE(
+        context,
+        effects.Size() == 2 && initial_send != nullptr && coordinator.SnapshotPendingDatagram(
+            identity,
+            initial_send->datagram_generation,
+            snapshot) && snapshot.size == HandshakeInitiationSize,
+        "activation did not stage the initial handshake submission");
+    effects = coordinator.Dispatch(PendingDatagramSentEvent{
+        .peer = identity,
+        .datagram_generation = initial_send->datagram_generation,
+        .bytes_sent = snapshot.size,
+        .error = wgnx::platform::socket_error::none,
+        .timer_facts = timer_facts,
+        .occurred_at = 2'000,
+    });
+    const auto *initial_arm = effects.Size() > 2
+        ? std::get_if<ArmProtocolTimerEffect>(effects.begin() + 2)
+        : nullptr;
+    WGNX_TEST_REQUIRE(
+        context,
+        effects.Size() == 3 && initial_arm != nullptr && initial_arm->token.IsValid(),
+        "initial handshake send did not arm retransmission after submission");
+
     const auto staged = coordinator.Dispatch(InnerPacketStagedEvent{
         .peer = identity,
         .packet = FirstPacket,
@@ -876,17 +906,9 @@ void TestRuntimeOutboundLifecycle(TestContext &context) {
     });
     PeerPacketStateSnapshot packet_state{};
     static_cast<void>(coordinator.SnapshotPacketState(packet_state));
-    const auto *send = effects.Size() > 1
-        ? std::get_if<SendPendingDatagramEffect>(effects.begin() + 1)
-        : nullptr;
-    const auto *initial_arm = effects.Size() > 0
-        ? std::get_if<ArmProtocolTimerEffect>(effects.begin())
-        : nullptr;
     WGNX_TEST_REQUIRE(
         context,
-        effects.Size() == 3 && initial_arm != nullptr &&
-            initial_arm->token.IsValid() && send != nullptr &&
-            staged.Empty() && packet_state.staged_packet_count == 1,
+        staged.Empty() && packet_state.staged_packet_count == 1,
         "staged packet did not start the production handshake path");
 
     auto stale_timer_token = initial_arm->token;
@@ -905,12 +927,27 @@ void TestRuntimeOutboundLifecycle(TestContext &context) {
             coordinator.IsCurrentTimerEffect(*initial_arm),
         "stale queued timer delivery mutated the peer runtime");
 
-    PendingDatagramSnapshot snapshot{};
     constexpr std::uint32_t MaxSendAttempts = MaxTimerHandshakes + 2;
-    for (std::uint32_t attempt = 1; attempt <= MaxSendAttempts; ++attempt) {
+    for (std::uint32_t attempt = 2; attempt <= MaxSendAttempts; ++attempt) {
+        effects = coordinator.Dispatch(ProtocolTimerExpiredEvent{
+            .peer = identity,
+            .hook = TimerHook::RetransmitHandshake,
+            .token = timer_token,
+            .timer_facts = timer_facts,
+            .occurred_at = 5'000 + attempt,
+        });
+        send = effects.Size() > 1
+            ? std::get_if<SendPendingDatagramEffect>(effects.begin() + 1)
+            : nullptr;
         WGNX_TEST_REQUIRE(
             context,
-            send != nullptr && coordinator.SnapshotPendingDatagram(
+            effects.Size() == 2 &&
+                std::get_if<CancelProtocolTimerEffect>(effects.begin()) != nullptr &&
+                send != nullptr,
+            "runtime retry expiration did not request a fresh initiation");
+        WGNX_TEST_REQUIRE(
+            context,
+            coordinator.SnapshotPendingDatagram(
                 identity,
                 send->datagram_generation,
                 snapshot) && snapshot.size == HandshakeInitiationSize,
@@ -920,35 +957,16 @@ void TestRuntimeOutboundLifecycle(TestContext &context) {
             .datagram_generation = send->datagram_generation,
             .bytes_sent = snapshot.size,
             .error = wgnx::platform::socket_error::none,
+            .timer_facts = timer_facts,
             .occurred_at = 4'000 + attempt,
         });
-        WGNX_TEST_REQUIRE(
-            context,
-            effects.Empty(),
-            "successful handshake submission produced an unexpected follow-up");
-        if (attempt == MaxSendAttempts) {
-            break;
-        }
-        effects = coordinator.Dispatch(ProtocolTimerExpiredEvent{
-            .peer = identity,
-            .hook = TimerHook::RetransmitHandshake,
-            .token = timer_token,
-            .timer_facts = timer_facts,
-            .occurred_at = 5'000 + attempt,
-        });
-        send = effects.Size() > 2
-            ? std::get_if<SendPendingDatagramEffect>(effects.begin() + 2)
-            : nullptr;
-        const auto *retry_arm = effects.Size() > 1
-            ? std::get_if<ArmProtocolTimerEffect>(effects.begin() + 1)
+        const auto *retry_arm = effects.Size() > 2
+            ? std::get_if<ArmProtocolTimerEffect>(effects.begin() + 2)
             : nullptr;
         WGNX_TEST_REQUIRE(
             context,
-            effects.Size() == 3 &&
-                std::get_if<CancelProtocolTimerEffect>(effects.begin()) != nullptr &&
-                retry_arm != nullptr && retry_arm->token.IsValid() &&
-                send != nullptr,
-            "runtime retry expiration did not request a fresh initiation");
+            effects.Size() == 3 && retry_arm != nullptr && retry_arm->token.IsValid(),
+            "successful handshake retry did not renew retransmission timing");
         timer_token = retry_arm->token;
     }
 
@@ -979,8 +997,8 @@ void TestRuntimeOutboundLifecycle(TestContext &context) {
         .timer_facts = timer_facts,
         .occurred_at = 8'000,
     });
-    send = effects.Size() > 1
-        ? std::get_if<SendPendingDatagramEffect>(effects.begin() + 1)
+    send = effects.Size() > 0
+        ? std::get_if<SendPendingDatagramEffect>(effects.begin())
         : nullptr;
     WGNX_TEST_REQUIRE(
         context,
@@ -1013,7 +1031,7 @@ void TestRuntimeOutboundLifecycle(TestContext &context) {
     runtime::SetMonotonicTime(SessionBirthTime);
     WGNX_TEST_REQUIRE(
         context,
-        effects.Empty() && noise_handshake_begin_session(
+        effects.Size() == 3 && noise_handshake_begin_session(
             &responder.responder_device,
             responder.responder),
         "responder session derivation failed");
@@ -1042,6 +1060,15 @@ void TestRuntimeOutboundLifecycle(TestContext &context) {
         effects.Size() == 6 && send != nullptr &&
             coordinator.Lifecycle(0)->state == wgnx::PeerRuntimeState::Active,
         "session establishment did not arm timers and release outbound work");
+    WGNX_TEST_REQUIRE(
+        context,
+        std::get_if<ArmProtocolTimerEffect>(effects.begin()) != nullptr &&
+            std::get_if<CancelProtocolTimerEffect>(effects.begin() + 1) != nullptr &&
+            std::get_if<ArmProtocolTimerEffect>(effects.begin() + 2) != nullptr &&
+            std::get_if<CancelProtocolTimerEffect>(effects.begin() + 3) != nullptr &&
+            std::get_if<SendPendingDatagramEffect>(effects.begin() + 4) != nullptr &&
+            std::get_if<QueueInnerPacketSubmissionEffect>(effects.begin() + 5) != nullptr,
+        "session derivation did not produce authenticated-activity timer transitions");
 
     WGNX_TEST_REQUIRE(
         context,
@@ -1073,7 +1100,16 @@ void TestRuntimeOutboundLifecycle(TestContext &context) {
         .error = wgnx::platform::socket_error::none,
         .occurred_at = SessionBirthTime + 1,
     });
-    WGNX_TEST_REQUIRE(context, effects.Empty(), "keepalive completion mutated queue policy");
+    WGNX_TEST_REQUIRE(
+        context,
+        effects.Size() == 2 &&
+            std::get_if<ArmProtocolTimerEffect>(effects.begin()) != nullptr &&
+            std::get_if<CancelProtocolTimerEffect>(effects.begin() + 1) != nullptr &&
+            std::get<ArmProtocolTimerEffect>(effects.begin()[0]).hook ==
+                TimerHook::PersistentKeepalive &&
+            std::get<CancelProtocolTimerEffect>(effects.begin()[1]).hook ==
+                TimerHook::SendKeepalive,
+        "keepalive completion did not record authenticated traversal");
 
     effects = coordinator.Dispatch(ProcessOutboundQueueEvent{
         .peer = identity,
@@ -1100,8 +1136,17 @@ void TestRuntimeOutboundLifecycle(TestContext &context) {
     static_cast<void>(coordinator.SnapshotPacketState(packet_state));
     WGNX_TEST_REQUIRE(
         context,
-        effects.Size() == 1 &&
-            std::get_if<QueueInnerPacketSubmissionEffect>(effects.begin()) != nullptr &&
+        effects.Size() == 4 &&
+            std::get_if<ArmProtocolTimerEffect>(effects.begin()) != nullptr &&
+            std::get_if<CancelProtocolTimerEffect>(effects.begin() + 1) != nullptr &&
+            std::get_if<ArmProtocolTimerEffect>(effects.begin() + 2) != nullptr &&
+            std::get<ArmProtocolTimerEffect>(effects.begin()[0]).hook ==
+                TimerHook::PersistentKeepalive &&
+            std::get<CancelProtocolTimerEffect>(effects.begin()[1]).hook ==
+                TimerHook::SendKeepalive &&
+            std::get<ArmProtocolTimerEffect>(effects.begin()[2]).hook ==
+                TimerHook::NewHandshake &&
+            std::get_if<QueueInnerPacketSubmissionEffect>(effects.begin() + 3) != nullptr &&
             packet_state.staged_packet_count == 0,
         "successful transport completion did not retire and continue the queue");
 
@@ -1139,8 +1184,8 @@ void TestRuntimeOutboundLifecycle(TestContext &context) {
         },
         .occurred_at = SessionBirthTime + wgnx::platform::NSEC_PER_SEC,
     });
-    send = effects.Size() == 3
-        ? std::get_if<SendPendingDatagramEffect>(effects.begin() + 2)
+    send = effects.Size() == 4
+        ? std::get_if<SendPendingDatagramEffect>(effects.begin() + 3)
         : nullptr;
     const auto responder_pending_protocol = coordinator.ProtocolSnapshot(0);
     const auto roamed_binding = coordinator.BindingSnapshot(0);
@@ -1184,8 +1229,8 @@ void TestRuntimeOutboundLifecycle(TestContext &context) {
     });
     WGNX_TEST_REQUIRE(
         context,
-        effects.Empty(),
-        "handshake response completion produced an unexpected follow-up");
+        effects.Size() == 2,
+        "handshake response completion did not record authenticated traversal");
 
     constexpr std::array<std::uint8_t, 20> InboundPacket = {
         0x45, 0x00, 0x00, 0x14, 0x00, 0x02, 0x00, 0x00, 0x40, 0x11,
@@ -1402,7 +1447,7 @@ void TestRuntimeOutboundLifecycle(TestContext &context) {
     const auto suspended_binding = coordinator.BindingSnapshot(0);
     WGNX_TEST_REQUIRE(
         context,
-        effects.Size() == 4 && suspended_binding.suspended &&
+        effects.Size() == 5 && suspended_binding.suspended &&
             !suspended_binding.IsOpen() &&
             coordinator.Lifecycle(0)->state == wgnx::PeerRuntimeState::Active,
         "send failure did not apply peer-owned nonterminal suspension policy");

@@ -16,10 +16,12 @@ wg_timer_hook_state *GetHookState(wg_timers *timers, TimerHook hook) {
             return &timers->retransmit_handshake;
         case TimerHook::SendKeepalive:
             return &timers->send_keepalive;
+        case TimerHook::NewHandshake:
+            return &timers->new_handshake;
         case TimerHook::ZeroKeyMaterial:
             return &timers->zero_key_material;
-        case TimerHook::Rekey:
-            return &timers->rekey;
+        case TimerHook::PersistentKeepalive:
+            return &timers->persistent_keepalive;
     }
 
     return nullptr;
@@ -37,10 +39,12 @@ const char *GetTimerHookName(TimerHook hook) {
             return "retransmit_handshake";
         case TimerHook::SendKeepalive:
             return "send_keepalive";
+        case TimerHook::NewHandshake:
+            return "new_handshake";
         case TimerHook::ZeroKeyMaterial:
             return "zero_key_material";
-        case TimerHook::Rekey:
-            return "rekey";
+        case TimerHook::PersistentKeepalive:
+            return "persistent_keepalive";
     }
 
     return "unknown";
@@ -98,15 +102,18 @@ void wg_timers_cancel_all(wg_timers *timers, const char *peer_name) {
 
     wg_timers_cancel(timers, TimerHook::RetransmitHandshake, peer_name);
     wg_timers_cancel(timers, TimerHook::SendKeepalive, peer_name);
+    wg_timers_cancel(timers, TimerHook::NewHandshake, peer_name);
     wg_timers_cancel(timers, TimerHook::ZeroKeyMaterial, peer_name);
-    wg_timers_cancel(timers, TimerHook::Rekey, peer_name);
+    wg_timers_cancel(timers, TimerHook::PersistentKeepalive, peer_name);
+    timers->need_another_keepalive = false;
 }
 
 bool wg_timers_any_pending(const wg_timers &timers) {
     return GetHookState(&timers, TimerHook::RetransmitHandshake)->pending ||
            GetHookState(&timers, TimerHook::SendKeepalive)->pending ||
+           GetHookState(&timers, TimerHook::NewHandshake)->pending ||
            GetHookState(&timers, TimerHook::ZeroKeyMaterial)->pending ||
-           GetHookState(&timers, TimerHook::Rekey)->pending;
+           GetHookState(&timers, TimerHook::PersistentKeepalive)->pending;
 }
 
 } // namespace wgnx::wireguard

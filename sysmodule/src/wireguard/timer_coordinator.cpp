@@ -8,8 +8,9 @@ std::size_t TimerCoordinator::HookIndex(TimerHook hook) {
     switch (hook) {
         case TimerHook::RetransmitHandshake: return 0;
         case TimerHook::SendKeepalive: return 1;
-        case TimerHook::ZeroKeyMaterial: return 2;
-        case TimerHook::Rekey: return 3;
+        case TimerHook::NewHandshake: return 2;
+        case TimerHook::ZeroKeyMaterial: return 3;
+        case TimerHook::PersistentKeepalive: return 4;
     }
     return 0;
 }

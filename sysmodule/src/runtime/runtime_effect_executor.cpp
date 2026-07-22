@@ -108,6 +108,7 @@ NOINLINE void RuntimeEffectExecutor::ExecutePendingDatagramSend(
                 .peer = effect.peer,
                 .datagram_generation = effect.datagram_generation,
                 .error = wgnx::platform::socket_error::send_failed,
+                .timer_facts = CaptureTimerFacts(),
                 .occurred_at = GetRuntimeNowNs(),
             });
         }
@@ -141,6 +142,7 @@ NOINLINE void RuntimeEffectExecutor::ExecutePendingDatagramSend(
             .datagram_generation = effect.datagram_generation,
             .bytes_sent = sent,
             .error = error,
+            .timer_facts = CaptureTimerFacts(),
             .occurred_at = GetRuntimeNowNs(),
         });
     }

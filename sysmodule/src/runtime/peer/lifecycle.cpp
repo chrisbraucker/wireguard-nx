@@ -378,8 +378,9 @@ void PeerRuntime::EnterActivationError(
     for (const auto hook : {
              wgnx::wireguard::TimerHook::RetransmitHandshake,
              wgnx::wireguard::TimerHook::SendKeepalive,
-             wgnx::wireguard::TimerHook::Rekey,
+             wgnx::wireguard::TimerHook::NewHandshake,
              wgnx::wireguard::TimerHook::ZeroKeyMaterial,
+             wgnx::wireguard::TimerHook::PersistentKeepalive,
          }) {
         effects->Add(CancelProtocolTimerEffect{
             .peer = identity,

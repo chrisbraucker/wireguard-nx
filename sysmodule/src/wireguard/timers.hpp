@@ -10,8 +10,9 @@ namespace wgnx::wireguard {
 enum class TimerHook : std::uint8_t {
     RetransmitHandshake = 0,
     SendKeepalive = 1,
-    ZeroKeyMaterial = 2,
-    Rekey = 3,
+    NewHandshake = 2,
+    ZeroKeyMaterial = 3,
+    PersistentKeepalive = 4,
 };
 
 struct TimerClock {
@@ -43,8 +44,10 @@ struct wg_timer_hook_state {
 struct wg_timers {
     wg_timer_hook_state retransmit_handshake{};
     wg_timer_hook_state send_keepalive{};
+    wg_timer_hook_state new_handshake{};
     wg_timer_hook_state zero_key_material{};
-    wg_timer_hook_state rekey{};
+    wg_timer_hook_state persistent_keepalive{};
+    bool need_another_keepalive{false};
 };
 
 const char *GetTimerHookName(TimerHook hook);

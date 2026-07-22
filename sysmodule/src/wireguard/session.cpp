@@ -331,7 +331,8 @@ void noise_keypair::Establish(
     MonotonicTimePoint birth_time,
     const noise_symmetric_key &sending_key,
     const noise_symmetric_key &receiving_key,
-    std::uint64_t send_counter) {
+    std::uint64_t send_counter,
+    bool is_initiator) {
     Reset();
     if (local_index == 0 || remote_index == 0 ||
         birth_time < MonotonicTimePoint{} ||
@@ -348,6 +349,7 @@ void noise_keypair::Establish(
     m_receiving_key.bytes = receiving_key.bytes;
     m_receiving_key.valid = receiving_key.valid;
     m_send_counter = send_counter;
+    m_is_initiator = is_initiator;
 }
 
 void noise_keypair::Reset() {
@@ -355,6 +357,7 @@ void noise_keypair::Reset() {
     m_local_index = 0;
     m_remote_index = 0;
     m_send_counter = 0;
+    m_is_initiator = false;
     m_birth_time = {};
     m_sending_key.Clear();
     m_receiving_key.Clear();
@@ -376,6 +379,7 @@ noise_keypair &noise_keypair::operator=(noise_keypair &&other) noexcept {
         m_local_index = other.m_local_index;
         m_remote_index = other.m_remote_index;
         m_send_counter = other.m_send_counter;
+        m_is_initiator = other.m_is_initiator;
         m_birth_time = other.m_birth_time;
         m_sending_key = std::move(other.m_sending_key);
         m_receiving_key = std::move(other.m_receiving_key);
@@ -384,6 +388,7 @@ noise_keypair &noise_keypair::operator=(noise_keypair &&other) noexcept {
         other.m_local_index = 0;
         other.m_remote_index = 0;
         other.m_send_counter = 0;
+        other.m_is_initiator = false;
         other.m_birth_time = {};
         other.m_receive_replay_window.Reset();
     }
@@ -418,6 +423,13 @@ KeypairSendState noise_keypair::SendStateAt(MonotonicTimePoint now) const {
     }
 
     return KeypairSendState::Ready;
+}
+
+bool noise_keypair::NeedsRekeyAt(MonotonicTimePoint now) const {
+    const KeypairAgeResult age = AgeAt(now);
+    return age.valid &&
+           (m_send_counter > RekeyAfterMessages ||
+               (m_is_initiator && age.age > RekeyAfterTime));
 }
 
 const char *GetKeypairSendStateName(KeypairSendState state) {

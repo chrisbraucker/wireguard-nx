@@ -46,6 +46,8 @@ void PeerRuntime::CompleteInitiatorSession(
     UpdateEndpointFromAuthenticatedPacket(event);
     const auto packet = event.packet.Bytes();
     RecordReceivedBytes(packet.size(), event.occurred_at);
+    OnAuthenticatedPacketTraversal(event.peer, event.timer_facts, effects);
+    OnAuthenticatedPacketReceived(event.peer, effects);
     if (m_lifecycle.state == wgnx::PeerRuntimeState::Handshaking) {
         if (!EnterActive(event.peer.activation_generation, event.occurred_at)) {
             return;
@@ -69,27 +71,8 @@ void PeerRuntime::CompleteInitiatorSession(
         return;
     }
 
-    effects.Add(CancelProtocolTimerEffect{
-        .peer = event.peer,
-        .hook = wgnx::wireguard::TimerHook::RetransmitHandshake,
-    });
-    if (peer->persistent_keepalive_interval > 0) {
-        effects.Add(ArmProtocolTimerEffect{
-            .peer = event.peer,
-            .hook = wgnx::wireguard::TimerHook::SendKeepalive,
-            .deadline = KeepaliveDeadline(event.timer_facts),
-        });
-    }
-    effects.Add(ArmProtocolTimerEffect{
-        .peer = event.peer,
-        .hook = wgnx::wireguard::TimerHook::Rekey,
-        .deadline = RekeyDeadline(event.timer_facts),
-    });
-    effects.Add(ArmProtocolTimerEffect{
-        .peer = event.peer,
-        .hook = wgnx::wireguard::TimerHook::ZeroKeyMaterial,
-        .deadline = ZeroKeyMaterialDeadline(event.timer_facts),
-    });
+    OnSessionDerived(event.peer, event.timer_facts, effects);
+    OnHandshakeComplete(event.peer, effects);
     effects.Add(SendPendingDatagramEffect{
         .peer = event.peer,
         .datagram_generation = m_pending_datagram.generation,
@@ -128,6 +111,8 @@ void PeerRuntime::HandleTransportData(
 
     UpdateEndpointFromAuthenticatedPacket(event);
     RecordReceivedBytes(event.packet.Bytes().size(), event.occurred_at);
+    OnAuthenticatedPacketTraversal(event.peer, event.timer_facts, effects);
+    OnAuthenticatedPacketReceived(event.peer, effects);
     logger::Log(
         "Accepted WG transport data peer=%u activation=%u bytes=%zu payload=%zu source=%s slot=%s counter=%llu promoted=%u",
         event.peer.peer_index.Value(),
@@ -149,28 +134,8 @@ void PeerRuntime::HandleTransportData(
             m_lifecycle.last_handshake_ns = event.occurred_at;
             m_lifecycle.established = true;
         }
-        effects.Add(CancelProtocolTimerEffect{
-            .peer = event.peer,
-            .hook = wgnx::wireguard::TimerHook::RetransmitHandshake,
-        });
-        effects.Add(ArmProtocolTimerEffect{
-            .peer = event.peer,
-            .hook = wgnx::wireguard::TimerHook::Rekey,
-            .deadline = RekeyDeadline(event.timer_facts),
-        });
-        effects.Add(ArmProtocolTimerEffect{
-            .peer = event.peer,
-            .hook = wgnx::wireguard::TimerHook::ZeroKeyMaterial,
-            .deadline = ZeroKeyMaterialDeadline(event.timer_facts),
-        });
+        OnHandshakeComplete(event.peer, effects);
         effects.Add(QueueInnerPacketSubmissionEffect{.peer = event.peer});
-    }
-    if (peer->persistent_keepalive_interval > 0) {
-        effects.Add(ArmProtocolTimerEffect{
-            .peer = event.peer,
-            .hook = wgnx::wireguard::TimerHook::SendKeepalive,
-            .deadline = KeepaliveDeadline(event.timer_facts),
-        });
     }
 
     if (result.decrypt.payload_size == 0) {
@@ -180,6 +145,8 @@ void PeerRuntime::HandleTransportData(
             event.peer.activation_generation.Value());
         return;
     }
+
+    OnDataPacketReceived(event.peer, event.timer_facts, effects);
 
     const auto padded_payload = std::span<const std::uint8_t>(
         m_decrypted_packet.bytes.data(),
@@ -261,6 +228,8 @@ void PeerRuntime::HandleEncryptedDatagram(
             CompleteInitiatorSession(event, effects);
             return;
         case wgnx::wireguard::HandshakePacketOutcome::InitiationConsumed:
+            OnAuthenticatedPacketTraversal(event.peer, event.timer_facts, effects);
+            OnAuthenticatedPacketReceived(event.peer, effects);
             if (!PrepareHandshakeResponse()) {
                 logger::Log(
                     "Failed WG handshake response peer=%u activation=%u reason=response_or_session_build",
@@ -270,18 +239,7 @@ void PeerRuntime::HandleEncryptedDatagram(
             }
             UpdateEndpointFromAuthenticatedPacket(event);
             RecordReceivedBytes(packet.size(), event.occurred_at);
-            if (peer->persistent_keepalive_interval > 0) {
-                effects.Add(ArmProtocolTimerEffect{
-                    .peer = event.peer,
-                    .hook = wgnx::wireguard::TimerHook::SendKeepalive,
-                .deadline = KeepaliveDeadline(event.timer_facts),
-                });
-            }
-            effects.Add(ArmProtocolTimerEffect{
-                .peer = event.peer,
-                .hook = wgnx::wireguard::TimerHook::ZeroKeyMaterial,
-                .deadline = ZeroKeyMaterialDeadline(event.timer_facts),
-            });
+            OnSessionDerived(event.peer, event.timer_facts, effects);
             effects.Add(SendPendingDatagramEffect{
                 .peer = event.peer,
                 .datagram_generation = m_pending_datagram.generation,

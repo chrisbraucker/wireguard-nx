@@ -699,6 +699,41 @@ void TestKeypairProtocolLimits(TestContext &context) {
             !keypair.CanReceiveAt(birth_time + RejectAfterTime),
         "RejectAfterTime boundary was not enforced exactly");
 
+    WGNX_TEST_REQUIRE(
+        context,
+        !keypair.NeedsRekeyAt(birth_time + RekeyAfterTime) &&
+            keypair.NeedsRekeyAt(
+                birth_time + RekeyAfterTime + std::chrono::nanoseconds{1}),
+        "initiator keypair did not request an age-based soft rekey at the upstream boundary");
+
+    noise_keypair responder_keypair{};
+    responder_keypair.Establish(
+        InitiatorIndex,
+        ResponderIndex,
+        birth_time,
+        sending_key,
+        receiving_key,
+        0,
+        false);
+    WGNX_TEST_REQUIRE(
+        context,
+        !responder_keypair.NeedsRekeyAt(
+            birth_time + RekeyAfterTime + std::chrono::nanoseconds{1}),
+        "responder keypair incorrectly initiated an age-based rekey");
+
+    noise_keypair soft_counter_keypair{};
+    soft_counter_keypair.Establish(
+        InitiatorIndex,
+        ResponderIndex,
+        birth_time,
+        sending_key,
+        receiving_key,
+        RekeyAfterMessages + 1);
+    WGNX_TEST_REQUIRE(
+        context,
+        soft_counter_keypair.NeedsRekeyAt(birth_time),
+        "keypair did not request a message-count soft rekey above the upstream threshold");
+
     noise_keypair final_counter_keypair{};
     final_counter_keypair.Establish(
         InitiatorIndex,
