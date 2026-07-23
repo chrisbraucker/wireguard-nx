@@ -2,7 +2,7 @@
 Language: Cpp
 BasedOnStyle: LLVM
 Standard: c++20
-ColumnLimit: 100
+ColumnLimit: 140
 IndentWidth: 4
 ContinuationIndentWidth: 4
 PointerAlignment: Left
@@ -11,6 +11,6 @@ SortIncludes: Never
 BreakBeforeBraces: Attach
 AllowShortFunctionsOnASingleLine: Empty
 AllowShortIfStatementsOnASingleLine: Never
-AllowShortLoopsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
 SpaceBeforeParens: ControlStatements
 ...
