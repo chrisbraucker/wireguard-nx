@@ -65,6 +65,9 @@ public:
         const PeerIdentity &peer,
         DatagramGeneration datagram_generation,
         PendingDatagramSnapshot &out) const;
+    [[nodiscard]] bool HasPendingDatagram(
+        const PeerIdentity &peer,
+        DatagramGeneration datagram_generation) const;
     [[nodiscard]] bool ViewDecryptedPacket(
         const PeerIdentity &peer,
         PacketGeneration packet_generation,

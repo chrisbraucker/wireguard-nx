@@ -263,8 +263,39 @@ WireGuard event semantics.
 
 ## Milestone 6: Endpoint And Transport Recovery
 
-**Status:** Host implementation and target validation complete for the NIFM
-local-path gate; on-device transition validation remains required.
+**Status:** Authenticated endpoint roaming, generation-safe rebinding,
+nonterminal BSD failure handling, and the NIFM local-path gate are implemented.
+Successful request states `Pending` and `OnHold` now suspend local socket
+ownership, while `Available` permits normal recovery. Focused device validation
+confirms Wi-Fi-to-Wi-Fi recovery, including an intervening flight-mode interval,
+without peer restart or OS stalls. The remaining physical-interface and roaming
+matrix is deferred until suitable test hardware and peer control are available.
+
+### Deferred Validation
+
+- Wi-Fi-to-Ethernet and Ethernet-to-Wi-Fi transitions require a compatible
+  Ethernet adapter.
+- A DHCP-less attachment requires a controllable access point or equivalent
+  network setup. Prior device observations indicate NIFM reports `Available`
+  only after Layer-3 initialization.
+- Authenticated endpoint roaming requires a peer whose authenticated source
+  endpoint can be changed during an active session.
+- A peer on the same local segment without Internet uplink remains a useful
+  future confirmation: NIFM may remain `Available`, while WireGuard itself must
+  establish reachability to that local peer.
+
+The observed local-only-network behavior is intentional: NIFM remains
+`Available` once the attachment has Layer-3 connectivity, but a remote peer
+outside that network fails through normal WireGuard handshake/recovery policy.
+NIFM therefore remains local-path authority only, never proof of remote-peer
+reachability.
+
+The sysmodule intentionally does not register its UDP socket descriptor with
+NIFM. Reverse-engineering and device probes did not establish a conclusive
+descriptor-registration procedure or a requirement for connection-state
+observation. Until that contract is understood and needed for a separate
+feature, the activation-owned NIFM request remains observation-only and BSD
+retains complete ownership of the transport socket.
 
 ### Goal
 

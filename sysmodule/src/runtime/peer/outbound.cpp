@@ -179,6 +179,13 @@ void PeerRuntime::ProcessOutboundQueue(
         if (m_lifecycle.state == wgnx::PeerRuntimeState::ResolvingEndpoint) {
             return;
         }
+        // NIFM Unavailable releases the local descriptor but intentionally
+        // retains bounded inner packets for the next confirmed local path.
+        // Do not consume a peer-owned pending-datagram slot until a binding can
+        // actually accept the resulting encrypted datagram.
+        if (!m_binding.IsOpen() || m_binding.IsSuspended()) {
+            return;
+        }
         if (!IsInTransportState()) {
             static_cast<void>(peer->staged_outbound_packets.Pop(
                 nullptr,

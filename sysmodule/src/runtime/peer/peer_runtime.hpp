@@ -142,6 +142,9 @@ public:
         ActivationGeneration activation_generation,
         DatagramGeneration datagram_generation,
         PendingDatagramSnapshot &out) const;
+    bool HasPendingDatagram(
+        ActivationGeneration activation_generation,
+        DatagramGeneration datagram_generation) const;
     bool ViewDecryptedPacket(
         ActivationGeneration activation_generation,
         PacketGeneration packet_generation,

@@ -178,6 +178,14 @@ bool RuntimeCoordinator::SnapshotPendingDatagram(
         out);
 }
 
+bool RuntimeCoordinator::HasPendingDatagram(
+    const PeerIdentity &identity,
+    DatagramGeneration datagram_generation) const {
+    const auto *peer = PeerAt(identity.peer_index);
+    return IsActiveIdentity(identity) && peer != nullptr &&
+           peer->HasPendingDatagram(identity.activation_generation, datagram_generation);
+}
+
 bool RuntimeCoordinator::ViewDecryptedPacket(
     const PeerIdentity &identity,
     PacketGeneration packet_generation,

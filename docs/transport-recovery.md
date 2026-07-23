@@ -49,21 +49,32 @@ result directly rather than using libnx's event-gated cache getters. Request
 creation, submission, cancellation, and closure all occur outside the daemon
 state mutex. NIFM does not own or register the transport socket.
 
-The project maps request state to three facts: `Available`, `Unavailable`, and
-`Unknown`. `Available` permits endpoint resolution, UDP opening, and normal
-WireGuard recovery. `Unavailable` is authoritative for local transport only: it
-suspends the current binding once and closes its descriptor, and
-preserves peer configuration, authenticated endpoint, key material, and bounded
-staged packets. A later `Available` opens one generation-tagged binding through
-the same replacement path as the manual bind bump. `Unknown`, failed request
-observations, and stale request generations preserve the previous authoritative
-decision. If an already-open binding was `Available` and NIFM then becomes
-`Unknown`, the runtime records one potential local-path change without closing
-the binding. The next confirmed `Available` consumes that marker by requesting
-one generation-safe rebind; repeated `Unknown` or `Available` observations are
-coalesced. This covers the observed 20.5.0 flight-mode sequence
-`Available -> OnHold/Unknown -> Available` without treating `OnHold` itself as
-proof of local-path loss.
+The runtime has three semantic local-path facts: `Available`, `Unavailable`,
+and `Unknown`. The Horizon 20.5.0 `IRequest` state-machine reconstruction
+establishes raw state `1` (`Pending`/reset) and raw state `2` (`OnHold`/submitted
+but not admitted) as not eligible for new local network transmission. A
+successful read of either maps to `Unavailable`; raw state `3` maps to
+`Available`. The runtime's `Unavailable` branch suspends the current binding
+while preserving peer configuration, authenticated endpoint, key material, and
+bounded staged packets. Raw states `0`, `4`, and `5`, and failed state reads,
+remain `Unknown` rather than manufacturing a path decision from incomplete
+evidence.
+
+`Available` permits endpoint resolution, UDP opening, and normal WireGuard
+recovery; it never establishes peer reachability by itself. `Unavailable` is
+authoritative only for local socket ownership, so it closes the current
+descriptor once and a later `Available` performs one generation-safe rebind.
+While the binding is unavailable, new inner packets remain in the bounded
+peer-owned staging queue; they are not encrypted into a pending datagram until
+a replacement binding can actually accept a send. Once a rebind adopts a valid
+socket, recovery drains staged traffic first when the current WireGuard key can
+send, falling back to a keepalive only when there is no queued traffic.
+Failed request observations and stale request generations preserve the prior
+authoritative decision. If an already-open binding was `Available` and NIFM
+then becomes `Unknown`, the runtime records one potential local-path change
+without closing the binding. The next confirmed `Available` consumes that
+marker by requesting one generation-safe rebind; repeated `Unknown` or
+`Available` observations are coalesced.
 
 NIFM never proves remote reachability. In particular, local-only networking can
 be `Available`, and a reachable LAN peer may remain usable without Internet
@@ -77,20 +88,46 @@ bind bump, an authoritative NIFM `Unavailable` to `Available` transition, or a
 single confirmed `Available` following a recorded indeterminate local-path
 transition.
 
+A send effect can still race a path suspension after it has been emitted. The
+effect executor therefore admits a current peer-owned datagram independently
+of binding snapshot availability. If the worker later cannot snapshot the
+released binding, it emits the ordinary failed-send completion, which retires
+the pending slot and lets a later rebind recover. It must never silently drop
+that effect, because doing so leaves recovery permanently deferred behind a
+datagram that no worker owns.
+
 The raw `NifmRequestState` mapping is logged with activation and path-request
 generations whenever its raw state, classified availability, or result changes;
 steady-state observations remain silent. On Horizon 20.5.0, `OnHold` is a
-non-authoritative request-wait state: an observed `nim` request configured with
-requirement preset `0x0B` transitions from `OnHold` to `Available` while its
-`GetResult` remains `0x0000DE6E`. Separate `nim` traffic uses `IRequest`
-command 12; the sysmodule now tests `SetPersistent(true)` before submit. This
-is an evidence-backed compatibility experiment, not yet a confirmed mandatory
-step in the short `nim` request trace. It treats `OnHold` as `Unknown`, not as
-local-path loss. Device validation must still confirm the remaining mapping
-across Wi-Fi, flight mode, no-DHCP, local-only, and Ethernet transitions.
+request-wait state: an observed `nim` request configured with requirement
+preset `0x0B` transitions from `OnHold` to `Available` while its `GetResult`
+remains `0x0000DE6E`. Classification deliberately relies on the successfully
+read state, not `GetResult`; the latter may remain non-zero during a normal
+`OnHold -> Available` transition. Separate `nim` traffic uses `IRequest`
+command 12; the sysmodule tests `SetPersistent(true)` before submit. This is
+an evidence-backed compatibility experiment, not yet a confirmed mandatory
+step in the short `nim` request trace. Device validation must still observe
+the state sequence across Wi-Fi, flight mode, no-DHCP, local-only, and Ethernet
+transitions.
 
-Endpoint hostname re-resolution is not part of the manual bind bump yet. It
-belongs in automated path recovery after the socket lifecycle is validated.
+### NIFM reachability discrepancy
+
+NIFM reports Horizon's local-path admission state, not whether the configured
+WireGuard endpoint is reachable. In particular, testing on modified consoles
+shows that removing Internet uplink from an otherwise associated Wi-Fi network
+can leave NIFM `Available`; conversely, `Pending` and `OnHold` do not identify
+which physical interface changed. The sysmodule therefore uses `Unavailable`
+only to relinquish its local UDP descriptor. It continues to use authenticated
+WireGuard traffic, retry timers, and BSD outcomes to determine remote-peer
+progress. This discrepancy is intentional and remains a constraint on future
+automatic recovery and Wi-Fi/Ethernet source-selection work.
+
+Endpoint changes are accepted only from authenticated WireGuard traffic.
+Hostname resolution occurs during peer activation; neither manual nor automatic
+UDP rebinding re-resolves the configured hostname. This matches the WireGuard
+endpoint model: an unannounced remote address change must either roam through
+authenticated traffic or be applied through an explicit peer configuration
+update, rather than being inferred from an unauthenticated DNS refresh.
 
 ## Packet Client Session Lifetime
 
@@ -113,19 +150,19 @@ API version 4.
 Use matching API-v4 sysmodule and manager builds.
 
 1. Connect Ethernet, select the peer, and confirm one requester round trip.
-2. Enable Wi-Fi while Ethernet remains connected and retain the resulting NIFM
-   path-change log.
-3. Disconnect Ethernet, wait at least three seconds, and retain the next NIFM
-   path-change log.
-4. Run requester once before recovery to establish whether the old binding is
-   usable.
-5. Open manager, press `X`, and wait for `Completed UDP bind bump` in the log.
-6. Run requester again without reselecting or reconnecting the peer.
-7. Repeat in the Wi-Fi-to-Ethernet direction.
+2. Enable Wi-Fi while Ethernet remains connected, then disconnect Ethernet.
+   Retain every NIFM observation and the next requester result.
+3. Wait for the request to return to `Available`; do not invoke a manual bind
+   bump. Confirm exactly one controlled automatic rebind and a requester round
+   trip without reselecting or reconnecting the peer.
+4. Repeat in the Wi-Fi-to-Ethernet direction.
+5. Repeat with flight mode, and separately with a local-only network and an
+   attachment that cannot acquire DHCP. Record each raw NIFM request state.
 
-For a LAN-only test, repeat while the network has no Internet uplink. A failed
-NIFM Internet-status query must be logged but must not block the manual bind
-bump or tunnel traffic to the local peer.
+The manual bind bump remains a diagnostic fallback only after an automatic
+recovery failure. Local-only networking must not block tunnel traffic to a LAN
+peer merely because it lacks Internet uplink; this implementation does not make
+an Internet-status query.
 
 ## BSD Failure Recovery
 

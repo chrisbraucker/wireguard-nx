@@ -44,15 +44,16 @@ struct network_path_observation {
     switch (state) {
         case network_path_raw_state::available:
             return network_path_availability::available;
-        // OnHold means that this request is waiting for NIFM to accept or
-        // restore it. It is not proof that the console lacks a local path:
-        // the 20.5.0 nim request remains OnHold before transitioning to
-        // Available while its GetResult value remains non-zero. Preserve the
-        // last authoritative decision instead of closing transport from it.
-        case network_path_raw_state::on_hold:
-            return network_path_availability::unknown;
-        case network_path_raw_state::invalid:
+        // The 20.5.0 IRequest state machine initializes at Pending and enters
+        // OnHold after submission while NIFM cannot currently admit the
+        // request. They are therefore authoritative only for local socket
+        // ownership: do not transmit until NIFM reports Available again.
+        // They neither identify a physical interface nor establish remote
+        // WireGuard-peer reachability.
         case network_path_raw_state::pending:
+        case network_path_raw_state::on_hold:
+            return network_path_availability::unavailable;
+        case network_path_raw_state::invalid:
         case network_path_raw_state::unknown4:
         case network_path_raw_state::unknown5:
             return network_path_availability::unknown;

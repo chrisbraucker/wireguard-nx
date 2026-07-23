@@ -423,6 +423,14 @@ bool PeerRuntime::SnapshotPendingDatagram(
     return true;
 }
 
+bool PeerRuntime::HasPendingDatagram(
+    ActivationGeneration activation_generation,
+    DatagramGeneration datagram_generation) const {
+    return IsCurrentActivation(activation_generation) &&
+           m_pending_datagram.IsPending() &&
+           m_pending_datagram.generation == datagram_generation;
+}
+
 bool PeerRuntime::ViewDecryptedPacket(
     ActivationGeneration activation_generation,
     PacketGeneration packet_generation,

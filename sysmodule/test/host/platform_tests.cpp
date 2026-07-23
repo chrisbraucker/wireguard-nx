@@ -18,10 +18,14 @@ void TestNetworkPathClassification(TestContext &context) {
             classify_network_path_state(network_path_raw_state::available) ==
                 network_path_availability::available &&
             classify_network_path_state(network_path_raw_state::on_hold) ==
-                network_path_availability::unknown &&
+                network_path_availability::unavailable &&
             classify_network_path_state(network_path_raw_state::pending) ==
-                network_path_availability::unknown &&
+                network_path_availability::unavailable &&
             classify_network_path_state(network_path_raw_state::invalid) ==
+                network_path_availability::unknown &&
+            classify_network_path_state(network_path_raw_state::unknown4) ==
+                network_path_availability::unknown &&
+            classify_network_path_state(network_path_raw_state::unknown5) ==
                 network_path_availability::unknown &&
             classify_network_path_state(network_path_raw_state::available, 1) ==
                 network_path_availability::unknown,

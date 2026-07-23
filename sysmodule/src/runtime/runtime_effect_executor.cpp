@@ -156,11 +156,13 @@ void RuntimeEffectExecutor::QueuePendingDatagramTransmit(
     bool schedule = false;
     {
         std::scoped_lock lock(m_state_mutex);
-        PendingDatagramSnapshot snapshot{};
-        if (!m_coordinator.SnapshotPendingDatagram(
+        // A binding may be released after the peer emits this effect but
+        // before this worker accepts it. Queue the current peer-owned
+        // datagram anyway so ExecutePendingDatagramSend can publish its
+        // failure completion and retire the pending slot deterministically.
+        if (!m_coordinator.HasPendingDatagram(
                 effect.peer,
-                effect.datagram_generation,
-                snapshot)) {
+                effect.datagram_generation)) {
             return;
         }
 
@@ -171,13 +173,11 @@ void RuntimeEffectExecutor::QueuePendingDatagramTransmit(
                 return;
             }
 
-            PendingDatagramSnapshot pending_snapshot{};
             // PeerRuntime permits one live datagram only. A different queued
             // request therefore has to be stale before it may be replaced.
-            AMS_ABORT_UNLESS(!m_coordinator.SnapshotPendingDatagram(
+            AMS_ABORT_UNLESS(!m_coordinator.HasPendingDatagram(
                 pending.peer,
-                pending.datagram_generation,
-                pending_snapshot));
+                pending.datagram_generation));
         }
 
         m_pending_datagram_transmit = effect;

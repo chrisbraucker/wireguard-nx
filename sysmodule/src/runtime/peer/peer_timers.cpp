@@ -184,7 +184,7 @@ void PeerRuntime::SuspendTransport(
 
     const auto binding = m_binding.StateSnapshot();
     logger::Log(
-        "EXPERIMENT suspending UDP transport after I/O failure peer=%u activation=%u socket_generation=%u socket=%d; preserving peer and protocol state",
+        "Suspending UDP transport for local-path unavailability peer=%u activation=%u socket_generation=%u socket=%d; preserving peer and protocol state",
         identity.peer_index.Value(),
         identity.activation_generation.Value(),
         binding.generation.Value(),
@@ -207,7 +207,7 @@ void PeerRuntime::SuspendTransport(
             .socket = socket});
     }
     logger::Log(
-        "EXPERIMENT UDP transport suspended peer=%u activation=%u old_socket_generation=%u old_socket=%d state=%s",
+        "UDP transport suspended for local-path unavailability peer=%u activation=%u old_socket_generation=%u old_socket=%d state=%s",
         identity.peer_index.Value(),
         identity.activation_generation.Value(),
         binding.generation.Value(),
@@ -252,6 +252,19 @@ void PeerRuntime::RecoverTransport(
         peer->current_keypair.CanSendAt(wgnx::wireguard::GetMonotonicTime());
     if (m_lifecycle.state == wgnx::PeerRuntimeState::Active &&
         current_key_can_send) {
+        if (StagedInnerPacketCount() != 0) {
+            logger::Log(
+                "UDP recovery draining staged inner packets peer=%u activation=%u count=%zu socket_generation=%u socket=%d",
+                identity.peer_index.Value(),
+                identity.activation_generation.Value(),
+                StagedInnerPacketCount(),
+                binding.generation.Value(),
+                static_cast<int>(binding.socket));
+            ProcessOutboundQueue(identity, timer_facts, now, effects);
+            if (m_pending_datagram.IsPending()) {
+                return;
+            }
+        }
         logger::Log(
             "UDP recovery selected keepalive peer=%u activation=%u socket_generation=%u socket=%d",
             identity.peer_index.Value(),
