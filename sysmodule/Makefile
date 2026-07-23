@@ -70,7 +70,6 @@ VERIFY_SOURCES := $(TOPDIR)/tools/verify_sources.py
 HOST_TEST_CPP_SOURCES := \
 	src/runtime/debug_probe_runner.cpp \
 	src/runtime/endpoint_resolver.cpp \
-	src/runtime/network_path_observer.cpp \
 	src/runtime/packet_data_plane.cpp \
 	src/runtime/peer/peer_runtime.cpp \
 	src/runtime/peer/activation.cpp \

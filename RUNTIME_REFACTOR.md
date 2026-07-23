@@ -435,18 +435,20 @@ coverage.
 **Status:** Implementation complete; focused on-device regression pending.
 `DebugProbeRunner` now owns probe commands, status, packet construction, reply
 classification, and timeout state without mutating `PeerRuntime`.
-`NetworkPathObserver` owns observation sequencing and path-fingerprint state,
-while the Horizon adapter returns a stateless snapshot. `PeerConfigurationLoader`
-derives move-only key material and scrubs encoded secrets before configuration
-is assigned to live peers. Synthetic traffic enters through the internal
-producer side of `PacketDataPlane`, so it neither bypasses the data plane nor
-claims the CMIF packet consumer.
+The original polling `NetworkPathObserver` was subsequently retired in favor
+of an activation-owned NIFM request service. The Horizon adapter owns one raw
+NIFM request and publishes typed availability changes; the transport runtime
+retains sole ownership of UDP descriptors. `PeerConfigurationLoader` derives move-only
+key material and scrubs encoded secrets before configuration is assigned to
+live peers. Synthetic traffic enters through the internal producer side of
+`PacketDataPlane`, so it neither bypasses the data plane nor claims the CMIF
+packet consumer.
 
 Move synthetic ICMP, HTTP, and other probe behavior into `DebugProbeRunner`.
-Isolate NIFM observation and future rebinding policy. Separate configuration
+Isolate NIFM local-path facts and rebinding policy. Separate configuration
 loading and secret derivation from live peer mutation.
 
-**Definition of done:** probes and network-path observation use runtime commands
+**Definition of done:** probes and NIFM local-path facts use runtime commands
 and events instead of touching peer internals; disabling development probes does
 not alter the production tunnel lifecycle.
 

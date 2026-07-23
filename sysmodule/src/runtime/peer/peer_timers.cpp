@@ -202,7 +202,9 @@ void PeerRuntime::SuspendTransport(
     }
     const auto socket = m_binding.ReleaseAndSuspend();
     if (socket != wgnx::platform::InvalidSocket) {
-        effects.Add(CloseUdpSocketEffect{.socket = socket});
+        effects.Add(CloseUdpSocketEffect{
+            .path_generation = m_path_request_generation,
+            .socket = socket});
     }
     logger::Log(
         "EXPERIMENT UDP transport suspended peer=%u activation=%u old_socket_generation=%u old_socket=%d state=%s",

@@ -21,18 +21,19 @@ by updated target footprint and stack reports.
 | Endpoint request slot      |       1 latest request |         512-byte owner |
 | UDP rebind request slot    |       1 latest request |          96-byte owner |
 | Protocol timer slots       |                      5 |    1600-byte scheduler |
-| Ordered work queues        |                      4 |     96 KiB static pool |
+| Ordered work queues        |                      5 |    120 KiB static pool |
 | Socket arena               |   2 concurrent sockets |                304 KiB |
 | Resolver scratch           |            1 operation |                 16 KiB |
 | Filesystem heap            |                1 arena |                 32 KiB |
 | Diagnostic producer queue  | 16 x 512-byte messages |                  8 KiB |
 | Composed daemon            |                      1 |                216 KiB |
 
-The four ordered lanes admit at most one resolver request, two submission
-requests, one receive request, and six timer actions. Each queue has one 16 KiB
-worker stack. The separate timer thread and the sysmodule main thread also have
-16 KiB stacks. The 96 KiB workqueue pool includes queue metadata and four
-preallocated stacks; the 24 KiB timer manager includes its metadata and stack.
+The five ordered lanes admit at most one resolver request, two submission
+requests, one encrypted-datagram transmit, one receive request, and six timer
+actions. Each queue has one 16 KiB worker stack. The separate timer thread and
+the sysmodule main thread also have 16 KiB stacks. The 120 KiB workqueue pool
+includes queue metadata and five preallocated stacks; the 24 KiB timer manager
+includes its metadata and stack.
 
 These figures describe static owners. They do not include loader mappings,
 Atmosphere service state, thread metadata, or other process overhead.
@@ -102,12 +103,18 @@ All lock ownership is scoped through `std::scoped_lock`, `std::unique_lock`, or
 
 - `wgnx-resolve`: endpoint resolution and activation completion.
 - `wgnx-submit`: serialized debug and IPC inner-packet submission.
+- `wgnx-tx`: serialized encrypted UDP datagram submission and completion
+  policy. It owns one pending send handoff, so endpoint resolution, receive,
+  and timer workers release their local frames before concrete send completion.
 - `wgnx-recv`: blocking encrypted UDP receive, rebind processing, inbound
   protocol dispatch, and generated effects.
 - `wgnx-timer-act`: generation-tagged protocol timer delivery, debug timeout,
-  and NIFM observation.
+  and no NIFM polling work.
 - `wgnx-timer`: physical timer expiry only; it queues runtime timer work and
   does not execute peer policy.
+- `wgnx-nifm`: one activation-owned NIFM request-state waiter with a fixed
+  16 KiB stack. It publishes typed local-path facts and does not execute peer
+  policy or socket I/O while the daemon state mutex is held.
 
 The worker loop removes one item under its queue mutex, releases the mutex,
 executes the callback, and reacquires it only for completion accounting and a

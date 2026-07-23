@@ -263,6 +263,9 @@ WireGuard event semantics.
 
 ## Milestone 6: Endpoint And Transport Recovery
 
+**Status:** Host implementation and target validation complete for the NIFM
+local-path gate; on-device transition validation remains required.
+
 ### Goal
 
 Make peer protocol state survive ordinary UDP path and endpoint changes.
@@ -274,6 +277,8 @@ Make peer protocol state survive ordinary UDP path and endpoint changes.
 - recover from surfaced BSD send/receive failures without making them terminal
 - validate Wi-Fi loss, uplink-only loss, and Wi-Fi/Ethernet transitions
 - retain NIFM as path information, not as proof of peer reachability
+- gate socket ownership on event-backed NIFM local-path availability without
+  polling Internet status or IP configuration
 
 ### Definition Of Done
 
@@ -282,6 +287,8 @@ Make peer protocol state survive ordinary UDP path and endpoint changes.
 - temporary transport failure does not discard peer configuration or valid
   protocol state
 - the transition test matrix recovers without OS stalls or peer restart
+- NIFM `Unavailable` suspends local socket ownership, while `Available` only
+  permits normal WireGuard recovery and cannot establish a peer by itself
 
 ## Milestone 7: Interoperability And Lifecycle Hardening
 

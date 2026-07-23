@@ -5,6 +5,12 @@
 
 #include <stratosphere.hpp>
 
+#include <optional>
+
+namespace wgnx::sysmodule::platform::horizon {
+class NetworkPathService;
+}
+
 namespace wgnx::sysmodule::runtime {
 
 class DebugProbeRunner;
@@ -12,7 +18,6 @@ struct DebugProbeRequest;
 class EncryptedReceivePump;
 class EndpointResolver;
 class HorizonDispatcher;
-class NetworkPathObserver;
 class PacketDataPlane;
 class RuntimeCoordinator;
 class TimerScheduler;
@@ -27,7 +32,7 @@ public:
         TimerScheduler &timer_scheduler,
         PacketDataPlane &packet_data_plane,
         DebugProbeRunner &debug_probe_runner,
-        NetworkPathObserver &network_path_observer,
+        wgnx::sysmodule::platform::horizon::NetworkPathService &network_path_service,
         EncryptedReceivePump &receive_pump)
         : m_state_mutex(state_mutex),
           m_coordinator(coordinator),
@@ -36,18 +41,20 @@ public:
           m_timer_scheduler(timer_scheduler),
           m_packet_data_plane(packet_data_plane),
           m_debug_probe_runner(debug_probe_runner),
-          m_network_path_observer(network_path_observer),
+          m_network_path_service(network_path_service),
           m_receive_pump(receive_pump) {}
 
     void Execute(const EffectBatch &effects);
     void RunEndpointResolver();
+    void RunPendingDatagramTransmit();
     void RunDebugPayloadSubmission();
     void RunInnerPacketSubmission();
     void RunProtocolTimer(
         wgnx::wireguard::TimerHook hook,
         const wgnx::wireguard::TimerToken &token);
     void RunDebugProbeTimeout();
-    void RunNetworkPathObservation();
+    void HandleNetworkPathObservation(
+        const wgnx::platform::network_path_observation &observation);
 
 private:
     bool TakeDebugPayloadSubmission(DebugProbeRequest &out_request);
@@ -57,12 +64,16 @@ private:
     NOINLINE void ExecutePendingDatagramSend(
         const SendPendingDatagramEffect &effect,
         EffectBatch &generated);
+    void QueuePendingDatagramTransmit(const SendPendingDatagramEffect &effect);
     NOINLINE void ExecutePublishDecryptedPacket(
         const PublishDecryptedPacketEffect &effect);
     [[nodiscard]] bool PublishDecryptedPacketLocked(
         const PeerIdentity &peer,
         std::span<const std::uint8_t> inner_packet);
     void CommitDebugPayloadSubmission(const DebugProbeRequest &request);
+    static void NetworkPathObservationCallback(
+        void *context,
+        const wgnx::platform::network_path_observation &observation);
 
     ams::os::Mutex &m_state_mutex;
     RuntimeCoordinator &m_coordinator;
@@ -71,8 +82,12 @@ private:
     TimerScheduler &m_timer_scheduler;
     PacketDataPlane &m_packet_data_plane;
     DebugProbeRunner &m_debug_probe_runner;
-    NetworkPathObserver &m_network_path_observer;
+    wgnx::sysmodule::platform::horizon::NetworkPathService &m_network_path_service;
     EncryptedReceivePump &m_receive_pump;
+    // A peer owns at most one pending datagram. Its concrete send completion
+    // remains in the dedicated transmit worker rather than any producer stack.
+    std::optional<SendPendingDatagramEffect> m_pending_datagram_transmit{};
+    EffectBatch m_pending_datagram_transmit_effects{};
 };
 
 } // namespace wgnx::sysmodule::runtime

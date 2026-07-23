@@ -102,10 +102,14 @@ IPC and WireGuard wire contracts remain unchanged; the separation is internal.
   construction, reply classification, and timeout state. It submits through
   the internal-producer side of `PacketDataPlane`, preserving the CMIF packet
   consumer while using the same peer staging and effect path.
-- `runtime/network_path_observer.*` owns NIFM observation sequencing and
-  fingerprint comparison. The Horizon UDP adapter produces a stateless
-  `NetworkPathSnapshot`; observation remains policy-free and cannot mutate a
-  peer or trigger rebinding.
+- `platform/horizon/network_path_service.*` owns one activation-scoped
+  `nifm:s` request, configures it with the observed system requirement preset,
+  waits for request-state events on a dedicated bounded worker, and publishes
+  typed raw state observations only. It neither owns nor associates a UDP
+  descriptor; `PeerRuntime` owns the resulting local-path policy and the
+  transport runtime owns socket lifecycle.
+  Request creation does no synchronous formatted logging because it executes on
+  the deep CMIF activation stack.
 - `runtime/peer_configuration.*` loads a configuration snapshot, derives
   move-only private and preshared key material before peer assignment, resolves
   the autostart selection, and scrubs encoded secret fields.
@@ -208,8 +212,8 @@ I/O only from post-lock IPC and worker boundaries.
 The host suite links the production `PeerRegistry`, `PeerRuntime`,
 `RuntimeCoordinator`, `EndpointResolver`, `UdpBinding`, `PeerController`,
 `TimerCoordinator`, `TimerSchedule`, `PacketDataPlane`, `PacketChannel`,
-`DebugProbeRunner`, `NetworkPathObserver`, `UdpRebindQueue`, and the production
-`DrainEffectBatches` primitive. Its 35 deterministic cases characterize UDP
+`DebugProbeRunner`, typed NIFM path classification, `UdpRebindQueue`, and the
+production `DrainEffectBatches` primitive. Its deterministic cases characterize UDP
 receive and work-admission
 outcomes, selection,
 activation, lifecycle transitions, status projection, stale event rejection,
@@ -325,3 +329,12 @@ chain at 13,840 bytes. This remains above the required 1 KiB margin and leaves
 2,544 bytes for ABI and platform overhead. Any new activation or common
 effect-path local storage must therefore be checked against this chain before
 it is accepted.
+
+NIFM-driven activation also crosses a dedicated serialized transmit worker
+before issuing the initial encrypted datagram. The resolver returns after it
+opens the UDP bind and queues the peer-owned datagram; the transmit worker owns
+one pending send effect and a persistent completion batch. This removes the
+resolver -> bind -> send-completion stack chain that exceeded the 16 KiB worker
+stack on device. Initial receive polling is queued only after the handshake
+initiation completion, preserving send-before-receive ordering without relying
+on cross-worker timing.

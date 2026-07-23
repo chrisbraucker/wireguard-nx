@@ -4,7 +4,6 @@
 #include "runtime/encrypted_receive_pump.hpp"
 #include "runtime/endpoint_resolver.hpp"
 #include "runtime/horizon_dispatcher.hpp"
-#include "runtime/network_path_observer.hpp"
 #include "runtime/packet_channel.hpp"
 #include "runtime/packet_data_plane.hpp"
 #include "runtime/peer_configuration.hpp"
@@ -13,9 +12,9 @@
 #include "runtime/runtime_contracts.hpp"
 #include "runtime/runtime_effect_executor.hpp"
 #include "runtime/timer_scheduler.hpp"
+#include "platform/horizon/network_path_service.hpp"
 
 #include "config_loader.hpp"
-#include "development_config.hpp"
 #include "logger.hpp"
 #include "wgnx/platform/clock.hpp"
 #include "wgnx/platform/random.hpp"
@@ -36,8 +35,6 @@ struct DaemonState {
     runtime::PeerRegistry peers{};
     bool initialized{false};
 };
-
-constexpr inline wgnx::platform::jiffies_t NetworkPathObservationJiffies = 2U * wgnx::platform::HZ;
 
 class DaemonRuntime {
 public:
@@ -61,12 +58,12 @@ private:
     static void ResolverWorkCallback(wgnx::platform::work_struct *work);
     static void PayloadSubmissionWorkCallback(wgnx::platform::work_struct *work);
     static void InnerPacketSubmissionWorkCallback(wgnx::platform::work_struct *work);
+    static void PendingDatagramTransmitWorkCallback(wgnx::platform::work_struct *work);
     static void ReceiveWorkCallback(wgnx::platform::work_struct *work);
     static void ProtocolTimerCallback(
         wgnx::wireguard::TimerHook hook,
         const wgnx::wireguard::TimerToken &token);
     static void DebugProbeTimeoutCallback();
-    static void NetworkPathObserverCallback();
 
     void ClearInnerPacketStateLocked(const char *reason);
     runtime::EffectBatch SetPeerInactive(std::size_t peer_index);
@@ -97,7 +94,7 @@ private:
     runtime::RuntimeCoordinator m_runtime_coordinator;
     runtime::PacketDataPlane m_packet_data_plane;
     runtime::DebugProbeRunner m_debug_probe_runner{};
-    runtime::NetworkPathObserver m_network_path_observer{};
+    platform::horizon::NetworkPathService m_network_path_service{};
     runtime::PeerConfigurationLoader m_peer_configuration_loader{};
     runtime::LoadedPeerConfiguration m_loaded_peer_configuration{};
     runtime::AutoStartPersistenceState m_auto_start_persistence{};
@@ -129,7 +126,7 @@ DaemonRuntime::DaemonRuntime()
           m_timer_scheduler,
           m_packet_data_plane,
           m_debug_probe_runner,
-          m_network_path_observer,
+          m_network_path_service,
           m_receive_pump) {
     AMS_ABORT_UNLESS(s_instance == nullptr);
     s_instance = this;
@@ -302,6 +299,13 @@ void DaemonRuntime::InnerPacketSubmissionWorkCallback(wgnx::platform::work_struc
     s_instance->m_effect_executor.RunInnerPacketSubmission();
 }
 
+void DaemonRuntime::PendingDatagramTransmitWorkCallback(
+    wgnx::platform::work_struct *work) {
+    AMS_ABORT_UNLESS(s_instance != nullptr);
+    static_cast<void>(work);
+    s_instance->m_effect_executor.RunPendingDatagramTransmit();
+}
+
 void DaemonRuntime::ReceiveWorkCallback(wgnx::platform::work_struct *work) {
     AMS_ABORT_UNLESS(s_instance != nullptr);
     static_cast<void>(work);
@@ -320,17 +324,13 @@ void DaemonRuntime::DebugProbeTimeoutCallback() {
     s_instance->m_effect_executor.RunDebugProbeTimeout();
 }
 
-void DaemonRuntime::NetworkPathObserverCallback() {
-    AMS_ABORT_UNLESS(s_instance != nullptr);
-    s_instance->m_effect_executor.RunNetworkPathObservation();
-}
-
 void DaemonRuntime::InitializeHorizonDispatcher() {
     m_horizon_dispatcher.Initialize(
         {
             .resolve = ResolverWorkCallback,
             .submit_debug_payload = PayloadSubmissionWorkCallback,
             .submit_inner_packet = InnerPacketSubmissionWorkCallback,
+            .transmit_datagram = PendingDatagramTransmitWorkCallback,
             .receive = ReceiveWorkCallback,
         });
     m_timer_scheduler.Initialize(
@@ -338,22 +338,13 @@ void DaemonRuntime::InitializeHorizonDispatcher() {
         {
             .protocol_timer = ProtocolTimerCallback,
             .debug_probe_timeout = DebugProbeTimeoutCallback,
-            .network_path_observer = NetworkPathObserverCallback,
-        },
-        development_config::NifmPathObserverEnabled,
-        NetworkPathObservationJiffies);
+        });
 
     logger::Log("Started endpoint resolver worker");
     logger::Log("Started shared payload and inner packet submission worker");
+    logger::Log("Started serialized encrypted datagram transmit worker");
     logger::Log("Started UDP receive worker");
-    if constexpr (development_config::NifmPathObserverEnabled) {
-        logger::Log("NIFM network-path observer enabled mode=%s interval_jiffies=%llu",
-            development_config::GetNifmPathObserverModeName(),
-            static_cast<unsigned long long>(NetworkPathObservationJiffies));
-    } else {
-        logger::Log("NIFM network-path observer disabled mode=%s",
-            development_config::GetNifmPathObserverModeName());
-    }
+    logger::Log("NIFM network-path requests are event-driven and activation-owned");
     logger::Log("Started transport timer executor");
 }
 

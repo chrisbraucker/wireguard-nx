@@ -72,6 +72,7 @@ bool ScriptedPlatform::CompleteNextResolution() {
 
     Execute(m_coordinator.Dispatch(EndpointResolvedEvent{
         .peer = request->peer,
+        .path_generation = request->path_generation,
         .result = TakeResolutionResult(),
         .occurred_at = NextTime(),
     }));
@@ -88,9 +89,10 @@ bool ScriptedPlatform::CompleteNextUdpOpen() {
 
     const OpenUdpBindEffect request = m_udp_open_requests.front();
     m_udp_open_requests.pop_front();
-    const UdpOpenResult result = TakeUdpOpenResult();
+    UdpOpenResult result = TakeUdpOpenResult();
     Execute(m_coordinator.Dispatch(UdpBindOpenedEvent{
         .peer = request.peer,
+        .path_generation = request.path_generation,
         .endpoint = request.endpoint,
         .endpoint_text = request.endpoint_text,
         .socket = result.socket,
@@ -259,6 +261,28 @@ void ScriptedPlatform::ExecuteEffect(const RuntimeEffect &effect, EffectBatch &g
             if constexpr (std::is_same_v<Effect, ResolveEndpointEffect>) {
                 ++m_statistics.resolve_requests;
                 static_cast<void>(m_resolver.Queue(value));
+            } else if constexpr (std::is_same_v<Effect, StartNetworkPathRequestEffect>) {
+                generated.Append(m_coordinator.Dispatch(NetworkPathRequestStartedEvent{
+                    .peer = value.peer,
+                    .path_generation = value.path_generation,
+                    .success = true,
+                    .occurred_at = NextTime(),
+                }));
+                generated.Append(m_coordinator.Dispatch(
+                    NetworkPathAvailabilityChangedEvent{
+                        .peer = value.peer,
+                        .path_generation = value.path_generation,
+                        .observation = {
+                            .availability =
+                                wgnx::platform::network_path_availability::available,
+                            .raw_state =
+                                wgnx::platform::network_path_raw_state::available,
+                            .request_generation = value.path_generation.Value(),
+                        },
+                        .occurred_at = NextTime(),
+                    }));
+            } else if constexpr (std::is_same_v<Effect, StopNetworkPathRequestEffect>) {
+                static_cast<void>(value);
             } else if constexpr (std::is_same_v<Effect, OpenUdpBindEffect>) {
                 ++m_statistics.udp_open_requests;
                 m_udp_open_requests.push_back(value);

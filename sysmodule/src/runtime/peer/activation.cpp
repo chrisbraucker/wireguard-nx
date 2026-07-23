@@ -56,13 +56,20 @@ EffectBatch PeerRuntime::HandleEvent(const ActivationRequestedEvent &event) {
                     .peer_index = event.peer_index,
                     .activation_generation = BeginActivation(event.occurred_at),
                 };
-                ResolveEndpointEffect resolve{.peer = identity};
-                std::snprintf(
-                    resolve.endpoint.data(),
-                    resolve.endpoint.size(),
-                    "%s",
-                    m_config.endpoint.data());
-                effects.Add(resolve);
+                m_path_request_generation =
+                    AllocateGeneration(m_next_path_request_generation);
+                m_path_availability =
+                    wgnx::platform::network_path_availability::unknown;
+                m_last_path_observation = {};
+                m_has_path_observation = false;
+                m_rebind_on_path_confirmation = false;
+                m_waiting_for_local_path = true;
+                m_endpoint_resolution_started = false;
+                m_receive_started = false;
+                effects.Add(StartNetworkPathRequestEffect{
+                    .peer = identity,
+                    .path_generation = m_path_request_generation,
+                });
     return effects;
 }
 
@@ -71,8 +78,15 @@ EffectBatch PeerRuntime::HandleEvent(const DeactivationRequestedEvent &event) {
                 if (!IsCurrentActivation(event.peer.activation_generation)) {
                     return effects;
                 }
+                if (!m_path_request_generation.IsZero()) {
+                    effects.Add(StopNetworkPathRequestEffect{
+                        .peer = event.peer,
+                        .path_generation = m_path_request_generation,
+                    });
+                }
                 if (m_binding.IsOpen()) {
                     effects.Add(CloseUdpSocketEffect{
+                        .path_generation = m_path_request_generation,
                         .socket = m_binding.ReleaseSocket(),
                     });
                 }
@@ -97,6 +111,126 @@ EffectBatch PeerRuntime::HandleEvent(const DeactivationRequestedEvent &event) {
     return effects;
 }
 
+EffectBatch PeerRuntime::HandleEvent(const NetworkPathRequestStartedEvent &event) {
+    EffectBatch effects{};
+    if (!IsCurrentPathRequest(
+            event.peer.activation_generation,
+            event.path_generation)) {
+        return effects;
+    }
+    if (!event.success) {
+        logger::Log(
+            "NIFM path request start failed peer=%u activation=%u path_generation=%u; waiting for peer reactivation",
+            event.peer.peer_index.Value(),
+            event.peer.activation_generation.Value(),
+            event.path_generation.Value());
+    }
+    return effects;
+}
+
+EffectBatch PeerRuntime::HandleEvent(
+    const NetworkPathAvailabilityChangedEvent &event) {
+    EffectBatch effects{};
+    if (!IsCurrentPathRequest(
+            event.peer.activation_generation,
+            event.path_generation)) {
+        return effects;
+    }
+
+    if (!m_has_path_observation ||
+        m_last_path_observation != event.observation) {
+        logger::Log(
+            "NIFM path observation peer=%u activation=%u path_generation=%u availability=%s raw=%u state_rc=0x%08x operation_rc=0x%08x",
+            event.peer.peer_index.Value(),
+            event.peer.activation_generation.Value(),
+            event.path_generation.Value(),
+            wgnx::platform::get_network_path_availability_name(
+                event.observation.availability),
+            static_cast<unsigned int>(event.observation.raw_state),
+            event.observation.state_result,
+            event.observation.operation_result);
+        m_last_path_observation = event.observation;
+        m_has_path_observation = true;
+    }
+
+    const auto next = event.observation.availability;
+    if (next == wgnx::platform::network_path_availability::unknown) {
+        if (m_path_availability ==
+                wgnx::platform::network_path_availability::available &&
+            IsInTransportState() && m_binding.IsOpen() &&
+            !m_rebind_on_path_confirmation) {
+            m_rebind_on_path_confirmation = true;
+            logger::Log(
+                "NIFM local path became indeterminate peer=%u activation=%u path_generation=%u; retaining socket and scheduling one rebind on confirmed availability",
+                event.peer.peer_index.Value(),
+                event.peer.activation_generation.Value(),
+                event.path_generation.Value());
+        }
+        return effects;
+    }
+
+    if (next == m_path_availability) {
+        if (next == wgnx::platform::network_path_availability::available &&
+            m_rebind_on_path_confirmation) {
+            m_rebind_on_path_confirmation = false;
+            logger::Log(
+                "NIFM local path confirmed after indeterminate state peer=%u activation=%u path_generation=%u; requesting one controlled rebind",
+                event.peer.peer_index.Value(),
+                event.peer.activation_generation.Value(),
+                event.path_generation.Value());
+            effects.Append(HandleEvent(UdpRebindRequestedEvent{
+                .peer = event.peer,
+                .occurred_at = event.occurred_at,
+            }));
+        }
+        return effects;
+    }
+
+    const auto previous = m_path_availability;
+    m_path_availability = next;
+    logger::Log(
+        "NIFM local-path transition peer=%u activation=%u path_generation=%u %s->%s raw=%u state_rc=0x%08x operation_rc=0x%08x",
+        event.peer.peer_index.Value(),
+        event.peer.activation_generation.Value(),
+        event.path_generation.Value(),
+        wgnx::platform::get_network_path_availability_name(previous),
+        wgnx::platform::get_network_path_availability_name(next),
+        static_cast<unsigned int>(event.observation.raw_state),
+        event.observation.state_result,
+        event.observation.operation_result);
+
+    if (next == wgnx::platform::network_path_availability::unavailable) {
+        m_rebind_on_path_confirmation = false;
+        m_waiting_for_local_path = true;
+        if (m_binding.IsOpen()) {
+            SuspendTransport(event.peer, effects);
+        }
+        return effects;
+    }
+
+    m_waiting_for_local_path = false;
+    if (!m_endpoint_resolution_started &&
+        m_lifecycle.state == wgnx::PeerRuntimeState::ResolvingEndpoint) {
+        ResolveEndpointEffect resolve{
+            .peer = event.peer,
+            .path_generation = m_path_request_generation,
+        };
+        std::snprintf(
+            resolve.endpoint.data(), resolve.endpoint.size(), "%s", m_config.endpoint.data());
+        m_endpoint_resolution_started = true;
+        effects.Add(resolve);
+        return effects;
+    }
+
+    if (m_binding.IsSuspended() && IsInTransportState() && m_binding.HasEndpoint()) {
+        effects.Append(HandleEvent(UdpRebindRequestedEvent{
+            .peer = event.peer,
+            .occurred_at = event.occurred_at,
+        }));
+    }
+    return effects;
+}
+
 EffectBatch PeerRuntime::HandleEvent(const TransportFailureEvent &event) {
     EffectBatch effects{};
                 if (!IsCurrentActivation(event.peer.activation_generation) ||
@@ -117,11 +251,8 @@ EffectBatch PeerRuntime::HandleEvent(const TransportFailureEvent &event) {
                         wgnx::GetPeerRuntimeStateName(m_lifecycle.state),
                         event.operation == TransportIoOperation::Receive
                             ? "receive worker"
-                            : "unknown",
+                            : "datagram send",
                         wgnx::GetPeerErrorCodeName(code));
-                    if constexpr (development_config::SuspendUdpTransportOnFirstIoFailure) {
-                        SuspendTransport(event.peer, effects);
-                    }
                     return effects;
                 }
                 EnterActivationError(
@@ -134,8 +265,12 @@ EffectBatch PeerRuntime::HandleEvent(const TransportFailureEvent &event) {
 
 EffectBatch PeerRuntime::HandleEvent(const EndpointResolvedEvent &event) {
     EffectBatch effects{};
-                if (!IsCurrentActivation(event.peer.activation_generation) ||
-                    m_lifecycle.state != wgnx::PeerRuntimeState::ResolvingEndpoint) {
+                if (!IsCurrentPathRequest(
+                        event.peer.activation_generation,
+                        event.path_generation) ||
+                    m_lifecycle.state != wgnx::PeerRuntimeState::ResolvingEndpoint ||
+                    m_waiting_for_local_path ||
+                    m_path_availability != wgnx::platform::network_path_availability::available) {
                     return effects;
                 }
                 if (!event.result.success) {
@@ -149,6 +284,7 @@ EffectBatch PeerRuntime::HandleEvent(const EndpointResolvedEvent &event) {
                 m_binding.SetEndpoint(event.result.resolved, event.result.text.data());
                 OpenUdpBindEffect open{
                     .peer = event.peer,
+                    .path_generation = m_path_request_generation,
                     .endpoint = event.result.resolved,
                     .socket_generation = AllocateSocketGeneration(),
                 };
@@ -166,21 +302,31 @@ EffectBatch PeerRuntime::HandleEvent(const EndpointResolvedEvent &event) {
 EffectBatch PeerRuntime::HandleEvent(const UdpBindOpenedEvent &event) {
     EffectBatch effects{};
                 if (event.socket_generation.IsZero() ||
+                    !IsCurrentPathRequest(
+                        event.peer.activation_generation,
+                        event.path_generation) ||
                     event.socket_generation != m_pending_socket_generation ||
                     event.purpose != m_pending_bind_purpose) {
                     if (event.socket != wgnx::platform::InvalidSocket) {
                         effects.Add(
-                            CloseUdpSocketEffect{.socket = event.socket});
+                            CloseUdpSocketEffect{
+                                .path_generation = m_path_request_generation,
+                                .socket = event.socket});
                     }
                     return effects;
                 }
                 m_pending_socket_generation = SocketGeneration{};
                 if (event.purpose == UdpBindPurpose::Rebind) {
                     if (!IsCurrentActivation(event.peer.activation_generation) ||
-                        !IsInTransportState() || !m_binding.HasEndpoint()) {
+                        !IsInTransportState() || !m_binding.HasEndpoint() ||
+                        m_waiting_for_local_path ||
+                        m_path_availability !=
+                            wgnx::platform::network_path_availability::available) {
                         if (event.socket != wgnx::platform::InvalidSocket) {
                             effects.Add(
-                                CloseUdpSocketEffect{.socket = event.socket});
+                                CloseUdpSocketEffect{
+                                    .path_generation = m_path_request_generation,
+                                    .socket = event.socket});
                         }
                         return effects;
                     }
@@ -188,7 +334,9 @@ EffectBatch PeerRuntime::HandleEvent(const UdpBindOpenedEvent &event) {
                         event.socket == wgnx::platform::InvalidSocket) {
                         if (event.socket != wgnx::platform::InvalidSocket) {
                             effects.Add(
-                                CloseUdpSocketEffect{.socket = event.socket});
+                                CloseUdpSocketEffect{
+                                    .path_generation = m_path_request_generation,
+                                    .socket = event.socket});
                         }
                         logger::Log(
                             "UDP bind bump open failed peer=%u activation=%u error=%u; peer state preserved",
@@ -206,7 +354,9 @@ EffectBatch PeerRuntime::HandleEvent(const UdpBindOpenedEvent &event) {
                         event.socket);
                     if (old_socket != wgnx::platform::InvalidSocket) {
                         effects.Add(
-                            CloseUdpSocketEffect{.socket = old_socket});
+                            CloseUdpSocketEffect{
+                                .path_generation = m_path_request_generation,
+                                .socket = old_socket});
                     }
                     logger::Log(
                         "Completed UDP bind bump peer=%u activation=%u socket_generation=%u socket=%d old_socket=%d",
@@ -224,16 +374,23 @@ EffectBatch PeerRuntime::HandleEvent(const UdpBindOpenedEvent &event) {
                     return effects;
                 }
                 if (!IsCurrentActivation(event.peer.activation_generation) ||
-                    m_lifecycle.state != wgnx::PeerRuntimeState::ResolvingEndpoint) {
+                    m_lifecycle.state != wgnx::PeerRuntimeState::ResolvingEndpoint ||
+                    m_waiting_for_local_path ||
+                    m_path_availability !=
+                        wgnx::platform::network_path_availability::available) {
                     if (event.socket != wgnx::platform::InvalidSocket) {
-                        effects.Add(CloseUdpSocketEffect{.socket = event.socket});
+                        effects.Add(CloseUdpSocketEffect{
+                            .path_generation = m_path_request_generation,
+                            .socket = event.socket});
                     }
                     return effects;
                 }
                 if (event.error != wgnx::platform::socket_error::none ||
                     event.socket == wgnx::platform::InvalidSocket) {
                     if (event.socket != wgnx::platform::InvalidSocket) {
-                        effects.Add(CloseUdpSocketEffect{.socket = event.socket});
+                        effects.Add(CloseUdpSocketEffect{
+                            .path_generation = m_path_request_generation,
+                            .socket = event.socket});
                     }
                     EnterActivationError(
                         wgnx::PeerErrorStage::Transport,
@@ -258,6 +415,7 @@ EffectBatch PeerRuntime::HandleEvent(const UdpBindOpenedEvent &event) {
                 }
                 if (!EnterHandshaking(event.peer.activation_generation, event.occurred_at)) {
                     effects.Add(CloseUdpSocketEffect{
+                        .path_generation = m_path_request_generation,
                         .socket = m_binding.ReleaseSocket(),
                     });
                     return effects;
@@ -280,7 +438,6 @@ EffectBatch PeerRuntime::HandleEvent(const UdpBindOpenedEvent &event) {
                     .peer = event.peer,
                     .datagram_generation = m_pending_datagram.generation,
                 });
-                effects.Add(QueueReceiveEffect{.peer = event.peer});
     return effects;
 }
 
@@ -290,11 +447,20 @@ EffectBatch PeerRuntime::HandleEvent(const UdpRebindRequestedEvent &event) {
                     !IsInTransportState() || !m_binding.HasEndpoint()) {
                     return effects;
                 }
+                if (m_waiting_for_local_path ||
+                    m_path_availability !=
+                        wgnx::platform::network_path_availability::available ||
+                    m_path_request_generation.IsZero() ||
+                    !m_pending_socket_generation.IsZero()) {
+                    return effects;
+                }
                 const auto binding = m_binding.StateSnapshot();
                 OpenUdpBindEffect open{
                     .peer = event.peer,
+                    .path_generation = m_path_request_generation,
                     .endpoint = binding.endpoint,
                     .socket_generation = AllocateSocketGeneration(),
+                    .replaces_socket = binding.socket,
                     .purpose = UdpBindPurpose::Rebind,
                 };
                 m_pending_socket_generation = open.socket_generation;

@@ -36,5 +36,7 @@ void TestAutoStartPersistenceGeneration(TestContext &context);
 void TestUdpBindingOwnership(TestContext &context);
 void TestRuntimeCompositionFailureInjection(TestContext &context);
 void TestRuntimeScriptedPlatformFailureCoverage(TestContext &context);
+void TestNifmPathGating(TestContext &context);
+void TestNifmDoesNotOwnUdpBinding(TestContext &context);
 
 } // namespace wgnx::test

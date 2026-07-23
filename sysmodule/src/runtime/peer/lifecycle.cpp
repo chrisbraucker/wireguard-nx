@@ -215,6 +215,14 @@ void PeerRuntime::Deactivate(wgnx::platform::ktime_t now) {
     m_decrypted_packet.size = 0;
     m_decrypted_packet.generation = PacketGeneration{};
     m_controller.Timers().CancelAll();
+    m_path_request_generation = PathRequestGeneration{};
+    m_path_availability = wgnx::platform::network_path_availability::unknown;
+    m_last_path_observation = {};
+    m_has_path_observation = false;
+    m_rebind_on_path_confirmation = false;
+    m_waiting_for_local_path = false;
+    m_endpoint_resolution_started = false;
+    m_receive_started = false;
     ResetProtocol();
     ResetLifecycle(wgnx::PeerRuntimeState::Inactive, ActivationGeneration{}, now);
 }
@@ -274,6 +282,14 @@ void PeerRuntime::EnterError(
 
 bool PeerRuntime::IsCurrentActivation(ActivationGeneration activation_generation) const {
     return IsCurrentGeneration(m_lifecycle.activation_generation, activation_generation);
+}
+
+bool PeerRuntime::IsCurrentPathRequest(
+    ActivationGeneration activation_generation,
+    PathRequestGeneration path_generation) const {
+    return IsCurrentActivation(activation_generation) &&
+           !path_generation.IsZero() &&
+           path_generation == m_path_request_generation;
 }
 
 bool PeerRuntime::IsInTransportState() const {
@@ -369,6 +385,7 @@ void PeerRuntime::EnterActivationError(
     };
     if (m_binding.IsOpen()) {
         effects->Add(CloseUdpSocketEffect{
+            .path_generation = m_path_request_generation,
             .socket = m_binding.ReleaseSocket(),
         });
     }

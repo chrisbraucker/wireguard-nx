@@ -53,6 +53,9 @@ public:
         wgnx::platform::ktime_t now) const;
     bool HasRuntimeErrors() const;
     bool IsActiveIdentity(const PeerIdentity &peer) const;
+    bool IsActivePathIdentity(
+        const PeerIdentity &peer,
+        PathRequestGeneration path_generation) const;
     bool IsActiveTransportIdentity(const PeerIdentity &peer) const;
     bool IsActiveEstablishedIdentity(const PeerIdentity &peer) const;
     [[nodiscard]] bool SnapshotReceiveRuntime(ReceiveRuntimeSnapshot &out) const;

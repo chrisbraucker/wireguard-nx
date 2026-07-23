@@ -3,6 +3,7 @@
 #include "runtime/domain_types.hpp"
 #include "runtime/timer_facts.hpp"
 #include "wgnx/resource_budget.hpp"
+#include "wgnx/platform/network_path.hpp"
 #include "wgnx/platform/udp.hpp"
 #include "wgnx/platform/clock.hpp"
 #include "wgnx/protocol.hpp"
@@ -55,8 +56,23 @@ struct DeactivationRequestedEvent {
     wgnx::platform::ktime_t occurred_at{0};
 };
 
+struct NetworkPathRequestStartedEvent {
+    PeerIdentity peer{};
+    PathRequestGeneration path_generation{};
+    bool success{false};
+    wgnx::platform::ktime_t occurred_at{0};
+};
+
+struct NetworkPathAvailabilityChangedEvent {
+    PeerIdentity peer{};
+    PathRequestGeneration path_generation{};
+    wgnx::platform::network_path_observation observation{};
+    wgnx::platform::ktime_t occurred_at{0};
+};
+
 enum class TransportIoOperation : std::uint8_t {
     Receive = 0,
+    Send,
 };
 
 struct TransportFailureEvent {
@@ -70,6 +86,7 @@ struct TransportFailureEvent {
 
 struct EndpointResolvedEvent {
     PeerIdentity peer{};
+    PathRequestGeneration path_generation{};
     wgnx::platform::endpoint_resolution_result result{};
     wgnx::platform::ktime_t occurred_at{0};
 };
@@ -81,6 +98,7 @@ enum class UdpBindPurpose : std::uint8_t {
 
 struct UdpBindOpenedEvent {
     PeerIdentity peer{};
+    PathRequestGeneration path_generation{};
     wgnx::platform::endpoint endpoint{};
     std::array<char, sizeof(wgnx::PeerInfo::resolved_endpoint)> endpoint_text{};
     wgnx::platform::socket_handle socket{wgnx::platform::InvalidSocket};
@@ -139,6 +157,8 @@ struct ProtocolTimerExpiredEvent {
 using PeerEvent = std::variant<
     ActivationRequestedEvent,
     DeactivationRequestedEvent,
+    NetworkPathRequestStartedEvent,
+    NetworkPathAvailabilityChangedEvent,
     TransportFailureEvent,
     EndpointResolvedEvent,
     UdpBindOpenedEvent,
@@ -153,16 +173,20 @@ template<typename Event>
 consteval std::size_t MaxEffectsForEvent() {
     if constexpr (
         std::is_same_v<Event, ActivationRequestedEvent> ||
+        std::is_same_v<Event, NetworkPathRequestStartedEvent> ||
         std::is_same_v<Event, EndpointResolvedEvent> ||
         std::is_same_v<Event, PendingDatagramSentEvent> ||
         std::is_same_v<Event, InnerPacketStagedEvent> ||
         std::is_same_v<Event, ProcessOutboundQueueEvent>) {
         return 5;
     } else if constexpr (
-        std::is_same_v<Event, DeactivationRequestedEvent> ||
         std::is_same_v<Event, TransportFailureEvent>) {
         return 6;
-    } else if constexpr (std::is_same_v<Event, UdpBindOpenedEvent>) {
+    } else if constexpr (std::is_same_v<Event, DeactivationRequestedEvent>) {
+        return 7;
+    } else if constexpr (
+        std::is_same_v<Event, NetworkPathAvailabilityChangedEvent> ||
+        std::is_same_v<Event, UdpBindOpenedEvent>) {
         return 7;
     } else if constexpr (std::is_same_v<Event, UdpRebindRequestedEvent>) {
         return 1;
@@ -177,19 +201,34 @@ consteval std::size_t MaxEffectsForEvent() {
 
 struct ResolveEndpointEffect {
     PeerIdentity peer{};
+    PathRequestGeneration path_generation{};
     std::array<char, sizeof(wgnx::PeerConfigEntry::endpoint)> endpoint{};
 };
 
 struct OpenUdpBindEffect {
     PeerIdentity peer{};
+    PathRequestGeneration path_generation{};
     wgnx::platform::endpoint endpoint{};
     std::array<char, sizeof(wgnx::PeerInfo::resolved_endpoint)> endpoint_text{};
     SocketGeneration socket_generation{};
+    wgnx::platform::socket_handle replaces_socket{
+        wgnx::platform::InvalidSocket};
     UdpBindPurpose purpose{UdpBindPurpose::Activation};
 };
 
 struct CloseUdpSocketEffect {
+    PathRequestGeneration path_generation{};
     wgnx::platform::socket_handle socket{wgnx::platform::InvalidSocket};
+};
+
+struct StartNetworkPathRequestEffect {
+    PeerIdentity peer{};
+    PathRequestGeneration path_generation{};
+};
+
+struct StopNetworkPathRequestEffect {
+    PeerIdentity peer{};
+    PathRequestGeneration path_generation{};
 };
 
 struct SendPendingDatagramEffect {
@@ -232,6 +271,8 @@ struct CancelDebugProbeTimeoutEffect {};
 
 using RuntimeEffect = std::variant<
     ResolveEndpointEffect,
+    StartNetworkPathRequestEffect,
+    StopNetworkPathRequestEffect,
     OpenUdpBindEffect,
     CloseUdpSocketEffect,
     SendPendingDatagramEffect,
@@ -302,6 +343,8 @@ static_assert(
 static_assert(!std::is_constructible_v<RuntimeEffect, SynchronousPacketView>);
 static_assert(MaxEffectsForEvent<ActivationRequestedEvent>() <= EffectBatch::Capacity);
 static_assert(MaxEffectsForEvent<DeactivationRequestedEvent>() <= EffectBatch::Capacity);
+static_assert(MaxEffectsForEvent<NetworkPathRequestStartedEvent>() <= EffectBatch::Capacity);
+static_assert(MaxEffectsForEvent<NetworkPathAvailabilityChangedEvent>() <= EffectBatch::Capacity);
 static_assert(MaxEffectsForEvent<TransportFailureEvent>() <= EffectBatch::Capacity);
 static_assert(MaxEffectsForEvent<EndpointResolvedEvent>() <= EffectBatch::Capacity);
 static_assert(MaxEffectsForEvent<UdpBindOpenedEvent>() <= EffectBatch::Capacity);

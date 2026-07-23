@@ -19,6 +19,7 @@ int main() {
         TestCase{"legacy.core-smoke", [](wgnx::test::TestContext &context) {
             WGNX_TEST_CHECK(context, wgnx::wireguard::RunCoreSelfTest());
         }},
+        TestCase{"platform.network-path-classification", wgnx::test::TestNetworkPathClassification},
         TestCase{"platform.udp-receive-classification", wgnx::test::TestUdpReceiveClassification},
         TestCase{"platform.workqueue-admission", wgnx::test::TestWorkqueueAdmission},
         TestCase{"protocol.deterministic-handshake", wgnx::test::TestDeterministicHandshake},
@@ -53,6 +54,8 @@ int main() {
         TestCase{"runtime.udp-binding-ownership", wgnx::test::TestUdpBindingOwnership},
         TestCase{"runtime.composition-failure-injection", wgnx::test::TestRuntimeCompositionFailureInjection},
         TestCase{"runtime.scripted-platform-failure-coverage", wgnx::test::TestRuntimeScriptedPlatformFailureCoverage},
+        TestCase{"runtime.nifm-path-gating", wgnx::test::TestNifmPathGating},
+        TestCase{"runtime.nifm-transport-ownership", wgnx::test::TestNifmDoesNotOwnUdpBinding},
     };
 
     return wgnx::test::RunTests(tests);

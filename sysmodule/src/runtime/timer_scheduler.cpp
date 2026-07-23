@@ -8,17 +8,13 @@ TimerScheduler *TimerScheduler::s_instance = nullptr;
 
 void TimerScheduler::Initialize(
     HorizonDispatcher &dispatcher,
-    const TimerSchedulerCallbacks &callbacks,
-    bool enable_network_path_observer,
-    wgnx::platform::jiffies_t network_path_observation_interval) {
+    const TimerSchedulerCallbacks &callbacks) {
     if (m_initialized) {
         return;
     }
 
     m_dispatcher = &dispatcher;
     m_callbacks = callbacks;
-    m_network_observer_enabled = enable_network_path_observer;
-    m_network_observation_interval = network_path_observation_interval;
     wgnx::platform::mutex_init(&m_operation_mutex);
     wgnx::platform::mutex_init(&m_mutex);
     s_instance = this;
@@ -29,14 +25,6 @@ void TimerScheduler::Initialize(
     }
     wgnx::platform::INIT_WORK(&m_debug_timeout_work, TimerWorkCallback);
     wgnx::platform::timer_setup(&m_debug_timeout_timer, AuxiliaryTimerCallback);
-    wgnx::platform::INIT_WORK(&m_network_observer_work, TimerWorkCallback);
-    wgnx::platform::timer_setup(&m_network_observer_timer, AuxiliaryTimerCallback);
-
-    if (m_network_observer_enabled) {
-        static_cast<void>(wgnx::platform::mod_timer(
-            &m_network_observer_timer,
-            wgnx::platform::get_jiffies_64() + m_network_observation_interval));
-    }
     m_initialized = true;
 }
 
@@ -137,8 +125,6 @@ void TimerScheduler::AuxiliaryTimerCallback(wgnx::platform::timer_list *timer) {
     }
     if (timer == &s_instance->m_debug_timeout_timer) {
         s_instance->m_dispatcher->QueueTimerWork(&s_instance->m_debug_timeout_work);
-    } else if (timer == &s_instance->m_network_observer_timer) {
-        s_instance->m_dispatcher->QueueTimerWork(&s_instance->m_network_observer_work);
     }
 }
 
@@ -183,14 +169,6 @@ void TimerScheduler::RunTimerWork(wgnx::platform::work_struct *work) {
             m_callbacks.debug_probe_timeout();
         }
         return;
-    }
-    if (work == &m_network_observer_work && m_network_observer_enabled) {
-        if (m_callbacks.network_path_observer != nullptr) {
-            m_callbacks.network_path_observer();
-        }
-        static_cast<void>(wgnx::platform::mod_timer(
-            &m_network_observer_timer,
-            wgnx::platform::get_jiffies_64() + m_network_observation_interval));
     }
 }
 

@@ -262,6 +262,12 @@ void PeerRuntime::HandlePendingDatagramCompletion(
                 .hook = wgnx::wireguard::TimerHook::RetransmitHandshake,
                 .deadline = HandshakeRetryDeadline(event.timer_facts),
             });
+            if (!m_receive_started) {
+                // Start initial receive polling only once the initiation crossed
+                // the serialized transmit boundary.
+                m_receive_started = true;
+                effects.Add(QueueReceiveEffect{.peer = event.peer});
+            }
         }
         if (kind == PendingDatagramKind::TransportData && peer != nullptr) {
             static_cast<void>(m_controller.ApplyStagedSendOutcome(
@@ -290,14 +296,25 @@ void PeerRuntime::HandlePendingDatagramCompletion(
             wgnx::wireguard::OutboundSendOutcome::TransportDropped()));
     }
     if (event.error == wgnx::platform::socket_error::send_failed) {
-        logger::Log(
-            "Nonterminal WG transport I/O failure peer=%u activation=%u state=%s operation=datagram send error=%s",
-            event.peer.peer_index.Value(),
-            event.peer.activation_generation.Value(),
-            wgnx::GetPeerRuntimeStateName(m_lifecycle.state),
-            wgnx::GetPeerErrorCodeName(wgnx::PeerErrorCode::TransportSendFailed));
-        if constexpr (development_config::SuspendUdpTransportOnFirstIoFailure) {
-            SuspendTransport(event.peer, effects);
+        const auto binding = m_binding.StateSnapshot();
+        effects.Append(HandleEvent(TransportFailureEvent{
+            .peer = event.peer,
+            .operation = TransportIoOperation::Send,
+            .socket = binding.socket,
+            .socket_generation = binding.generation,
+            .error = event.error,
+            .occurred_at = event.occurred_at,
+        }));
+
+        // A local send failure does not prove that the descriptor is stale.
+        // Keep the current binding and use the ordinary bounded handshake
+        // retry path instead of recursively replacing a live BSD socket.
+        if (kind == PendingDatagramKind::HandshakeInitiation) {
+            effects.Add(ArmProtocolTimerEffect{
+                .peer = event.peer,
+                .hook = wgnx::wireguard::TimerHook::RetransmitHandshake,
+                .deadline = HandshakeRetryDeadline(event.timer_facts),
+            });
         }
         return;
     }

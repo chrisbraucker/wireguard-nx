@@ -164,12 +164,18 @@ void TestRuntimeScriptedPlatformFailureCoverage(TestContext &context) {
     const auto send_binding = coordinator.BindingSnapshot(0);
     WGNX_TEST_REQUIRE(
         context,
-        send_resolution && send_open && send_completed && send_binding.suspended &&
-            !send_binding.IsOpen() &&
+        send_resolution && send_open && send_completed && send_binding.IsOpen() &&
             coordinator.Lifecycle(0)->activation_generation == send_failure.activation_generation &&
             coordinator.Lifecycle(0)->state == wgnx::PeerRuntimeState::Handshaking &&
-            std::ranges::find(platform.ClosedSockets(), 91) != platform.ClosedSockets().end(),
-        "scripted UDP-send failure did not preserve peer state and suspend transport");
+            !platform.HasPendingUdpOpen() &&
+            platform.IsTimerArmed(wgnx::wireguard::TimerHook::RetransmitHandshake),
+        "scripted UDP-send failure did not preserve the binding and arm handshake retry");
+
+    Deactivate(coordinator, platform, send_failure, 1'065);
+    WGNX_TEST_REQUIRE(
+        context,
+        coordinator.Lifecycle(0)->state == wgnx::PeerRuntimeState::Inactive,
+        "send-failure teardown did not retire the active peer");
 
     platform.QueueUdpOpenResult({.socket = 92});
     platform.QueueUdpSendResult({});
@@ -186,13 +192,13 @@ void TestRuntimeScriptedPlatformFailureCoverage(TestContext &context) {
     WGNX_TEST_REQUIRE(
         context,
         receive_resolution && receive_open && initial_send_completed && receive_completed &&
-            receive_binding.suspended && !receive_binding.IsOpen() &&
+            receive_binding.IsOpen() && !platform.HasPendingUdpOpen() &&
             coordinator.Lifecycle(0)->activation_generation ==
                 receive_failure.activation_generation &&
-            coordinator.Lifecycle(0)->state == wgnx::PeerRuntimeState::Handshaking &&
-            std::ranges::find(platform.ClosedSockets(), 92) != platform.ClosedSockets().end(),
-        "scripted UDP-receive failure did not preserve peer state and suspend transport");
+            coordinator.Lifecycle(0)->state == wgnx::PeerRuntimeState::Handshaking,
+        "scripted UDP-receive failure did not preserve peer state and binding");
 
+    Deactivate(coordinator, platform, receive_failure, 1'075);
     platform.QueueUdpOpenResult({.socket = 93});
     platform.QueueUdpSendResult({});
     const PeerIdentity timer_peer = BeginActivation(coordinator, platform, 1'080);
@@ -232,6 +238,52 @@ void TestRuntimeScriptedPlatformFailureCoverage(TestContext &context) {
         persistence_failed && persistence_committed && stale_persistence_rejected &&
             platform.GetStatistics().persistence_attempts == 2,
         "scripted autostart persistence did not preserve failure and stale-request boundaries");
+}
+
+void TestNifmDoesNotOwnUdpBinding(TestContext &context) {
+    using namespace wgnx::sysmodule::runtime;
+
+    runtime::Reset(InitialRuntimeState);
+    std::array<wgnx::PeerConfigEntry, 1> configured{};
+    FillConfig(
+        &configured[0],
+        "nifm-transport-ownership",
+        "10.66.66.2/32",
+        InitiatorPrivateKey,
+        ResponderPublicKey);
+    PeerRegistry registry{};
+    RuntimeCoordinator coordinator{registry};
+    WGNX_TEST_REQUIRE(
+        context,
+        ConfigureTestPeers(coordinator, configured, 0),
+        "NIFM transport-ownership test setup failed");
+    ScriptedPlatform platform{coordinator};
+    platform.QueueUdpOpenResult({.socket = 120});
+    const PeerIdentity peer = BeginActivation(coordinator, platform, 2'000);
+    WGNX_TEST_REQUIRE(
+        context,
+        platform.CompleteNextResolution() && platform.CompleteNextUdpOpen() &&
+            platform.CompleteNextUdpSend(),
+        "NIFM transport-ownership test could not establish its initial binding");
+
+    const auto original = coordinator.BindingSnapshot(0);
+    const auto rebind = coordinator.Dispatch(UdpRebindRequestedEvent{
+        .peer = peer,
+        .occurred_at = 2'010,
+    });
+    platform.Execute(rebind);
+    platform.QueueUdpOpenResult({.socket = 121});
+    WGNX_TEST_REQUIRE(
+        context,
+        platform.CompleteNextUdpOpen() &&
+            !coordinator.BindingSnapshot(0).Matches(
+                original.generation, original.socket) &&
+            coordinator.BindingSnapshot(0).socket == 121 &&
+            std::ranges::find(platform.ClosedSockets(), 120) !=
+                platform.ClosedSockets().end() &&
+            std::ranges::find(platform.ClosedSockets(), 121) ==
+                platform.ClosedSockets().end(),
+        "UDP replacement incorrectly depends on NIFM descriptor ownership");
 }
 
 } // namespace wgnx::test

@@ -123,6 +123,9 @@ public:
     UdpBinding::Snapshot BindingSnapshot() const { return m_binding.StateSnapshot(); }
     PeerProtocolSnapshot ProtocolSnapshot() const;
     bool IsCurrentActivation(ActivationGeneration activation_generation) const;
+    bool IsCurrentPathRequest(
+        ActivationGeneration activation_generation,
+        PathRequestGeneration path_generation) const;
     bool IsInTransportState() const;
     bool AcceptsInnerPacketSubmission() const;
     bool CanSendTransportNow() const;
@@ -255,6 +258,9 @@ private:
         EffectBatch &effects);
     [[nodiscard]] EffectBatch HandleEvent(const ActivationRequestedEvent &event);
     [[nodiscard]] EffectBatch HandleEvent(const DeactivationRequestedEvent &event);
+    [[nodiscard]] EffectBatch HandleEvent(const NetworkPathRequestStartedEvent &event);
+    [[nodiscard]] EffectBatch HandleEvent(
+        const NetworkPathAvailabilityChangedEvent &event);
     [[nodiscard]] EffectBatch HandleEvent(const TransportFailureEvent &event);
     [[nodiscard]] EffectBatch HandleEvent(const EndpointResolvedEvent &event);
     [[nodiscard]] EffectBatch HandleEvent(const UdpBindOpenedEvent &event);
@@ -272,6 +278,18 @@ private:
     wgnx::wireguard::PeerController m_controller{};
     PeerRuntimeInfo m_lifecycle{};
     ActivationGeneration m_next_activation_generation{1};
+    PathRequestGeneration m_next_path_request_generation{1};
+    PathRequestGeneration m_path_request_generation{};
+    wgnx::platform::network_path_availability m_path_availability{
+        wgnx::platform::network_path_availability::unknown};
+    wgnx::platform::network_path_observation m_last_path_observation{};
+    bool m_has_path_observation{false};
+    // An indeterminate NIFM observation cannot suspend a known-good binding,
+    // but it can follow a local-path transition which invalidated it.
+    bool m_rebind_on_path_confirmation{false};
+    bool m_waiting_for_local_path{false};
+    bool m_endpoint_resolution_started{false};
+    bool m_receive_started{false};
     SocketGeneration m_next_socket_generation{1};
     SocketGeneration m_pending_socket_generation{};
     UdpBindPurpose m_pending_bind_purpose{UdpBindPurpose::Activation};

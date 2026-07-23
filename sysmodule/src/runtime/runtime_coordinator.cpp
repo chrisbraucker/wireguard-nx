@@ -78,6 +78,16 @@ bool RuntimeCoordinator::IsActiveIdentity(const PeerIdentity &identity) const {
            peer->IsCurrentActivation(identity.activation_generation);
 }
 
+bool RuntimeCoordinator::IsActivePathIdentity(
+    const PeerIdentity &identity,
+    PathRequestGeneration path_generation) const {
+    const auto *peer = PeerAt(identity.peer_index);
+    return IsActiveIdentity(identity) && peer != nullptr &&
+           peer->IsCurrentPathRequest(
+               identity.activation_generation,
+               path_generation);
+}
+
 bool RuntimeCoordinator::IsActiveTransportIdentity(const PeerIdentity &identity) const {
     const auto *peer = PeerAt(identity.peer_index);
     return IsActiveIdentity(identity) && peer->IsInTransportState();

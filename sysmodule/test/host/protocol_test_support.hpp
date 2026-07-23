@@ -9,7 +9,6 @@
 #include "runtime/endpoint_resolver.hpp"
 #include "runtime/debug_probe_runner.hpp"
 #include "runtime/effect_drain.hpp"
-#include "runtime/network_path_observer.hpp"
 #include "runtime/peer/peer_runtime.hpp"
 #include "runtime/runtime_coordinator.hpp"
 #include "runtime/runtime_contracts.hpp"
@@ -195,6 +194,7 @@ inline wgnx::sysmodule::runtime::EffectBatch CompleteTestPeerActivation(
         "192.0.2.1:51820");
     const auto resolution = coordinator.Dispatch(EndpointResolvedEvent{
         .peer = resolve.peer,
+        .path_generation = resolve.path_generation,
         .result = resolved,
         .occurred_at = now + 1,
     });
@@ -206,6 +206,7 @@ inline wgnx::sysmodule::runtime::EffectBatch CompleteTestPeerActivation(
     }
     return coordinator.Dispatch(UdpBindOpenedEvent{
         .peer = open->peer,
+        .path_generation = open->path_generation,
         .endpoint = open->endpoint,
         .endpoint_text = open->endpoint_text,
         .socket = socket,
@@ -216,6 +217,23 @@ inline wgnx::sysmodule::runtime::EffectBatch CompleteTestPeerActivation(
             .now = TimerDeadlineFromJiffies(500),
         },
         .occurred_at = now + 2,
+    });
+}
+
+inline wgnx::sysmodule::runtime::EffectBatch AllowTestLocalPath(
+    wgnx::sysmodule::runtime::RuntimeCoordinator &coordinator,
+    const wgnx::sysmodule::runtime::StartNetworkPathRequestEffect &start,
+    wgnx::platform::ktime_t now) {
+    using namespace wgnx::sysmodule::runtime;
+    return coordinator.Dispatch(NetworkPathAvailabilityChangedEvent{
+        .peer = start.peer,
+        .path_generation = start.path_generation,
+        .observation = {
+            .availability = wgnx::platform::network_path_availability::available,
+            .raw_state = wgnx::platform::network_path_raw_state::available,
+            .request_generation = start.path_generation.Value(),
+        },
+        .occurred_at = now,
     });
 }
 
@@ -230,11 +248,17 @@ inline wgnx::sysmodule::runtime::EffectBatch ActivateTestPeer(
         .peer_index = PeerIndex{peer_index},
         .occurred_at = now,
     });
-    const auto *resolve = activation.Size() == 1
-        ? std::get_if<ResolveEndpointEffect>(activation.begin())
+    const auto *start = activation.Size() == 1
+        ? std::get_if<StartNetworkPathRequestEffect>(activation.begin())
+        : nullptr;
+    const auto path_effects = start != nullptr
+        ? AllowTestLocalPath(coordinator, *start, now + 1)
+        : EffectBatch{};
+    const auto *resolve = path_effects.Size() == 1
+        ? std::get_if<ResolveEndpointEffect>(path_effects.begin())
         : nullptr;
     return resolve != nullptr
-        ? CompleteTestPeerActivation(coordinator, *resolve, socket, now + 1)
+        ? CompleteTestPeerActivation(coordinator, *resolve, socket, now + 2)
         : EffectBatch{};
 }
 

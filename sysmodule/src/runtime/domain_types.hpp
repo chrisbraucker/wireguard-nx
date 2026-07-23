@@ -27,6 +27,7 @@ private:
 
 struct PeerIndexTag;
 struct ActivationGenerationTag;
+struct PathRequestGenerationTag;
 struct SocketGenerationTag;
 struct DatagramGenerationTag;
 struct PacketGenerationTag;
@@ -36,6 +37,7 @@ struct AutoStartRequestGenerationTag;
 
 using PeerIndex = DomainId<PeerIndexTag, std::uint32_t>;
 using ActivationGeneration = DomainId<ActivationGenerationTag, std::uint32_t>;
+using PathRequestGeneration = DomainId<PathRequestGenerationTag, std::uint32_t>;
 using SocketGeneration = DomainId<SocketGenerationTag, std::uint32_t>;
 using DatagramGeneration = DomainId<DatagramGenerationTag, std::uint32_t>;
 using PacketGeneration = DomainId<PacketGenerationTag, std::uint32_t>;
@@ -47,6 +49,7 @@ template<typename Id>
 concept DomainIdentity =
     std::same_as<Id, PeerIndex> ||
     std::same_as<Id, ActivationGeneration> ||
+    std::same_as<Id, PathRequestGeneration> ||
     std::same_as<Id, SocketGeneration> ||
     std::same_as<Id, DatagramGeneration> ||
     std::same_as<Id, PacketGeneration> ||
@@ -57,6 +60,7 @@ concept DomainIdentity =
 template<typename Id>
 concept MonotonicIdentity =
     std::same_as<Id, ActivationGeneration> ||
+    std::same_as<Id, PathRequestGeneration> ||
     std::same_as<Id, SocketGeneration> ||
     std::same_as<Id, DatagramGeneration> ||
     std::same_as<Id, PacketGeneration> ||
@@ -77,6 +81,7 @@ constexpr Id AllocateGeneration(Id &next) {
 
 static_assert(std::is_trivially_copyable_v<PeerIndex>);
 static_assert(std::is_trivially_copyable_v<ActivationGeneration>);
+static_assert(std::is_trivially_copyable_v<PathRequestGeneration>);
 static_assert(std::is_trivially_copyable_v<SocketGeneration>);
 static_assert(std::is_trivially_copyable_v<DatagramGeneration>);
 static_assert(std::is_trivially_copyable_v<PacketGeneration>);

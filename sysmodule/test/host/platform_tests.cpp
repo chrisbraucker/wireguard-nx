@@ -1,6 +1,7 @@
 #include "platform_tests.hpp"
 
 #include "test_framework.hpp"
+#include "wgnx/platform/network_path.hpp"
 #include "wgnx/platform/udp.hpp"
 #include "wgnx/platform/work.hpp"
 
@@ -8,6 +9,24 @@
 #include <cstdint>
 
 namespace wgnx::test {
+
+void TestNetworkPathClassification(TestContext &context) {
+    using namespace wgnx::platform;
+
+    WGNX_TEST_REQUIRE(
+        context,
+            classify_network_path_state(network_path_raw_state::available) ==
+                network_path_availability::available &&
+            classify_network_path_state(network_path_raw_state::on_hold) ==
+                network_path_availability::unknown &&
+            classify_network_path_state(network_path_raw_state::pending) ==
+                network_path_availability::unknown &&
+            classify_network_path_state(network_path_raw_state::invalid) ==
+                network_path_availability::unknown &&
+            classify_network_path_state(network_path_raw_state::available, 1) ==
+                network_path_availability::unknown,
+        "NIFM request states did not preserve the local-path authority model");
+}
 
 void TestUdpReceiveClassification(TestContext &context) {
     using namespace wgnx::platform;

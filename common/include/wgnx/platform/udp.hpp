@@ -145,22 +145,6 @@ struct udp_receive_result {
                udp_receive_retry_reason::missing_native_error;
 }
 
-struct NetworkPathSnapshot {
-    std::uint32_t initialization_result{0};
-    std::uint32_t internet_status_result{0};
-    std::uint32_t ip_config_result{0};
-    std::uint32_t connection_type{0};
-    std::uint32_t connection_status{0};
-    std::uint32_t wifi_strength{0};
-    std::uint32_t current_address{0};
-    std::uint32_t subnet_mask{0};
-    std::uint32_t gateway{0};
-    std::uint32_t primary_dns{0};
-    std::uint32_t secondary_dns{0};
-
-    constexpr bool operator==(const NetworkPathSnapshot &) const = default;
-};
-
 /*
  * Deviation from Linux:
  * This exposes a compact project-owned endpoint value instead of `sockaddr`
@@ -189,8 +173,5 @@ socket_error udp_send(
 [[nodiscard]] udp_receive_result udp_receive(
     socket_handle socket,
     std::span<std::uint8_t> buffer);
-
-// Samples Horizon's network path. Runtime policy owns comparison and reaction.
-NetworkPathSnapshot sample_network_path(std::uint64_t sequence);
 
 } // namespace wgnx::platform

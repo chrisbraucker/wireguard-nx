@@ -17,16 +17,13 @@ struct TimerSchedulerCallbacks {
         wgnx::wireguard::TimerHook,
         const wgnx::wireguard::TimerToken &){nullptr};
     void (*debug_probe_timeout)(){nullptr};
-    void (*network_path_observer)(){nullptr};
 };
 
 class TimerScheduler {
 public:
     void Initialize(
         HorizonDispatcher &dispatcher,
-        const TimerSchedulerCallbacks &callbacks,
-        bool enable_network_path_observer,
-        wgnx::platform::jiffies_t network_path_observation_interval);
+        const TimerSchedulerCallbacks &callbacks);
 
     void ArmProtocolTimer(
         const wgnx::wireguard::TimerToken &token,
@@ -69,13 +66,9 @@ private:
     }};
     wgnx::platform::work_struct m_debug_timeout_work{};
     wgnx::platform::timer_list m_debug_timeout_timer{};
-    wgnx::platform::work_struct m_network_observer_work{};
-    wgnx::platform::timer_list m_network_observer_timer{};
-    wgnx::platform::jiffies_t m_network_observation_interval{0};
     wgnx::platform::mutex m_operation_mutex{};
     wgnx::platform::mutex m_mutex{};
     bool m_initialized{false};
-    bool m_network_observer_enabled{false};
 };
 
 static_assert(

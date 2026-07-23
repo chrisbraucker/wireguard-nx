@@ -1,11 +1,11 @@
 #include "runtime/runtime_effect_executor.hpp"
 
+#include "platform/horizon/network_path_service.hpp"
 #include "runtime/debug_probe_runner.hpp"
 #include "runtime/effect_drain.hpp"
 #include "runtime/encrypted_receive_pump.hpp"
 #include "runtime/endpoint_resolver.hpp"
 #include "runtime/horizon_dispatcher.hpp"
-#include "runtime/network_path_observer.hpp"
 #include "runtime/packet_data_plane.hpp"
 #include "runtime/runtime_coordinator.hpp"
 #include "runtime/timer_scheduler.hpp"
@@ -25,6 +25,7 @@
 #include <optional>
 #include <span>
 #include <type_traits>
+#include <utility>
 
 namespace wgnx::sysmodule::runtime {
 
@@ -43,7 +44,7 @@ NOINLINE void RuntimeEffectExecutor::ExecuteOpenUdpBind(
     const OpenUdpBindEffect &effect,
     EffectBatch &generated) {
     wgnx::platform::socket_handle socket = wgnx::platform::InvalidSocket;
-    const auto error = wgnx::platform::udp_open(
+    auto error = wgnx::platform::udp_open(
         std::addressof(socket),
         effect.endpoint.family);
     logger::Log(
@@ -60,6 +61,7 @@ NOINLINE void RuntimeEffectExecutor::ExecuteOpenUdpBind(
         std::scoped_lock lock(m_state_mutex);
         completion = m_coordinator.Dispatch(UdpBindOpenedEvent{
             .peer = effect.peer,
+            .path_generation = effect.path_generation,
             .endpoint = effect.endpoint,
             .endpoint_text = effect.endpoint_text,
             .socket = socket,
@@ -149,6 +151,43 @@ NOINLINE void RuntimeEffectExecutor::ExecutePendingDatagramSend(
     generated.Append(completion);
 }
 
+void RuntimeEffectExecutor::QueuePendingDatagramTransmit(
+    const SendPendingDatagramEffect &effect) {
+    bool schedule = false;
+    {
+        std::scoped_lock lock(m_state_mutex);
+        PendingDatagramSnapshot snapshot{};
+        if (!m_coordinator.SnapshotPendingDatagram(
+                effect.peer,
+                effect.datagram_generation,
+                snapshot)) {
+            return;
+        }
+
+        if (m_pending_datagram_transmit.has_value()) {
+            const auto &pending = *m_pending_datagram_transmit;
+            if (pending.peer == effect.peer &&
+                pending.datagram_generation == effect.datagram_generation) {
+                return;
+            }
+
+            PendingDatagramSnapshot pending_snapshot{};
+            // PeerRuntime permits one live datagram only. A different queued
+            // request therefore has to be stale before it may be replaced.
+            AMS_ABORT_UNLESS(!m_coordinator.SnapshotPendingDatagram(
+                pending.peer,
+                pending.datagram_generation,
+                pending_snapshot));
+        }
+
+        m_pending_datagram_transmit = effect;
+        schedule = true;
+    }
+    if (schedule) {
+        m_dispatcher.QueuePendingDatagramTransmit();
+    }
+}
+
 NOINLINE void RuntimeEffectExecutor::ExecutePublishDecryptedPacket(
     const PublishDecryptedPacketEffect &effect) {
     bool cancel_debug_timeout = false;
@@ -180,7 +219,8 @@ void RuntimeEffectExecutor::Execute(const EffectBatch &effects) {
                         bool schedule = false;
                         {
                             std::scoped_lock lock(m_state_mutex);
-                            current = m_coordinator.IsActiveIdentity(value.peer);
+                            current = m_coordinator.IsActivePathIdentity(
+                                value.peer, value.path_generation);
                             if (current) {
                                 schedule =
                                     m_endpoint_resolver.Queue(value) ==
@@ -198,6 +238,31 @@ void RuntimeEffectExecutor::Execute(const EffectBatch &effects) {
                         if (schedule) {
                             m_dispatcher.QueueResolve();
                         }
+                    } else if constexpr (std::is_same_v<Effect, StartNetworkPathRequestEffect>) {
+                        bool current = false;
+                        {
+                            std::scoped_lock lock(m_state_mutex);
+                            current = m_coordinator.IsActivePathIdentity(
+                                value.peer, value.path_generation);
+                        }
+                        const bool success = current && m_network_path_service.Start(
+                            value.path_generation.Value(),
+                            NetworkPathObservationCallback,
+                            this);
+                        EffectBatch completion{};
+                        {
+                            std::scoped_lock lock(m_state_mutex);
+                            completion = m_coordinator.Dispatch(
+                                NetworkPathRequestStartedEvent{
+                                    .peer = value.peer,
+                                    .path_generation = value.path_generation,
+                                    .success = success,
+                                    .occurred_at = GetRuntimeNowNs(),
+                                });
+                        }
+                        generated.Append(completion);
+                    } else if constexpr (std::is_same_v<Effect, StopNetworkPathRequestEffect>) {
+                        m_network_path_service.Stop(value.path_generation.Value());
                     } else if constexpr (std::is_same_v<Effect, OpenUdpBindEffect>) {
                         ExecuteOpenUdpBind(value, generated);
                     } else if constexpr (std::is_same_v<Effect, CloseUdpSocketEffect>) {
@@ -205,7 +270,7 @@ void RuntimeEffectExecutor::Execute(const EffectBatch &effects) {
                             wgnx::platform::udp_close(value.socket);
                         }
                     } else if constexpr (std::is_same_v<Effect, SendPendingDatagramEffect>) {
-                        ExecutePendingDatagramSend(value, generated);
+                        QueuePendingDatagramTransmit(value);
                     } else if constexpr (std::is_same_v<Effect, QueueReceiveEffect>) {
                         bool current = false;
                         {
@@ -256,6 +321,62 @@ void RuntimeEffectExecutor::Execute(const EffectBatch &effects) {
                 },
                 effect);
         });
+}
+
+NOINLINE void RuntimeEffectExecutor::RunPendingDatagramTransmit() {
+    ON_SCOPE_EXIT { logger::Flush(); };
+    std::optional<SendPendingDatagramEffect> effect{};
+    {
+        std::scoped_lock lock(m_state_mutex);
+        effect = std::exchange(m_pending_datagram_transmit, std::nullopt);
+    }
+    if (!effect.has_value()) {
+        return;
+    }
+
+    // The helper returns before the peer completion batch is drained, releasing
+    // the UDP-send frame before timer and traversal policy execute.
+    m_pending_datagram_transmit_effects.Clear();
+    ExecutePendingDatagramSend(*effect, m_pending_datagram_transmit_effects);
+    Execute(m_pending_datagram_transmit_effects);
+    m_pending_datagram_transmit_effects.Clear();
+}
+
+void RuntimeEffectExecutor::NetworkPathObservationCallback(
+    void *context,
+    const wgnx::platform::network_path_observation &observation) {
+    if (context != nullptr) {
+        static_cast<RuntimeEffectExecutor *>(context)->HandleNetworkPathObservation(
+            observation);
+    }
+}
+
+void RuntimeEffectExecutor::HandleNetworkPathObservation(
+    const wgnx::platform::network_path_observation &observation) {
+    EffectBatch effects{};
+    {
+        std::scoped_lock lock(m_state_mutex);
+        if (m_coordinator.ActivePeerIndex() < 0) {
+            return;
+        }
+        const auto peer_index = PeerIndex{
+            static_cast<std::uint32_t>(m_coordinator.ActivePeerIndex())};
+        const auto *lifecycle = m_coordinator.Lifecycle(peer_index.Value());
+        if (lifecycle == nullptr) {
+            return;
+        }
+        effects = m_coordinator.Dispatch(NetworkPathAvailabilityChangedEvent{
+            .peer = {
+                .peer_index = peer_index,
+                .activation_generation = lifecycle->activation_generation,
+            },
+            .path_generation = PathRequestGeneration{
+                observation.request_generation},
+            .observation = observation,
+            .occurred_at = GetRuntimeNowNs(),
+        });
+    }
+    Execute(effects);
 }
 
 bool RuntimeEffectExecutor::PublishDecryptedPacketLocked(
@@ -523,6 +644,7 @@ void RuntimeEffectExecutor::RunEndpointResolver() {
             std::scoped_lock lock(m_state_mutex);
             effects = m_coordinator.Dispatch(EndpointResolvedEvent{
                 .peer = request->peer,
+                .path_generation = request->path_generation,
                 .result = result,
                 .occurred_at = GetRuntimeNowNs(),
             });
@@ -571,25 +693,6 @@ void RuntimeEffectExecutor::RunDebugProbeTimeout() {
         peer.peer_index.Value(),
         wgnx::GetDebugTriggerActionName(action),
         peer.activation_generation.Value());
-}
-
-void RuntimeEffectExecutor::RunNetworkPathObservation() {
-    ON_SCOPE_EXIT { logger::Flush(); };
-    bool has_active_transport = false;
-    {
-        std::scoped_lock lock(m_state_mutex);
-        has_active_transport = m_coordinator.ActivePeerIndex() >= 0;
-    }
-    if (!has_active_transport) {
-        return;
-    }
-
-    const auto sequence = m_network_path_observer.BeginObservation();
-    const auto snapshot = wgnx::platform::sample_network_path(sequence);
-    static_cast<void>(m_network_path_observer.Commit({
-        .sequence = sequence,
-        .snapshot = snapshot,
-    }));
 }
 
 } // namespace wgnx::sysmodule::runtime

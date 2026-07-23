@@ -201,7 +201,12 @@ void EncryptedReceivePump::Run(RuntimeEffectExecutor &effect_executor) {
         if (receive_result.disposition ==
             wgnx::platform::udp_receive_disposition::failure) {
             CommitReceiveFailure(snapshot, receive_result, effect_executor);
-            return;
+            // A receive error is a transport fact, not proof that the active
+            // descriptor must be replaced. Keep the binding live and retry
+            // this serialized receive path with the same bounded backoff used
+            // for ambiguous Horizon receive results.
+            ams::os::SleepThread(AmbiguousReceiveRetryDelay);
+            continue;
         }
 
         AMS_ABORT_UNLESS(wgnx::platform::packet_set_len(

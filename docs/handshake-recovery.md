@@ -88,7 +88,7 @@ The milestone's real-peer gate is:
    released after handshake completion without peer restart or manual bind
    replacement.
 
-If the Horizon UDP send itself returns an error, the current development flag
-`SuspendUdpTransportOnFirstIoFailure` deliberately closes that socket. That
-diagnostic path is outside this milestone's existing-socket recovery claim and
-still requires the separate bind-recovery experiment.
+If Horizon UDP send itself returns an error while NIFM reports an available
+local path, the peer retains its binding and follows normal WireGuard retry
+policy. NIFM unavailability remains the authority for local socket suspension;
+a BSD error does not by itself establish that the local path disappeared.

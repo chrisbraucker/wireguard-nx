@@ -4,6 +4,16 @@
   "minimum_margin": 1024,
   "chains": [
     {
+      "name": "cmif-activation-nifm-start",
+      "frames": [
+        {"label": "CMIF SetActivePeer", "match": "DaemonRuntime::SetActivePeer("},
+        {"label": "effect iteration", "match": "void wgnx::sysmodule::runtime::RuntimeEffectExecutor::Execute(const"},
+        {"label": "effect drain", "match": "DrainEffectBatches(const EffectBatch&, ExecuteEffect&&)"},
+        {"label": "NIFM start visitor", "match": "auto:59 = wgnx::sysmodule::runtime::StartNetworkPathRequestEffect"},
+        {"label": "NIFM request start", "match": "NetworkPathService::Start("}
+      ]
+    },
+    {
       "name": "resolver-activation-handshake-log",
       "frames": [
         {"label": "workqueue root", "match": "WorkqueueThreadMain(void*)"},
@@ -19,6 +29,35 @@
         {"label": "initiation staging", "match": "PeerRuntime::PrepareHandshakeInitiation("},
         {"label": "initiation creation", "match": "noise_handshake_create_initiation("},
         {"label": "transition logging", "match": "logger.cpp:189:6:"}
+      ]
+    },
+    {
+      "name": "transmit-completion-authenticated-traversal",
+      "frames": [
+        {"label": "workqueue root", "match": "WorkqueueThreadMain(void*)"},
+        {"label": "transmit callback", "match": "DaemonRuntime::PendingDatagramTransmitWorkCallback("},
+        {"label": "transmit operation", "match": "RuntimeEffectExecutor::RunPendingDatagramTransmit()"},
+        {"label": "effect iteration", "match": "void wgnx::sysmodule::runtime::RuntimeEffectExecutor::Execute(const"},
+        {"label": "effect drain", "match": "DrainEffectBatches(const EffectBatch&, ExecuteEffect&&)"},
+        {"label": "coordinator dispatch", "match": "EffectBatch wgnx::sysmodule::runtime::RuntimeCoordinator::Dispatch("},
+        {"label": "peer dispatch", "match": "EffectBatch wgnx::sysmodule::runtime::PeerRuntime::Handle("},
+        {"label": "send completion event", "match": "PeerRuntime::HandleEvent(const wgnx::sysmodule::runtime::PendingDatagramSentEvent&)"},
+        {"label": "authenticated traversal", "match": "PeerRuntime::OnAuthenticatedPacketTraversal("},
+        {"label": "transition logging", "match": "logger.cpp:189:6:"}
+      ]
+    },
+    {
+      "name": "nifm-observation-log",
+      "frames": [
+        {"label": "NIFM worker root", "match": "NetworkPathService::ThreadMain(void*)"},
+        {"label": "NIFM worker loop", "match": "NetworkPathService::Run()"},
+        {"label": "NIFM observation", "match": "NetworkPathService::PublishCurrentObservation()"},
+        {"label": "NIFM callback", "match": "RuntimeEffectExecutor::NetworkPathObservationCallback("},
+        {"label": "NIFM observation dispatch", "match": "RuntimeEffectExecutor::HandleNetworkPathObservation("},
+        {"label": "coordinator dispatch", "match": "EffectBatch wgnx::sysmodule::runtime::RuntimeCoordinator::Dispatch("},
+        {"label": "peer dispatch", "match": "EffectBatch wgnx::sysmodule::runtime::PeerRuntime::Handle("},
+        {"label": "NIFM state policy", "match": "PeerRuntime::HandleEvent(const wgnx::sysmodule::runtime::NetworkPathAvailabilityChangedEvent&)"},
+        {"label": "observation logging", "match": "logger.cpp:189:6:"}
       ]
     },
     {
