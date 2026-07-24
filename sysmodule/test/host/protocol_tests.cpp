@@ -275,6 +275,260 @@ void TestBidirectionalTransport(TestContext &context) {
         "in-memory transport did not drain deterministically");
 }
 
+void TestFaultedDatagramLifecycle(TestContext &context) {
+    using namespace wgnx::wireguard;
+
+    runtime::Reset(InitialRuntimeState);
+    ProtocolPair pair{};
+    WGNX_TEST_REQUIRE(
+        context,
+        pair.Initialize() && pair.CreateAndSendInitiation() &&
+            pair.ReceiveInitiationAndSendResponse() &&
+            pair.ReceiveResponseAndDeriveSession() && CheckSessionKeys(context, pair),
+        "faulted datagram test could not establish a reciprocal session");
+
+    constexpr std::array<std::uint8_t, 16> FirstPayload = {
+        0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+        0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F,
+    };
+    constexpr std::array<std::uint8_t, 16> SecondPayload = {
+        0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
+        0x28, 0x29, 0x2A, 0x2B, 0x2C, 0x2D, 0x2E, 0x2F,
+    };
+    constexpr std::array<std::uint8_t, 16> ThirdPayload = {
+        0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37,
+        0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F,
+    };
+
+    std::array<std::uint8_t, 128> first_datagram{};
+    std::array<std::uint8_t, 128> second_datagram{};
+    std::array<std::uint8_t, 128> third_datagram{};
+    const auto first = noise_create_transport_data_packet(
+        first_datagram,
+        pair.initiator->current_keypair,
+        FirstPayload);
+    const auto second = noise_create_transport_data_packet(
+        second_datagram,
+        pair.initiator->current_keypair,
+        SecondPayload);
+    const auto third = noise_create_transport_data_packet(
+        third_datagram,
+        pair.initiator->current_keypair,
+        ThirdPayload);
+    WGNX_TEST_REQUIRE(
+        context,
+        first.error == TransportDataError::None && first.counter == 0 &&
+            second.error == TransportDataError::None && second.counter == 1 &&
+            third.error == TransportDataError::None && third.counter == 2,
+        "datagram fault fixture did not allocate consecutive transport counters");
+
+    const auto first_packet = std::span<const std::uint8_t>(first_datagram).first(first.packet_size);
+    const auto second_packet = std::span<const std::uint8_t>(second_datagram).first(second.packet_size);
+    const auto third_packet = std::span<const std::uint8_t>(third_datagram).first(third.packet_size);
+    std::array<std::uint8_t, 64> plaintext{};
+    IncomingTransportDataResult decrypted{};
+
+    // The first datagram is initially lost. Delivering the second one first
+    // models a delayed packet without coupling replay admission to ordering.
+    const auto reordered = noise_consume_incoming_transport_data_packet(
+        second_packet,
+        pair.responder_device,
+        *pair.responder,
+        plaintext,
+        decrypted);
+    WGNX_TEST_REQUIRE(
+        context,
+        reordered == TransportDataError::None && decrypted.promoted_next_keypair &&
+            decrypted.decrypt.header.counter == 1 &&
+            decrypted.decrypt.payload_size == SecondPayload.size() &&
+            std::ranges::equal(
+                std::span<const std::uint8_t>(plaintext).first(decrypted.decrypt.payload_size),
+                SecondPayload),
+        "out-of-order authenticated datagram was not accepted");
+
+    const auto delayed = noise_consume_incoming_transport_data_packet(
+        first_packet,
+        pair.responder_device,
+        *pair.responder,
+        plaintext,
+        decrypted);
+    WGNX_TEST_REQUIRE(
+        context,
+        delayed == TransportDataError::None && !decrypted.promoted_next_keypair &&
+            decrypted.decrypt.header.counter == 0 &&
+            std::ranges::equal(
+                std::span<const std::uint8_t>(plaintext).first(decrypted.decrypt.payload_size),
+                FirstPayload) &&
+            pair.responder->current_keypair.ReceiveReplayWindow().HighestCounter() == 1,
+        "delayed authenticated datagram mutated replay-window ordering incorrectly");
+
+    auto tampered_datagram = third_datagram;
+    tampered_datagram[third.packet_size - 1] ^= 0x80U;
+    const auto authentication_failure = noise_consume_incoming_transport_data_packet(
+        std::span<const std::uint8_t>(tampered_datagram).first(third.packet_size),
+        pair.responder_device,
+        *pair.responder,
+        plaintext,
+        decrypted);
+    const auto malformed = noise_consume_incoming_transport_data_packet(
+        third_packet.first(TransportDataHeaderSize - 1),
+        pair.responder_device,
+        *pair.responder,
+        plaintext,
+        decrypted);
+    WGNX_TEST_REQUIRE(
+        context,
+        authentication_failure == TransportDataError::AuthenticationFailed &&
+            malformed == TransportDataError::InvalidPacket &&
+            pair.responder->current_keypair.ReceiveReplayWindow().HighestCounter() == 1,
+        "rejected datagrams advanced receiver replay state");
+
+    const auto accepted = noise_consume_incoming_transport_data_packet(
+        third_packet,
+        pair.responder_device,
+        *pair.responder,
+        plaintext,
+        decrypted);
+    const auto accepted_counter = decrypted.decrypt.header.counter;
+    const auto replay = noise_consume_incoming_transport_data_packet(
+        third_packet,
+        pair.responder_device,
+        *pair.responder,
+        plaintext,
+        decrypted);
+    WGNX_TEST_REQUIRE(
+        context,
+        accepted == TransportDataError::None && accepted_counter == 2 &&
+            replay == TransportDataError::ReplayRejected &&
+            pair.responder->current_keypair.ReceiveReplayWindow().HighestCounter() == 2 &&
+            pair.initiator->current_keypair.SendCounter() == 3,
+        "accepted, replayed, and lost datagrams did not preserve independent state");
+}
+
+void TestKeyRotationDelayedDatagram(TestContext &context) {
+    using namespace wgnx::wireguard;
+
+    runtime::Reset(InitialRuntimeState);
+    ProtocolPair pair{};
+    WGNX_TEST_REQUIRE(
+        context,
+        pair.Initialize() && pair.CreateAndSendInitiation() &&
+            pair.ReceiveInitiationAndSendResponse() &&
+            pair.ReceiveResponseAndDeriveSession() && CheckSessionKeys(context, pair),
+        "key-rotation test could not establish its initial session");
+
+    constexpr std::array<std::uint8_t, 16> InitialPayload = {
+        0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+        0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F,
+    };
+    constexpr std::array<std::uint8_t, 16> DelayedPayload = {
+        0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
+        0x28, 0x29, 0x2A, 0x2B, 0x2C, 0x2D, 0x2E, 0x2F,
+    };
+    constexpr std::array<std::uint8_t, 16> ReplacementPayload = {
+        0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37,
+        0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F,
+    };
+
+    // Confirm the responder's initial next keypair before retaining an old
+    // session packet that will arrive after a replacement handshake.
+    const TransportResult initial = SendTransport(
+        &pair.initiator->current_keypair,
+        &pair.responder_device,
+        pair.responder,
+        InitialPayload,
+        &pair.initiator_to_responder);
+    WGNX_TEST_REQUIRE(
+        context,
+        initial.error == TransportDataError::None &&
+            pair.responder->current_keypair.IsValid() &&
+            !pair.responder->next_keypair.IsValid(),
+        "initial transport did not promote the responder keypair");
+
+    std::array<std::uint8_t, 128> delayed_datagram{};
+    const auto delayed_create = noise_create_transport_data_packet(
+        delayed_datagram,
+        pair.responder->current_keypair,
+        DelayedPayload);
+    WGNX_TEST_REQUIRE(
+        context,
+        delayed_create.error == TransportDataError::None && delayed_create.counter == 0,
+        "failed to construct the retained old-session datagram");
+    const auto delayed_packet =
+        std::span<const std::uint8_t>(delayed_datagram).first(delayed_create.packet_size);
+    const std::uint32_t old_receiver_index = pair.initiator->current_keypair.LocalIndex();
+
+    runtime::SetRealtime({
+        .tv_sec = InitialRuntimeState.realtime.tv_sec + 1,
+        .tv_nsec = InitialRuntimeState.realtime.tv_nsec,
+    });
+    runtime::SetMonotonicTime(
+        InitialMonotonicTime + std::chrono::seconds{1}.count() * 1'000'000'000LL);
+    WGNX_TEST_REQUIRE(
+        context,
+        pair.CreateAndSendInitiation() && pair.ReceiveInitiationAndSendResponse() &&
+            pair.ReceiveResponseAndDeriveSession(),
+        "replacement handshake did not derive reciprocal replacement keys");
+    WGNX_TEST_REQUIRE(
+        context,
+        pair.initiator->current_keypair.IsValid() && pair.responder->next_keypair.IsValid() &&
+            std::ranges::equal(
+                pair.initiator->current_keypair.SendingKey().bytes,
+                pair.responder->next_keypair.ReceivingKey().bytes) &&
+            std::ranges::equal(
+                pair.initiator->current_keypair.ReceivingKey().bytes,
+                pair.responder->next_keypair.SendingKey().bytes) &&
+            pair.initiator->previous_keypair.IsValid() &&
+            pair.initiator->previous_keypair.LocalIndex() == old_receiver_index &&
+            pair.responder->current_keypair.IsValid(),
+        "replacement handshake did not retain and stage the expected keypairs");
+
+    const TransportResult replacement = SendTransport(
+        &pair.initiator->current_keypair,
+        &pair.responder_device,
+        pair.responder,
+        ReplacementPayload,
+        &pair.initiator_to_responder);
+    WGNX_TEST_REQUIRE(
+        context,
+        replacement.error == TransportDataError::None &&
+            pair.responder->current_keypair.IsValid() &&
+            !pair.responder->next_keypair.IsValid() &&
+            pair.responder->previous_keypair.IsValid(),
+        "replacement transport did not rotate the responder keypairs");
+
+    std::array<std::uint8_t, 64> plaintext{};
+    IncomingTransportDataResult first_delivery{};
+    const auto delayed = noise_consume_incoming_transport_data_packet(
+        delayed_packet,
+        pair.initiator_device,
+        *pair.initiator,
+        plaintext,
+        first_delivery);
+    WGNX_TEST_REQUIRE(
+        context,
+        delayed == TransportDataError::None && !first_delivery.promoted_next_keypair &&
+            first_delivery.decrypt.header.receiver_index == old_receiver_index &&
+            first_delivery.decrypt.header.counter == 0 &&
+            std::ranges::equal(
+                std::span<const std::uint8_t>(plaintext).first(first_delivery.decrypt.payload_size),
+                DelayedPayload),
+        "delayed old-session datagram was not accepted through the previous keypair");
+
+    IncomingTransportDataResult replay_delivery{};
+    const auto replay = noise_consume_incoming_transport_data_packet(
+        delayed_packet,
+        pair.initiator_device,
+        *pair.initiator,
+        plaintext,
+        replay_delivery);
+    WGNX_TEST_REQUIRE(
+        context,
+        replay == TransportDataError::ReplayRejected &&
+            pair.initiator->previous_keypair.ReceiveReplayWindow().HighestCounter() == 0,
+        "replayed delayed old-session datagram was not isolated to its previous keypair");
+}
+
 void TestTypedMessageBoundaries(TestContext &context) {
     using namespace wgnx::wireguard;
 

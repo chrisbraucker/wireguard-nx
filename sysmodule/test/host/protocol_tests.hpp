@@ -7,6 +7,8 @@ class TestContext;
 void TestDeterministicHandshake(TestContext &context);
 void TestHandshakeInitiationAdmission(TestContext &context);
 void TestBidirectionalTransport(TestContext &context);
+void TestFaultedDatagramLifecycle(TestContext &context);
+void TestKeyRotationDelayedDatagram(TestContext &context);
 void TestTimerIntent(TestContext &context);
 void TestTypedMessageBoundaries(TestContext &context);
 void TestFuzzedParsingBoundaries(TestContext &context);
@@ -36,6 +38,7 @@ void TestAutoStartPersistenceGeneration(TestContext &context);
 void TestUdpBindingOwnership(TestContext &context);
 void TestRuntimeCompositionFailureInjection(TestContext &context);
 void TestRuntimeScriptedPlatformFailureCoverage(TestContext &context);
+void TestRuntimeRepeatedLifecycleBounds(TestContext &context);
 void TestNifmPathGating(TestContext &context);
 void TestNifmDoesNotOwnUdpBinding(TestContext &context);
 

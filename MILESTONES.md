@@ -323,6 +323,17 @@ Make peer protocol state survive ordinary UDP path and endpoint changes.
 
 ## Milestone 7: Interoperability And Lifecycle Hardening
 
+**Status:** Partially complete and externally constrained. The deterministic
+conformance floor, bounded repeated-lifecycle coverage, host sanitizer runs,
+and target resource/stack gates pass. The suite includes serialized
+datagram-fault and key-rotation cases covering loss/delay reordering,
+malformed input, authentication failure, replay-state isolation, and delayed
+old-session traffic through the previous-keypair slot. Existing real-peer
+device regressions are stable, but the independent `wireguard-go`/BoringTun
+peer matrix and a reproducible prolonged fault-injection device matrix cannot
+currently be run in the available environment. This milestone must therefore
+not yet be described as full interoperability validation.
+
 ### Goal
 
 Establish a defensible userspace WireGuard conformance floor before system
@@ -344,6 +355,40 @@ integration increases concurrency and traffic volume.
 - documented behavior matches upstream or records a justified Horizon-specific
   deviation
 - the on-device outage and network-transition matrix passes consistently
+
+### Current Completion And Remaining Gap
+
+Completed locally:
+
+- deterministic host coverage exercises malformed, unauthenticated, delayed,
+  duplicate, and replayed serialized datagrams without advancing invalid
+  receive state
+- a delayed packet from the previous session is accepted exactly once across
+  initiator key rotation, while replacement-session replay state remains
+  isolated
+- sixteen production activation, initial-handshake-send, and teardown cycles
+  prove that socket, protocol, timer, resolver, transmit, and stale receive
+  work are retired within their fixed bounds
+- host tests, ASan/UBSan, target build, stack gate, and resource gate pass
+- real-peer requester regressions and the available Wi-Fi/flight-mode recovery
+  scenarios have remained stable on device
+
+Still required for the milestone goal:
+
+- run the same observable handshake, transport, rekey, and recovery matrix
+  against independently deployed `wireguard-go` and BoringTun peers
+- run prolonged device sessions with controlled loss, delay, duplication,
+  malformed input, and outage/recovery injection, retaining logs for each
+  transition
+- complete the feasible physical-interface matrix, including Ethernet and
+  roaming cases
+
+The remaining items require independent peer deployments and controlled
+network/fault-injection facilities.
+They are deferred validation, not an implementation workaround or a known
+protocol divergence. Milestone 8 may proceed on the established local
+conformance floor; Milestone 7 remains open until this external matrix is
+attested.
 
 ## Milestone 8: Cryptographic And Parsing Hardening
 
@@ -423,8 +468,3 @@ refactoring foundation; Milestones 3 through 6 deliver the missing upstream
 peer lifecycle; Milestone 7 establishes the conformance baseline; and
 Milestone 8 hardens the remaining cryptographic and parsing code before
 transparent Horizon integration resumes in Milestone 9.
-
-The current validation target is Milestone 4: exhaust one unanswered retry
-sequence without making the peer terminal, restore reachability, and confirm
-that later outbound traffic starts a new sequence and releases after session
-derivation without peer restart or UDP rebinding.

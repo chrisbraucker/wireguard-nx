@@ -25,6 +25,8 @@ int main() {
         TestCase{"protocol.deterministic-handshake", wgnx::test::TestDeterministicHandshake},
         TestCase{"protocol.handshake-initiation-admission", wgnx::test::TestHandshakeInitiationAdmission},
         TestCase{"protocol.bidirectional-transport", wgnx::test::TestBidirectionalTransport},
+        TestCase{"protocol.faulted-datagram-lifecycle", wgnx::test::TestFaultedDatagramLifecycle},
+        TestCase{"protocol.key-rotation-delayed-datagram", wgnx::test::TestKeyRotationDelayedDatagram},
         TestCase{"protocol.timer-intent", wgnx::test::TestTimerIntent},
         TestCase{"protocol.typed-message-boundaries", wgnx::test::TestTypedMessageBoundaries},
         TestCase{"protocol.fuzzed-parsing-boundaries", wgnx::test::TestFuzzedParsingBoundaries},
@@ -54,6 +56,7 @@ int main() {
         TestCase{"runtime.udp-binding-ownership", wgnx::test::TestUdpBindingOwnership},
         TestCase{"runtime.composition-failure-injection", wgnx::test::TestRuntimeCompositionFailureInjection},
         TestCase{"runtime.scripted-platform-failure-coverage", wgnx::test::TestRuntimeScriptedPlatformFailureCoverage},
+        TestCase{"runtime.repeated-lifecycle-bounds", wgnx::test::TestRuntimeRepeatedLifecycleBounds},
         TestCase{"runtime.nifm-path-gating", wgnx::test::TestNifmPathGating},
         TestCase{"runtime.nifm-transport-ownership", wgnx::test::TestNifmDoesNotOwnUdpBinding},
     };

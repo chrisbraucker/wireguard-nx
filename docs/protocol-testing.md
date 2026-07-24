@@ -165,6 +165,12 @@ The protocol suite currently verifies:
 - encrypted transport data succeeds in both directions
 - send and receive counters advance as expected
 - replayed transport packets are rejected
+- loss, delayed reordering, malformed transport data, authentication failure,
+  and replay preserve independent receiver state: only authenticated,
+  non-replayed packets commit replay-window advancement
+- an old authenticated datagram delayed across an initiator key rotation is
+  accepted once through the retained previous keypair, while its replay remains
+  isolated from the replacement session
 - timer intent can be scheduled, replaced, canceled individually, and canceled
   as a group
 - every truncated handshake-initiation size is rejected before parsing
@@ -226,3 +232,56 @@ After a protocol change passes on the host:
 This real-peer round trip is the final validation layer for protocol-refactor
 milestones. Host tests are the fast protocol gate, not a replacement for
 interoperability testing.
+
+## Milestone 7 Interoperability Gate
+
+The host suite establishes protocol invariants but does not make two independent
+WireGuard implementations interoperate. Milestone 7 uses it as the mandatory
+first gate, then compares behavior with the checked-out `wireguard-go` and
+BoringTun references under `workspace/repos/`.
+
+The deterministic `protocol.faulted-datagram-lifecycle` case uses serialized
+datagrams and verifies a loss/delay/reordering sequence, an authenticated-data
+tag failure, a truncated packet, and a replay. This specifically protects the
+upstream replay invariant that a rejected packet never advances receive state.
+`protocol.key-rotation-delayed-datagram` then retains an authenticated packet
+from the old session, completes an initiator rekey, promotes the responder
+replacement keypair through new traffic, and accepts the retained packet once
+through the initiator's previous-keypair slot. Its replay must remain rejected
+without mutating replacement-session state. Finally,
+`runtime.repeated-lifecycle-bounds` executes sixteen complete activation,
+initial-handshake-send, and teardown cycles through the production runtime
+event/effect boundary. Every cycle must retire its socket, protocol instance,
+timer ownership, resolver work, transmit work, and stale receive work.
+
+For each target build, validate a real peer in this order:
+
+1. Establish a tunnel and complete repeated requester round trips without
+   restarting the peer or sysmodule.
+2. Induce a bounded interruption, restore the path, and verify a fresh
+   authenticated round trip without configuration replacement.
+3. Exercise a peer rekey or reconnect while retaining traffic flow. Record
+   endpoint, handshake, key-generation, and packet-queue transitions.
+4. Repeat with `wireguard-go` and BoringTun peer implementations where the
+   test environment permits. Compare only observable protocol outcomes, not
+   scheduler timing or platform-specific socket behavior.
+
+Cookie rate limiting, multi-peer routing, and full transparent Horizon traffic
+integration are outside this milestone. Any behavior that differs from
+upstream must be recorded as a deliberate Horizon-specific deviation before it
+is relied upon by later integration work.
+
+### Current Validation Boundary
+
+The local part of this gate is complete: serialized datagram-fault handling,
+previous-keypair delayed traffic, and bounded repeated lifecycle retirement
+are deterministic host tests. The host test suite, ASan/UBSan run, target
+build, stack gate, and resource gate pass. Available real-peer requester and
+Wi-Fi/flight-mode recovery tests are also stable on device.
+
+This is not equivalent to the full Milestone 7 goal. The environment does not
+currently provide independently deployed `wireguard-go` and BoringTun peers,
+nor controlled prolonged loss/delay/duplicate/malformed fault injection or
+the complete physical-interface matrix. Those tests remain deferred external
+validation. Their absence must not be interpreted as an accepted protocol
+deviation or as evidence of full independent-implementation interoperability.

@@ -240,6 +240,67 @@ void TestRuntimeScriptedPlatformFailureCoverage(TestContext &context) {
         "scripted autostart persistence did not preserve failure and stale-request boundaries");
 }
 
+void TestRuntimeRepeatedLifecycleBounds(TestContext &context) {
+    using namespace wgnx::sysmodule::runtime;
+
+    runtime::Reset(InitialRuntimeState);
+    std::array<wgnx::PeerConfigEntry, 1> configured{};
+    FillConfig(
+        &configured[0],
+        "repeated-lifecycle",
+        "10.66.66.2/32",
+        InitiatorPrivateKey,
+        ResponderPublicKey);
+    PeerRegistry registry{};
+    RuntimeCoordinator coordinator{registry};
+    WGNX_TEST_REQUIRE(
+        context,
+        ConfigureTestPeers(coordinator, configured, 0),
+        "repeated lifecycle registry setup failed");
+
+    ScriptedPlatform platform{coordinator};
+    constexpr std::size_t ActivationCycles = 16;
+    bool all_cycles_retired = true;
+    for (std::size_t cycle = 0; cycle < ActivationCycles; ++cycle) {
+        const auto socket = static_cast<wgnx::platform::socket_handle>(200 + cycle);
+        platform.QueueUdpOpenResult({.socket = socket});
+        platform.QueueUdpSendResult({});
+        const auto now = static_cast<wgnx::platform::ktime_t>(
+            10'000 + cycle * 100);
+        const PeerIdentity peer = BeginActivation(coordinator, platform, now);
+        const bool activated = platform.CompleteNextResolution() &&
+            platform.CompleteNextUdpOpen() && platform.CompleteNextUdpSend();
+        Deactivate(coordinator, platform, peer, now + 50);
+
+        // Receive work can have been queued by the initial handshake send. It
+        // is intentionally consumed after teardown and must be inert.
+        static_cast<void>(platform.CompleteNextUdpReceive());
+        const auto protocol = coordinator.ProtocolSnapshot(0);
+        const bool timers_retired = !platform.IsTimerArmed(
+            wgnx::wireguard::TimerHook::RetransmitHandshake) &&
+            !platform.IsTimerArmed(wgnx::wireguard::TimerHook::SendKeepalive) &&
+            !platform.IsTimerArmed(wgnx::wireguard::TimerHook::NewHandshake) &&
+            !platform.IsTimerArmed(wgnx::wireguard::TimerHook::ZeroKeyMaterial) &&
+            !platform.IsTimerArmed(wgnx::wireguard::TimerHook::PersistentKeepalive);
+        all_cycles_retired = all_cycles_retired && activated &&
+            coordinator.Lifecycle(0)->state == wgnx::PeerRuntimeState::Inactive &&
+            !coordinator.BindingSnapshot(0).IsOpen() && !protocol.instantiated &&
+            !platform.HasPendingResolution() && !platform.HasPendingUdpOpen() &&
+            !platform.HasPendingUdpSend() && !platform.HasPendingUdpReceive() &&
+            timers_retired;
+    }
+
+    const auto &statistics = platform.GetStatistics();
+    WGNX_TEST_REQUIRE(
+        context,
+        all_cycles_retired && platform.ClosedSockets().size() == ActivationCycles &&
+            statistics.resolve_requests == ActivationCycles &&
+            statistics.udp_open_requests == ActivationCycles &&
+            statistics.udp_send_requests == ActivationCycles &&
+            statistics.udp_close_requests == ActivationCycles,
+        "repeated peer lifecycle retained bounded runtime work or transport ownership");
+}
+
 void TestNifmDoesNotOwnUdpBinding(TestContext &context) {
     using namespace wgnx::sysmodule::runtime;
 
