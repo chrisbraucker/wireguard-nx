@@ -1,12 +1,15 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 
 namespace wgnx::wireguard::crypto {
 
 constexpr inline std::size_t Blake2sBlockSize = 64;
 constexpr inline std::size_t Blake2sHashSize = 32;
+constexpr inline std::size_t Blake2sKeySize = 32;
 constexpr inline std::size_t ChaCha20KeySize = 32;
 constexpr inline std::size_t ChaCha20BlockSize = 64;
 constexpr inline std::size_t ChaCha20NonceSize = 12;
@@ -15,32 +18,38 @@ constexpr inline std::size_t Poly1305KeySize = 32;
 constexpr inline std::size_t Poly1305TagSize = 16;
 constexpr inline std::size_t X25519KeySize = 32;
 
-struct blake2s_state {
-    std::uint32_t h[8]{};
-    std::uint32_t t[2]{};
-    std::uint32_t f[2]{};
-    std::uint8_t buffer[Blake2sBlockSize]{};
-    std::size_t buffer_len{0};
-    std::size_t out_len{0};
-};
-
 void secure_clear(void *mem, std::size_t size);
 bool secure_equal(const void *lhs, const void *rhs, std::size_t size);
 
-bool blake2s_init(
-    blake2s_state *state,
-    std::size_t out_len,
-    const void *key,
-    std::size_t key_len);
-void blake2s_update(blake2s_state *state, const void *data, std::size_t size);
-bool blake2s_final(blake2s_state *state, void *out, std::size_t out_len);
-bool blake2s(
-    void *out,
-    std::size_t out_len,
-    const void *data,
-    std::size_t data_len,
-    const void *key,
-    std::size_t key_len);
+using ByteSpan = std::span<const std::uint8_t>;
+using MutableByteSpan = std::span<std::uint8_t>;
+
+class Blake2sHasher final {
+public:
+    Blake2sHasher() = default;
+    ~Blake2sHasher();
+
+    Blake2sHasher(const Blake2sHasher &) = delete;
+    Blake2sHasher &operator=(const Blake2sHasher &) = delete;
+    Blake2sHasher(Blake2sHasher &&) = delete;
+    Blake2sHasher &operator=(Blake2sHasher &&) = delete;
+
+    bool Initialize(std::size_t digest_size, ByteSpan key = {});
+    bool Update(ByteSpan data);
+    bool Final(MutableByteSpan output);
+
+private:
+    void Reset();
+
+    static constexpr std::size_t BackendStorageSize = 160;
+
+    alignas(std::max_align_t) std::array<std::byte, BackendStorageSize> backend_storage_{};
+    std::size_t digest_size_{0};
+    bool initialized_{false};
+    bool finalized_{false};
+};
+
+bool Blake2sHash(MutableByteSpan output, ByteSpan data, ByteSpan key = {});
 
 void chacha20_block(
     std::uint8_t out[ChaCha20BlockSize],

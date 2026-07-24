@@ -1,115 +1,19 @@
 #include "wireguard/crypto/primitives.hpp"
 
 #include "wireguard/crypto/monocypher.h"
+#include "wireguard/crypto/third_party/blake2/blake2.h"
 
 #include <vapours/crypto.hpp>
 
-#include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 
 namespace wgnx::wireguard::crypto {
 
 namespace {
 
-constexpr std::uint32_t Blake2sIv[8] = {
-    0x6A09E667U,
-    0xBB67AE85U,
-    0x3C6EF372U,
-    0xA54FF53AU,
-    0x510E527FU,
-    0x9B05688CU,
-    0x1F83D9ABU,
-    0x5BE0CD19U,
-};
-
-constexpr std::uint8_t Blake2sSigma[10][16] = {
-    {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15},
-    {14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3},
-    {11, 8, 12, 0, 5, 2, 15, 13, 10, 14, 3, 6, 7, 1, 9, 4},
-    {7, 9, 3, 1, 13, 12, 11, 14, 2, 6, 5, 10, 4, 0, 15, 8},
-    {9, 0, 5, 7, 2, 4, 10, 15, 14, 1, 11, 12, 6, 8, 3, 13},
-    {2, 12, 6, 10, 0, 11, 8, 3, 4, 13, 7, 5, 15, 14, 1, 9},
-    {12, 5, 1, 15, 14, 13, 4, 10, 0, 7, 6, 3, 9, 2, 8, 11},
-    {13, 11, 7, 14, 12, 1, 3, 9, 5, 0, 15, 4, 8, 6, 2, 10},
-    {6, 15, 14, 9, 11, 3, 0, 8, 12, 2, 13, 7, 1, 4, 10, 5},
-    {10, 2, 8, 4, 7, 6, 1, 5, 15, 11, 9, 14, 3, 12, 13, 0},
-};
-
-constexpr std::uint32_t Rotr32(std::uint32_t value, unsigned shift) {
-    return (value >> shift) | (value << (32 - shift));
-}
-
-constexpr std::uint32_t LoadLe32(const std::uint8_t *src) {
-    return static_cast<std::uint32_t>(src[0]) |
-           (static_cast<std::uint32_t>(src[1]) << 8) |
-           (static_cast<std::uint32_t>(src[2]) << 16) |
-           (static_cast<std::uint32_t>(src[3]) << 24);
-}
-
-void StoreLe32(std::uint8_t *dst, std::uint32_t value) {
-    dst[0] = static_cast<std::uint8_t>(value >> 0);
-    dst[1] = static_cast<std::uint8_t>(value >> 8);
-    dst[2] = static_cast<std::uint8_t>(value >> 16);
-    dst[3] = static_cast<std::uint8_t>(value >> 24);
-}
-
-void Blake2sIncrement(blake2s_state *state, std::size_t amount) {
-    state->t[0] += static_cast<std::uint32_t>(amount);
-    if (state->t[0] < amount) {
-        ++state->t[1];
-    }
-}
-
-void Blake2sRound(
-    std::uint32_t &a,
-    std::uint32_t &b,
-    std::uint32_t &c,
-    std::uint32_t &d,
-    std::uint32_t x,
-    std::uint32_t y) {
-    a = a + b + x;
-    d = Rotr32(d ^ a, 16);
-    c = c + d;
-    b = Rotr32(b ^ c, 12);
-    a = a + b + y;
-    d = Rotr32(d ^ a, 8);
-    c = c + d;
-    b = Rotr32(b ^ c, 7);
-}
-
-void Blake2sCompress(blake2s_state *state, const std::uint8_t block[Blake2sBlockSize]) {
-    std::uint32_t m[16]{};
-    std::uint32_t v[16]{};
-
-    for (std::size_t i = 0; i < 16; ++i) {
-        m[i] = LoadLe32(block + (i * 4));
-    }
-    for (std::size_t i = 0; i < 8; ++i) {
-        v[i] = state->h[i];
-        v[i + 8] = Blake2sIv[i];
-    }
-
-    v[12] ^= state->t[0];
-    v[13] ^= state->t[1];
-    v[14] ^= state->f[0];
-    v[15] ^= state->f[1];
-
-    for (std::size_t round = 0; round < 10; ++round) {
-        Blake2sRound(v[0], v[4], v[8], v[12], m[Blake2sSigma[round][0]], m[Blake2sSigma[round][1]]);
-        Blake2sRound(v[1], v[5], v[9], v[13], m[Blake2sSigma[round][2]], m[Blake2sSigma[round][3]]);
-        Blake2sRound(v[2], v[6], v[10], v[14], m[Blake2sSigma[round][4]], m[Blake2sSigma[round][5]]);
-        Blake2sRound(v[3], v[7], v[11], v[15], m[Blake2sSigma[round][6]], m[Blake2sSigma[round][7]]);
-        Blake2sRound(v[0], v[5], v[10], v[15], m[Blake2sSigma[round][8]], m[Blake2sSigma[round][9]]);
-        Blake2sRound(v[1], v[6], v[11], v[12], m[Blake2sSigma[round][10]], m[Blake2sSigma[round][11]]);
-        Blake2sRound(v[2], v[7], v[8], v[13], m[Blake2sSigma[round][12]], m[Blake2sSigma[round][13]]);
-        Blake2sRound(v[3], v[4], v[9], v[14], m[Blake2sSigma[round][14]], m[Blake2sSigma[round][15]]);
-    }
-
-    for (std::size_t i = 0; i < 8; ++i) {
-        state->h[i] ^= v[i] ^ v[i + 8];
-    }
-}
+static_assert(alignof(::blake2s_state) <= alignof(std::max_align_t));
 
 bool DecodeHex(std::uint8_t *out, std::size_t out_size, const char *hex) {
     if (out == nullptr || hex == nullptr) {
@@ -153,19 +57,84 @@ bool DecodeHex(std::uint8_t *out, std::size_t out_size, const char *hex) {
 }
 
 bool TestBlake2sVector() {
-    static constexpr std::uint8_t Expected[Blake2sHashSize] = {
+    // RFC 7693, Appendix A ("abc"). The keyed vector is from the official
+    // BLAKE2 KAT corpus at the pinned vendor revision.
+    static constexpr std::uint8_t ExpectedAbc[Blake2sHashSize] = {
         0x50, 0x8c, 0x5e, 0x8c, 0x32, 0x7c, 0x14, 0xe2,
         0xe1, 0xa7, 0x2b, 0xa3, 0x4e, 0xeb, 0x45, 0x2f,
         0x37, 0x45, 0x8b, 0x20, 0x9e, 0xd6, 0x3a, 0x29,
         0x4d, 0x99, 0x9b, 0x4c, 0x86, 0x67, 0x59, 0x82,
     };
+    static constexpr std::uint8_t ExpectedKeyedEmpty[Blake2sHashSize] = {
+        0x48, 0xa8, 0x99, 0x7d, 0xa4, 0x07, 0x87, 0x6b,
+        0x3d, 0x79, 0xc0, 0xd9, 0x23, 0x25, 0xad, 0x3b,
+        0x89, 0xcb, 0xb7, 0x54, 0xd8, 0x6a, 0xb7, 0x1a,
+        0xee, 0x04, 0x7a, 0xd3, 0x45, 0xfd, 0x2c, 0x49,
+    };
+    static constexpr std::uint8_t ExpectedKeyed65[Blake2sHashSize] = {
+        0x21, 0xfe, 0x0c, 0xeb, 0x00, 0x52, 0xbe, 0x7f,
+        0xb0, 0xf0, 0x04, 0x18, 0x7c, 0xac, 0xd7, 0xde,
+        0x67, 0xfa, 0x6e, 0xb0, 0x93, 0x8d, 0x92, 0x76,
+        0x77, 0xf2, 0x39, 0x8c, 0x13, 0x23, 0x17, 0xa8,
+    };
 
-    std::uint8_t digest[Blake2sHashSize]{};
-    const char *message = "abc";
-    const bool ok = blake2s(digest, sizeof(digest), message, 3, nullptr, 0);
-    const bool same = ok && secure_equal(digest, Expected, sizeof(Expected));
-    secure_clear(digest, sizeof(digest));
-    return same;
+    std::uint8_t key[Blake2sKeySize]{};
+    std::uint8_t oversized_key[Blake2sKeySize + 1]{};
+    std::uint8_t block_message[Blake2sBlockSize + 1]{};
+    for (std::size_t index = 0; index < sizeof(key); ++index) {
+        key[index] = static_cast<std::uint8_t>(index);
+    }
+    for (std::size_t index = 0; index < sizeof(block_message); ++index) {
+        block_message[index] = static_cast<std::uint8_t>(index);
+    }
+
+    std::uint8_t one_shot[Blake2sHashSize]{};
+    std::uint8_t incremental[Blake2sHashSize]{};
+    std::uint8_t keyed[Blake2sHashSize]{};
+    std::uint8_t block_boundary[Blake2sHashSize]{};
+    std::uint8_t short_digest[16]{};
+    static constexpr std::uint8_t Message[] = {'a', 'b', 'c'};
+
+    const bool one_shot_ok = Blake2sHash(one_shot, Message) &&
+        secure_equal(one_shot, ExpectedAbc, sizeof(ExpectedAbc));
+    Blake2sHasher incremental_hasher{};
+    const bool incremental_ok = incremental_hasher.Initialize(Blake2sHashSize) &&
+        incremental_hasher.Update(ByteSpan{Message, 1}) &&
+        incremental_hasher.Update(ByteSpan{Message + 1, 2}) &&
+        incremental_hasher.Final(incremental) &&
+        secure_equal(incremental, ExpectedAbc, sizeof(ExpectedAbc));
+    const bool keyed_ok = Blake2sHash(keyed, {}, key) &&
+        secure_equal(keyed, ExpectedKeyedEmpty, sizeof(ExpectedKeyedEmpty));
+    Blake2sHasher block_hasher{};
+    const bool block_boundary_ok = block_hasher.Initialize(Blake2sHashSize, key) &&
+        block_hasher.Update(ByteSpan{block_message, Blake2sBlockSize}) &&
+        block_hasher.Update(ByteSpan{block_message + Blake2sBlockSize, 1}) &&
+        block_hasher.Final(block_boundary) &&
+        secure_equal(block_boundary, ExpectedKeyed65, sizeof(ExpectedKeyed65));
+    const bool short_digest_ok = Blake2sHash(short_digest, Message) &&
+        short_digest[0] == 0xaa && short_digest[15] == 0xae;
+
+    Blake2sHasher misuse_hasher{};
+    const bool misuse_rejected = !misuse_hasher.Update(Message) &&
+        !misuse_hasher.Initialize(0) &&
+        !misuse_hasher.Initialize(Blake2sHashSize + 1) &&
+        !misuse_hasher.Initialize(Blake2sHashSize, oversized_key) &&
+        misuse_hasher.Initialize(Blake2sHashSize) &&
+        !misuse_hasher.Final(MutableByteSpan{one_shot, Blake2sHashSize - 1}) &&
+        misuse_hasher.Update(Message) &&
+        misuse_hasher.Final(one_shot) &&
+        !misuse_hasher.Update(Message) &&
+        !misuse_hasher.Final(one_shot);
+
+    secure_clear(key, sizeof(key));
+    secure_clear(oversized_key, sizeof(oversized_key));
+    secure_clear(block_message, sizeof(block_message));
+    secure_clear(one_shot, sizeof(one_shot));
+    secure_clear(incremental, sizeof(incremental));
+    secure_clear(keyed, sizeof(keyed));
+    secure_clear(block_boundary, sizeof(block_boundary));
+    secure_clear(short_digest, sizeof(short_digest));
+    return one_shot_ok && incremental_ok && keyed_ok && block_boundary_ok && short_digest_ok && misuse_rejected;
 }
 
 bool TestChaCha20BlockVector() {
@@ -414,86 +383,64 @@ bool secure_equal(const void *lhs, const void *rhs, std::size_t size) {
     return ams::crypto::IsSameBytes(lhs, rhs, size);
 }
 
-bool blake2s_init(
-    blake2s_state *state,
-    std::size_t out_len,
-    const void *key,
-    std::size_t key_len) {
-    if (state == nullptr || out_len == 0 || out_len > Blake2sHashSize || key_len > Blake2sBlockSize) {
+Blake2sHasher::~Blake2sHasher() {
+    Reset();
+}
+
+void Blake2sHasher::Reset() {
+    secure_clear(backend_storage_.data(), backend_storage_.size());
+    digest_size_ = 0;
+    initialized_ = false;
+    finalized_ = false;
+}
+
+bool Blake2sHasher::Initialize(std::size_t digest_size, ByteSpan key) {
+    static_assert(sizeof(::blake2s_state) <= BackendStorageSize);
+
+    Reset();
+    if (digest_size == 0 || digest_size > Blake2sHashSize || key.size() > Blake2sKeySize ||
+        (!key.empty() && key.data() == nullptr)) {
         return false;
     }
 
-    *state = {};
-    state->out_len = out_len;
-    for (std::size_t i = 0; i < 8; ++i) {
-        state->h[i] = Blake2sIv[i];
-    }
-    state->h[0] ^= 0x01010000U ^ static_cast<std::uint32_t>(key_len << 8) ^ static_cast<std::uint32_t>(out_len);
-
-    if (key != nullptr && key_len != 0) {
-        std::uint8_t block[Blake2sBlockSize]{};
-        std::memcpy(block, key, key_len);
-        blake2s_update(state, block, sizeof(block));
-        secure_clear(block, sizeof(block));
+    auto *const backend = std::construct_at(
+        reinterpret_cast<::blake2s_state *>(backend_storage_.data()));
+    const int result = key.empty()
+        ? ::blake2s_init(backend, digest_size)
+        : ::blake2s_init_key(backend, digest_size, key.data(), key.size());
+    if (result != 0) {
+        Reset();
+        return false;
     }
 
+    digest_size_ = digest_size;
+    initialized_ = true;
     return true;
 }
 
-void blake2s_update(blake2s_state *state, const void *data, std::size_t size) {
-    if (state == nullptr || (data == nullptr && size != 0)) {
-        return;
+bool Blake2sHasher::Update(ByteSpan data) {
+    if (!initialized_ || finalized_ || (!data.empty() && data.data() == nullptr)) {
+        return false;
     }
-
-    const auto *bytes = static_cast<const std::uint8_t *>(data);
-    while (size != 0) {
-        if (state->buffer_len == Blake2sBlockSize) {
-            Blake2sIncrement(state, Blake2sBlockSize);
-            Blake2sCompress(state, state->buffer);
-            state->buffer_len = 0;
-        }
-
-        const std::size_t amount = std::min<std::size_t>(Blake2sBlockSize - state->buffer_len, size);
-        std::memcpy(state->buffer + state->buffer_len, bytes, amount);
-        state->buffer_len += amount;
-        bytes += amount;
-        size -= amount;
-    }
+    auto *const backend = reinterpret_cast<::blake2s_state *>(backend_storage_.data());
+    return ::blake2s_update(backend, data.data(), data.size()) == 0;
 }
 
-bool blake2s_final(blake2s_state *state, void *out, std::size_t out_len) {
-    if (state == nullptr || out == nullptr || out_len < state->out_len) {
+bool Blake2sHasher::Final(MutableByteSpan output) {
+    if (!initialized_ || finalized_ || output.size() != digest_size_ || output.data() == nullptr) {
         return false;
     }
 
-    Blake2sIncrement(state, state->buffer_len);
-    state->f[0] = 0xffffffffU;
-    std::memset(state->buffer + state->buffer_len, 0, Blake2sBlockSize - state->buffer_len);
-    Blake2sCompress(state, state->buffer);
-
-    std::uint8_t full_hash[Blake2sHashSize]{};
-    for (std::size_t i = 0; i < 8; ++i) {
-        StoreLe32(full_hash + (i * 4), state->h[i]);
-    }
-    std::memcpy(out, full_hash, state->out_len);
-    secure_clear(full_hash, sizeof(full_hash));
-    secure_clear(state, sizeof(*state));
-    return true;
+    auto *const backend = reinterpret_cast<::blake2s_state *>(backend_storage_.data());
+    const bool ok = ::blake2s_final(backend, output.data(), output.size()) == 0;
+    Reset();
+    finalized_ = true;
+    return ok;
 }
 
-bool blake2s(
-    void *out,
-    std::size_t out_len,
-    const void *data,
-    std::size_t data_len,
-    const void *key,
-    std::size_t key_len) {
-    blake2s_state state{};
-    if (!blake2s_init(&state, out_len, key, key_len)) {
-        return false;
-    }
-    blake2s_update(&state, data, data_len);
-    return blake2s_final(&state, out, out_len);
+bool Blake2sHash(MutableByteSpan output, ByteSpan data, ByteSpan key) {
+    Blake2sHasher hasher{};
+    return hasher.Initialize(output.size(), key) && hasher.Update(data) && hasher.Final(output);
 }
 
 void chacha20_block(

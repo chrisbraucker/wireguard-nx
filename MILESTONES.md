@@ -398,6 +398,19 @@ Modernize and audit the remaining legacy cryptographic, packet-parsing,
 serialization, and sensitive-memory code after lifecycle behavior has a stable
 test baseline.
 
+### Current Progress
+
+- BLAKE2s now uses the pinned portable reference C implementation from the
+  upstream BLAKE2 project behind a typed, lifecycle-enforcing C++ wrapper.
+  Provenance, license selection, integrity digests, and the vendor refresh
+  process are recorded in
+  `sysmodule/src/wireguard/crypto/third_party/blake2/UPSTREAM.md`.
+- The wrapper accepts only byte spans, rejects invalid state transitions and
+  unsupported output/key sizes, and clears retained reference state after use.
+- This closes the local BLAKE2s provenance and API-lifecycle gap. Typed
+  handshake KDF ownership, resolver parsing, and the remaining primitive audit
+  remain Milestone 8 work.
+
 ### Scope
 
 - replace remaining ambiguous raw buffers and C-style ownership

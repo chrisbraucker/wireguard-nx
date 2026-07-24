@@ -30,7 +30,7 @@ TITLE_ID	:=	010000000000EAD0
 DISTDIR		:=	$(OUTDIR)/atmosphere/contents/$(TITLE_ID)
 DATA		:=	data
 RESOURCES	:=	res
-SOURCES		+=	src src/runtime src/runtime/peer src/platform src/platform/horizon src/wireguard src/wireguard/crypto
+SOURCES		+=	src src/runtime src/runtime/peer src/platform src/platform/horizon src/wireguard src/wireguard/crypto src/wireguard/crypto/third_party/blake2
 INCLUDES	+=	../common/include \
 			src \
 			src/platform/horizon \
@@ -43,6 +43,8 @@ HOST_CC		?= cc
 PYTHON		?= python3
 HOST_TEST_CXXFLAGS := -std=c++23 -Wall -Wextra -Wpedantic -Werror
 HOST_TEST_CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -Werror
+HOST_SANITIZE_CFLAGS := $(HOST_TEST_CFLAGS) -fsanitize=address,undefined -fno-omit-frame-pointer
+HOST_TSAN_CFLAGS := $(HOST_TEST_CFLAGS) -fsanitize=thread -fno-omit-frame-pointer
 HOST_WARNING_CXXFLAGS := $(HOST_TEST_CXXFLAGS) -Wshadow -Wformat=2
 HOST_TEST_DIR	:= $(OUTDIR)/host-test
 HOST_TEST_TARGET := $(HOST_TEST_DIR)/wireguard-host-test
@@ -106,13 +108,27 @@ HOST_TEST_CPP_SOURCES := \
 	test/host/timer_tests.cpp \
 	test/host/failure_composition_tests.cpp \
 	test/host/main.cpp
-HOST_TEST_C_SOURCES := src/wireguard/crypto/monocypher.c
+HOST_TEST_C_SOURCES := \
+	src/wireguard/crypto/monocypher.c \
+	src/wireguard/crypto/third_party/blake2/blake2s-ref.c
+HOST_TEST_C_OBJECT_NAMES := $(notdir $(HOST_TEST_C_SOURCES:.c=.o))
+HOST_TEST_C_HEADERS := $(shell find $(TOPDIR)/src/wireguard/crypto -type f -name '*.h')
 HOST_TEST_HEADERS := $(shell find $(TOPDIR)/test/host $(TOPDIR)/src $(TOPDIR)/../common/include -type f -name '*.hpp')
+HOST_TEST_C_INCLUDES := \
+	-I$(CURDIR)/src/wireguard/crypto \
+	-I$(CURDIR)/src/wireguard/crypto/third_party/blake2
 HOST_TEST_INCLUDES := \
 	-I$(CURDIR)/test/host \
 	-I$(CURDIR)/test/host/include \
 	-I$(CURDIR)/../common/include \
 	-I$(CURDIR)/src
+
+define compile_host_c_sources
+	@for source in $(HOST_TEST_C_SOURCES); do \
+		object=$$(basename "$$source" .c).o; \
+		$(HOST_CC) $(1) $(HOST_TEST_C_INCLUDES) -c $(CURDIR)/$$source -o $(2)/$$object || exit $$?; \
+	done
+endef
 FUZZ_CONFIG_ENDPOINT_SOURCES := \
 	src/config_text_validation.cpp \
 	src/platform/endpoint_parser.cpp \
@@ -267,29 +283,29 @@ report-footprint: $(BUILD)
 
 resource-report: check-stack report-footprint
 
-$(HOST_TEST_TARGET): Makefile $(HOST_TEST_CPP_SOURCES) $(HOST_TEST_C_SOURCES) $(HOST_TEST_HEADERS)
+$(HOST_TEST_TARGET): Makefile $(HOST_TEST_CPP_SOURCES) $(HOST_TEST_C_SOURCES) $(HOST_TEST_C_HEADERS) $(HOST_TEST_HEADERS)
 	@[ -d $(HOST_TEST_DIR) ] || mkdir -p $(HOST_TEST_DIR)
-	@$(HOST_CC) $(HOST_TEST_CFLAGS) -I$(CURDIR)/src/wireguard/crypto -c $(CURDIR)/src/wireguard/crypto/monocypher.c -o $(HOST_TEST_DIR)/monocypher.o
-	@$(HOST_CXX) $(HOST_TEST_CXXFLAGS) $(HOST_TEST_INCLUDES) $(addprefix $(CURDIR)/,$(HOST_TEST_CPP_SOURCES)) $(HOST_TEST_DIR)/monocypher.o -o $(HOST_TEST_TARGET)
+	$(call compile_host_c_sources,$(HOST_TEST_CFLAGS),$(HOST_TEST_DIR))
+	@$(HOST_CXX) $(HOST_TEST_CXXFLAGS) $(HOST_TEST_INCLUDES) $(addprefix $(CURDIR)/,$(HOST_TEST_CPP_SOURCES)) $(addprefix $(HOST_TEST_DIR)/,$(HOST_TEST_C_OBJECT_NAMES)) -o $(HOST_TEST_TARGET)
 
 $(FUZZ_SEED_WRITER): Makefile test/fuzz/fuzz_seed_writer.cpp test/fuzz/fuzz_seed_data.hpp
 	@[ -d $(FUZZ_DIR) ] || mkdir -p $(FUZZ_DIR)
 	@$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -I$(CURDIR)/test/fuzz $(CURDIR)/test/fuzz/fuzz_seed_writer.cpp -o $(FUZZ_SEED_WRITER)
 
-$(HOST_SANITIZE_TARGET): Makefile $(HOST_TEST_CPP_SOURCES) $(HOST_TEST_C_SOURCES) $(HOST_TEST_HEADERS)
+$(HOST_SANITIZE_TARGET): Makefile $(HOST_TEST_CPP_SOURCES) $(HOST_TEST_C_SOURCES) $(HOST_TEST_C_HEADERS) $(HOST_TEST_HEADERS)
 	@[ -d $(HOST_SANITIZE_DIR) ] || mkdir -p $(HOST_SANITIZE_DIR)
-	@$(HOST_CC) $(HOST_TEST_CFLAGS) -fsanitize=address,undefined -fno-omit-frame-pointer -I$(CURDIR)/src/wireguard/crypto -c $(CURDIR)/src/wireguard/crypto/monocypher.c -o $(HOST_SANITIZE_DIR)/monocypher.o
-	@$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -fsanitize=address,undefined -fno-omit-frame-pointer $(HOST_TEST_INCLUDES) $(addprefix $(CURDIR)/,$(HOST_TEST_CPP_SOURCES)) $(HOST_SANITIZE_DIR)/monocypher.o -o $(HOST_SANITIZE_TARGET)
+	$(call compile_host_c_sources,$(HOST_SANITIZE_CFLAGS),$(HOST_SANITIZE_DIR))
+	@$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -fsanitize=address,undefined -fno-omit-frame-pointer $(HOST_TEST_INCLUDES) $(addprefix $(CURDIR)/,$(HOST_TEST_CPP_SOURCES)) $(addprefix $(HOST_SANITIZE_DIR)/,$(HOST_TEST_C_OBJECT_NAMES)) -o $(HOST_SANITIZE_TARGET)
 
-$(HOST_TSAN_TARGET): Makefile $(HOST_TEST_CPP_SOURCES) $(HOST_TEST_C_SOURCES) $(HOST_TEST_HEADERS)
+$(HOST_TSAN_TARGET): Makefile $(HOST_TEST_CPP_SOURCES) $(HOST_TEST_C_SOURCES) $(HOST_TEST_C_HEADERS) $(HOST_TEST_HEADERS)
 	@[ -d $(HOST_TSAN_DIR) ] || mkdir -p $(HOST_TSAN_DIR)
-	@$(HOST_CC) $(HOST_TEST_CFLAGS) -fsanitize=thread -fno-omit-frame-pointer -I$(CURDIR)/src/wireguard/crypto -c $(CURDIR)/src/wireguard/crypto/monocypher.c -o $(HOST_TSAN_DIR)/monocypher.o
-	@$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -fsanitize=thread -fno-omit-frame-pointer $(HOST_TEST_INCLUDES) $(addprefix $(CURDIR)/,$(HOST_TEST_CPP_SOURCES)) $(HOST_TSAN_DIR)/monocypher.o -o $(HOST_TSAN_TARGET)
+	$(call compile_host_c_sources,$(HOST_TSAN_CFLAGS),$(HOST_TSAN_DIR))
+	@$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -fsanitize=thread -fno-omit-frame-pointer $(HOST_TEST_INCLUDES) $(addprefix $(CURDIR)/,$(HOST_TEST_CPP_SOURCES)) $(addprefix $(HOST_TSAN_DIR)/,$(HOST_TEST_C_OBJECT_NAMES)) -o $(HOST_TSAN_TARGET)
 
-$(HOST_WARNING_TARGET): Makefile $(HOST_TEST_CPP_SOURCES) $(HOST_TEST_C_SOURCES) $(HOST_TEST_HEADERS)
+$(HOST_WARNING_TARGET): Makefile $(HOST_TEST_CPP_SOURCES) $(HOST_TEST_C_SOURCES) $(HOST_TEST_C_HEADERS) $(HOST_TEST_HEADERS)
 	@[ -d $(HOST_WARNING_DIR) ] || mkdir -p $(HOST_WARNING_DIR)
-	@$(HOST_CC) $(HOST_TEST_CFLAGS) -I$(CURDIR)/src/wireguard/crypto -c $(CURDIR)/src/wireguard/crypto/monocypher.c -o $(HOST_WARNING_DIR)/monocypher.o
-	@$(HOST_CXX) $(HOST_WARNING_CXXFLAGS) $(HOST_TEST_INCLUDES) $(addprefix $(CURDIR)/,$(HOST_TEST_CPP_SOURCES)) $(HOST_WARNING_DIR)/monocypher.o -o $(HOST_WARNING_TARGET)
+	$(call compile_host_c_sources,$(HOST_TEST_CFLAGS),$(HOST_WARNING_DIR))
+	@$(HOST_CXX) $(HOST_WARNING_CXXFLAGS) $(HOST_TEST_INCLUDES) $(addprefix $(CURDIR)/,$(HOST_TEST_CPP_SOURCES)) $(addprefix $(HOST_WARNING_DIR)/,$(HOST_TEST_C_OBJECT_NAMES)) -o $(HOST_WARNING_TARGET)
 
 $(FUZZ_CONFIG_ENDPOINT_TARGET): Makefile $(FUZZ_CONFIG_ENDPOINT_SOURCES) $(FUZZ_HEADERS)
 	@[ -d $(FUZZ_DIR) ] || mkdir -p $(FUZZ_DIR)

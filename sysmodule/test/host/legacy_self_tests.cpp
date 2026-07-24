@@ -318,13 +318,13 @@ bool ComputeHarnessCookieKey(
     }
 
     static constexpr char CookieKeyLabel[] = "cookie--";
-    crypto::blake2s_state state{};
-    if (!crypto::blake2s_init(&state, 32, nullptr, 0)) {
-        return false;
-    }
-    crypto::blake2s_update(&state, CookieKeyLabel, sizeof(CookieKeyLabel) - 1);
-    crypto::blake2s_update(&state, remote_static.bytes.data(), remote_static.bytes.size());
-    return crypto::blake2s_final(&state, out_key, 32);
+    crypto::Blake2sHasher hasher{};
+    return hasher.Initialize(32) &&
+        hasher.Update(crypto::ByteSpan{
+            reinterpret_cast<const std::uint8_t *>(CookieKeyLabel),
+            sizeof(CookieKeyLabel) - 1}) &&
+        hasher.Update(remote_static.bytes) &&
+        hasher.Final(std::span{out_key, static_cast<std::size_t>(32)});
 }
 
 bool BuildHarnessCookieReply(

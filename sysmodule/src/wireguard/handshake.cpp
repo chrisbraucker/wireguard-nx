@@ -73,25 +73,37 @@ void StoreBe32(std::uint8_t *out, std::uint32_t value) {
     out[3] = static_cast<std::uint8_t>(value & 0xffU);
 }
 
+crypto::ByteSpan ByteView(const std::uint8_t *data, std::size_t size) {
+    return {data, size};
+}
+
+crypto::ByteSpan ByteView(const char *data, std::size_t size) {
+    return {reinterpret_cast<const std::uint8_t *>(data), size};
+}
+
+crypto::MutableByteSpan MutableByteView(std::uint8_t *data, std::size_t size) {
+    return {data, size};
+}
+
 void EnsureHandshakeInitCache() {
     if (g_handshake_init_cache.ready) {
         return;
     }
 
-    static_cast<void>(crypto::blake2s(
-        g_handshake_init_cache.chaining_key,
-        sizeof(g_handshake_init_cache.chaining_key),
-        HandshakeName,
-        sizeof(HandshakeName) - 1,
-        nullptr,
-        0));
-
-    crypto::blake2s_state state{};
-    static_cast<void>(crypto::blake2s_init(&state, sizeof(g_handshake_init_cache.hash), nullptr, 0));
-    crypto::blake2s_update(&state, g_handshake_init_cache.chaining_key, sizeof(g_handshake_init_cache.chaining_key));
-    crypto::blake2s_update(&state, IdentifierName, sizeof(IdentifierName) - 1);
-    static_cast<void>(crypto::blake2s_final(&state, g_handshake_init_cache.hash, sizeof(g_handshake_init_cache.hash)));
-    g_handshake_init_cache.ready = true;
+    const bool chaining_key_ready = crypto::Blake2sHash(
+        MutableByteView(
+            g_handshake_init_cache.chaining_key,
+            sizeof(g_handshake_init_cache.chaining_key)),
+        ByteView(HandshakeName, sizeof(HandshakeName) - 1));
+    crypto::Blake2sHasher hash{};
+    const bool hash_ready = chaining_key_ready &&
+        hash.Initialize(sizeof(g_handshake_init_cache.hash)) &&
+        hash.Update(ByteView(
+            g_handshake_init_cache.chaining_key,
+            sizeof(g_handshake_init_cache.chaining_key))) &&
+        hash.Update(ByteView(IdentifierName, sizeof(IdentifierName) - 1)) &&
+        hash.Final(MutableByteView(g_handshake_init_cache.hash, sizeof(g_handshake_init_cache.hash)));
+    g_handshake_init_cache.ready = hash_ready;
 }
 
 bool Blake2sHmac(
@@ -111,7 +123,9 @@ bool Blake2sHmac(
     std::uint8_t outer_pad[crypto::Blake2sBlockSize]{};
 
     if (key_size > sizeof(normalized_key)) {
-        if (!crypto::blake2s(normalized_key, crypto::Blake2sHashSize, key, key_size, nullptr, 0)) {
+        if (!crypto::Blake2sHash(
+                normalized_key,
+                ByteView(key, key_size))) {
             crypto::secure_clear(normalized_key, sizeof(normalized_key));
             return false;
         }
@@ -124,16 +138,16 @@ bool Blake2sHmac(
         outer_pad[i] = normalized_key[i] ^ 0x5cU;
     }
 
-    crypto::blake2s_state state{};
-    static_cast<void>(crypto::blake2s_init(&state, sizeof(inner_hash), nullptr, 0));
-    crypto::blake2s_update(&state, inner_pad, sizeof(inner_pad));
-    crypto::blake2s_update(&state, data, data_size);
-    static_cast<void>(crypto::blake2s_final(&state, inner_hash, sizeof(inner_hash)));
-
-    static_cast<void>(crypto::blake2s_init(&state, out_size, nullptr, 0));
-    crypto::blake2s_update(&state, outer_pad, sizeof(outer_pad));
-    crypto::blake2s_update(&state, inner_hash, sizeof(inner_hash));
-    const bool ok = crypto::blake2s_final(&state, out, out_size);
+    crypto::Blake2sHasher inner{};
+    crypto::Blake2sHasher outer{};
+    const bool ok = inner.Initialize(sizeof(inner_hash)) &&
+        inner.Update(ByteView(inner_pad, sizeof(inner_pad))) &&
+        inner.Update(ByteView(data, data_size)) &&
+        inner.Final(inner_hash) &&
+        outer.Initialize(out_size) &&
+        outer.Update(ByteView(outer_pad, sizeof(outer_pad))) &&
+        outer.Update(ByteView(inner_hash, sizeof(inner_hash))) &&
+        outer.Final(MutableByteView(out, out_size));
 
     crypto::secure_clear(normalized_key, sizeof(normalized_key));
     crypto::secure_clear(inner_hash, sizeof(inner_hash));
@@ -189,11 +203,12 @@ void Kdf(
 }
 
 void MixHash(std::uint8_t hash[NoiseHashSize], const std::uint8_t *src, std::size_t src_size) {
-    crypto::blake2s_state state{};
-    static_cast<void>(crypto::blake2s_init(&state, NoiseHashSize, nullptr, 0));
-    crypto::blake2s_update(&state, hash, NoiseHashSize);
-    crypto::blake2s_update(&state, src, src_size);
-    static_cast<void>(crypto::blake2s_final(&state, hash, NoiseHashSize));
+    crypto::Blake2sHasher hasher{};
+    static_cast<void>(
+        hasher.Initialize(NoiseHashSize) &&
+        hasher.Update(ByteView(hash, NoiseHashSize)) &&
+        hasher.Update(ByteView(src, src_size)) &&
+        hasher.Final(MutableByteView(hash, NoiseHashSize)));
 }
 
 void HandshakeInit(
@@ -383,11 +398,14 @@ void ComputeMac1(message_handshake_initiation *message, const noise_public_key &
     }
 
     std::uint8_t mac1_key[NoiseSymmetricKeySize]{};
-    crypto::blake2s_state state{};
-    static_cast<void>(crypto::blake2s_init(&state, sizeof(mac1_key), nullptr, 0));
-    crypto::blake2s_update(&state, Mac1KeyLabel, sizeof(Mac1KeyLabel) - 1);
-    crypto::blake2s_update(&state, remote_static.bytes.data(), remote_static.bytes.size());
-    static_cast<void>(crypto::blake2s_final(&state, mac1_key, sizeof(mac1_key)));
+    crypto::Blake2sHasher key_hasher{};
+    if (!key_hasher.Initialize(sizeof(mac1_key)) ||
+        !key_hasher.Update(ByteView(Mac1KeyLabel, sizeof(Mac1KeyLabel) - 1)) ||
+        !key_hasher.Update(remote_static.bytes) ||
+        !key_hasher.Final(mac1_key)) {
+        crypto::secure_clear(mac1_key, sizeof(mac1_key));
+        return;
+    }
 
     std::array<std::uint8_t, HandshakeInitiationSize> serialized{};
     if (SerializeHandshakeInitiation(serialized, *message) != ParseError::None) {
@@ -395,13 +413,10 @@ void ComputeMac1(message_handshake_initiation *message, const noise_public_key &
         return;
     }
     constexpr std::size_t mac1_input_size = HandshakeInitiationSize - (2 * NoiseMacSize);
-    static_cast<void>(crypto::blake2s(
-        message->macs.mac1.data(),
-        message->macs.mac1.size(),
-        serialized.data(),
-        mac1_input_size,
-        mac1_key,
-        sizeof(mac1_key)));
+    static_cast<void>(crypto::Blake2sHash(
+        message->macs.mac1,
+        ByteView(serialized.data(), mac1_input_size),
+        mac1_key));
     crypto::secure_clear(mac1_key, sizeof(mac1_key));
     crypto::secure_clear(serialized.data(), serialized.size());
 }
@@ -412,11 +427,14 @@ void ComputeMac1(message_handshake_response *message, const noise_public_key &re
     }
 
     std::uint8_t mac1_key[NoiseSymmetricKeySize]{};
-    crypto::blake2s_state state{};
-    static_cast<void>(crypto::blake2s_init(&state, sizeof(mac1_key), nullptr, 0));
-    crypto::blake2s_update(&state, Mac1KeyLabel, sizeof(Mac1KeyLabel) - 1);
-    crypto::blake2s_update(&state, remote_static.bytes.data(), remote_static.bytes.size());
-    static_cast<void>(crypto::blake2s_final(&state, mac1_key, sizeof(mac1_key)));
+    crypto::Blake2sHasher key_hasher{};
+    if (!key_hasher.Initialize(sizeof(mac1_key)) ||
+        !key_hasher.Update(ByteView(Mac1KeyLabel, sizeof(Mac1KeyLabel) - 1)) ||
+        !key_hasher.Update(remote_static.bytes) ||
+        !key_hasher.Final(mac1_key)) {
+        crypto::secure_clear(mac1_key, sizeof(mac1_key));
+        return;
+    }
 
     std::array<std::uint8_t, HandshakeResponseSize> serialized{};
     if (SerializeHandshakeResponse(serialized, *message) != ParseError::None) {
@@ -424,13 +442,10 @@ void ComputeMac1(message_handshake_response *message, const noise_public_key &re
         return;
     }
     constexpr std::size_t mac1_input_size = HandshakeResponseSize - (2 * NoiseMacSize);
-    static_cast<void>(crypto::blake2s(
-        message->macs.mac1.data(),
-        message->macs.mac1.size(),
-        serialized.data(),
-        mac1_input_size,
-        mac1_key,
-        sizeof(mac1_key)));
+    static_cast<void>(crypto::Blake2sHash(
+        message->macs.mac1,
+        ByteView(serialized.data(), mac1_input_size),
+        mac1_key));
     crypto::secure_clear(mac1_key, sizeof(mac1_key));
     crypto::secure_clear(serialized.data(), serialized.size());
 }
@@ -461,13 +476,11 @@ bool ComputeCookieKey(
         return false;
     }
 
-    crypto::blake2s_state state{};
-    if (!crypto::blake2s_init(&state, NoiseSymmetricKeySize, nullptr, 0)) {
-        return false;
-    }
-    crypto::blake2s_update(&state, CookieKeyLabel, sizeof(CookieKeyLabel) - 1);
-    crypto::blake2s_update(&state, remote_static.bytes.data(), remote_static.bytes.size());
-    return crypto::blake2s_final(&state, key, NoiseSymmetricKeySize);
+    crypto::Blake2sHasher hasher{};
+    return hasher.Initialize(NoiseSymmetricKeySize) &&
+        hasher.Update(ByteView(CookieKeyLabel, sizeof(CookieKeyLabel) - 1)) &&
+        hasher.Update(remote_static.bytes) &&
+        hasher.Final(MutableByteView(key, NoiseSymmetricKeySize));
 }
 
 template <typename T, std::size_t Size>
@@ -481,13 +494,10 @@ void ComputeMac2(
         return;
     }
     constexpr std::size_t mac2_input_size = Size - NoiseMacSize;
-    static_cast<void>(crypto::blake2s(
-        out_mac2.data(),
-        NoiseMacSize,
-        serialized.data(),
-        mac2_input_size,
-        cookie.value.data(),
-        CookieValueSize));
+    static_cast<void>(crypto::Blake2sHash(
+        out_mac2,
+        ByteView(serialized.data(), mac2_input_size),
+        cookie.value));
     crypto::secure_clear(serialized.data(), serialized.size());
 }
 
