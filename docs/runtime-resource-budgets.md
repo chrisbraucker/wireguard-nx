@@ -90,7 +90,7 @@ Queue locks therefore never nest with daemon or protocol locks during runtime wo
 
 ## Automated Reports
 
-`make -C sysmodule resource-report` builds the target and runs:
+`make -C wg-sysmodule resource-report` builds the target and runs:
 
 - `tools/check_stack_usage.py`, which checks every compiler `.su` record against the 8 KiB frame limit and sums the known resolver/receive callback chains against their 16 KiB stacks with at least 1 KiB margin.
 - `tools/report_footprint.py`, which reports ELF `text`, `data`, `bss`, static total, NSO, and NSP deltas against the named corrected Chunk 13 baseline and rejects the documented absolute image budgets.

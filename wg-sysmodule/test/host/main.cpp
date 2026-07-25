@@ -4,6 +4,7 @@
 #include "platform_tests.hpp"
 #include "protocol_tests.hpp"
 #include "test_framework.hpp"
+#include "tunnel_protocol_tests.hpp"
 
 #include <array>
 
@@ -57,6 +58,7 @@ int main() {
         TestCase{"runtime.repeated-lifecycle-bounds", wgnx::test::TestRuntimeRepeatedLifecycleBounds},
         TestCase{"runtime.nifm-path-gating", wgnx::test::TestNifmPathGating},
         TestCase{"runtime.nifm-transport-ownership", wgnx::test::TestNifmDoesNotOwnUdpBinding},
+        TestCase{"horizon.tunnel-protocol-contract", wgnx::test::TestTunnelProtocolContract},
     };
 
     return wgnx::test::RunTests(tests);

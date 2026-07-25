@@ -11,9 +11,9 @@ import sys
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BASELINE = REPO_ROOT / "tools/baselines/sysmodule-footprint.json"
-DEFAULT_ELF = REPO_ROOT / "sysmodule/out/wireguard-nx.elf"
-DEFAULT_NSO = REPO_ROOT / "sysmodule/out/wireguard-nx.nso"
-DEFAULT_NSP = REPO_ROOT / "sysmodule/out/wireguard-nx.nsp"
+DEFAULT_ELF = REPO_ROOT / "wg-sysmodule/out/wireguard-nx.elf"
+DEFAULT_NSO = REPO_ROOT / "wg-sysmodule/out/wireguard-nx.nso"
+DEFAULT_NSP = REPO_ROOT / "wg-sysmodule/out/wireguard-nx.nsp"
 
 
 def find_size_tool() -> str:

@@ -112,6 +112,7 @@ HOST_TEST_CPP_SOURCES := \
 	test/host/protocol_tests.cpp \
 	test/host/runtime_lifecycle_tests.cpp \
 	test/host/timer_tests.cpp \
+	test/host/tunnel_protocol_tests.cpp \
 	test/host/failure_composition_tests.cpp \
 	test/host/main.cpp
 HOST_TEST_C_SOURCES := \

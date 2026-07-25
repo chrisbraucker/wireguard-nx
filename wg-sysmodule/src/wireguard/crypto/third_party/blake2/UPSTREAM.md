@@ -47,7 +47,7 @@ the vendored files.
    target/host build rules. Do not adopt architecture-specific variants without
    a separate performance and portability review.
 5. Run `make test`, `make test-sanitize`, `make test-warnings`, `make all`,
-   `make check-stack`, and `make resource-report` from `sysmodule/`. Compare
+   `make check-stack`, and `make resource-report` from `wg-sysmodule/`. Compare
    BLAKE2s output against RFC 7693 and the official BLAKE2 KAT corpus, including
    keyed, unkeyed, incremental, and variable-digest cases.
 

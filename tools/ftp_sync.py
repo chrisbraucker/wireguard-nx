@@ -11,8 +11,8 @@ import sys
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REPORTS_DIR = REPO_ROOT / "reports"
-SYSMODULE_META = REPO_ROOT / "sysmodule" / "res" / "module.json"
-SYSMODULE_NSP = REPO_ROOT / "sysmodule" / "out" / "wireguard-nx.nsp"
+SYSMODULE_META = REPO_ROOT / "wg-sysmodule" / "res" / "module.json"
+SYSMODULE_NSP = REPO_ROOT / "wg-sysmodule" / "out" / "wireguard-nx.nsp"
 OVERLAY_OVL = REPO_ROOT / "overlay" / "out" / "wireguard-nx.ovl"
 MANAGER_NRO = REPO_ROOT / "manager" / "out" / "wireguard-nx.nro"
 

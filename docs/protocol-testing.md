@@ -60,14 +60,14 @@ make -C sysmodule fuzz-run FUZZ_SECONDS=60
 
 `fuzz-run` applies the supplied duration independently to configuration and endpoint parsing, WireGuard message admission, and inner IPv4/IPv6 validation.
 The default is 30 seconds per target.
-The configuration seeds are readable versioned text files under `sysmodule/test/fuzz/corpus/config_endpoint/`.
-Message and inner-IP seeds are escaped byte strings in `sysmodule/test/fuzz/fuzz_seed_data.hpp`; `fuzz-run` materializes them beneath `sysmodule/out/fuzz/corpus/` for libFuzzer.
+The configuration seeds are readable versioned text files under `wg-sysmodule/test/fuzz/corpus/config_endpoint/`.
+Message and inner-IP seeds are escaped byte strings in `wg-sysmodule/test/fuzz/fuzz_seed_data.hpp`; `fuzz-run` materializes them beneath `wg-sysmodule/out/fuzz/corpus/` for libFuzzer.
 This keeps opaque binary inputs out of the source tree.
 The input roots used at runtime are:
 
-- `sysmodule/test/fuzz/corpus/config_endpoint/`
-- `sysmodule/out/fuzz/corpus/message_admission/`
-- `sysmodule/out/fuzz/corpus/inner_ip/`
+- `wg-sysmodule/test/fuzz/corpus/config_endpoint/`
+- `wg-sysmodule/out/fuzz/corpus/message_admission/`
+- `wg-sysmodule/out/fuzz/corpus/inner_ip/`
 
 Use `FUZZ_CXX=/path/to/clang++` when the required Clang is not the default compiler.
 Fuzzing is intentionally outside `make verify`: execution time is nondeterministic, while CI can invoke `fuzz-run` with an explicit budget.
@@ -149,7 +149,7 @@ The protocol suite currently verifies:
 - stale key-material cleanup clears sessions and handshake secrets while preserving configured identity and reusable peer state
 
 The previous message, primitive, and core self-tests remain in the host suite as legacy regression cases.
-They live under `sysmodule/test/host` and are no longer linked into or executed by the production sysmodule.
+They live under `wg-sysmodule/test/host` and are no longer linked into or executed by the production sysmodule.
 
 ## What Host Tests Do Not Prove
 

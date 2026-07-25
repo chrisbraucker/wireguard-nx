@@ -5,7 +5,7 @@ It applies to the repository state reviewed on 2026-07-25.
 
 ## Primitive Facade Audit
 
-`sysmodule/src/wireguard/crypto/primitives.cpp` is the sole production bridge to the crypto backends.
+`wg-sysmodule/src/wireguard/crypto/primitives.cpp` is the sole production bridge to the crypto backends.
 Its public interface is in `primitives.hpp`.
 Protocol and runtime code must not include `monocypher.h` or the vendored BLAKE2 header.
 

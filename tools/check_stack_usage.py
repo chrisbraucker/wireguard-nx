@@ -8,8 +8,8 @@ import sys
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = REPO_ROOT / "tools/baselines/sysmodule-stack-chains.json"
-DEFAULT_STACK_DIR = REPO_ROOT / "sysmodule/build"
-DEFAULT_MODULE_JSON = REPO_ROOT / "sysmodule/res/module.json"
+DEFAULT_STACK_DIR = REPO_ROOT / "wg-sysmodule/build"
+DEFAULT_MODULE_JSON = REPO_ROOT / "wg-sysmodule/res/module.json"
 
 
 def parse_args() -> argparse.Namespace:

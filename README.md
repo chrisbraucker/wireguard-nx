@@ -15,7 +15,7 @@ The repo is split into four main source configurations:
 - `/docs` for documentation on usage and internals
 - `/manager` for the manager applet started via nx-hbmenu or similar
 - `/overlay` a tesla-based config menu for quick settings
-- `/sysmodule` for the sysmodule that does the actual work
+- `/wg-sysmodule` for the sysmodule that does the actual tunnel work
 - `/tools` has convenience scripts for debugging and quickly installing binaries and pulling logs
 
 Manager and overlay should communicate with the sysmodule via IPC.
@@ -34,13 +34,13 @@ git submodule update --init --recursive
 Run the deterministic protocol suite on the development host with:
 
 ```bash
-make -C sysmodule test
+make -C wg-sysmodule test
 ```
 
 Build the target and report cumulative stack and image-footprint budgets with:
 
 ```bash
-make -C sysmodule resource-report
+make -C wg-sysmodule resource-report
 ```
 
 See [Protocol Testing](docs/protocol-testing.md) for the deterministic boundary, covered state transitions, and the final on-device interoperability gate.
