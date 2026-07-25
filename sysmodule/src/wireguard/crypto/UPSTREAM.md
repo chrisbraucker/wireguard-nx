@@ -2,7 +2,8 @@
 
 `primitives.cpp` is the only project-owned bridge from C++ protocol code to the low-level cryptographic implementations.
 Its public interface uses spans and fixed-size arrays.
-Raw pointers are confined to this translation unit when calling a backend.
+Production raw pointers are confined to this translation unit when calling a backend.
+The complete public-facade and production-call-site audit is recorded in [`../../../../docs/crypto-boundaries.md`](../../../../docs/crypto-boundaries.md).
 
 ## Monocypher
 

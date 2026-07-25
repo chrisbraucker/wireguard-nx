@@ -43,10 +43,8 @@ Build the target and report cumulative stack and image-footprint budgets with:
 make -C sysmodule resource-report
 ```
 
-See [Protocol Testing](docs/protocol-testing.md) for the deterministic boundary,
-covered state transitions, and the final on-device interoperability gate.
-See [Runtime Resource And Concurrency Budgets](docs/runtime-resource-budgets.md)
-for fixed capacities, queue pressure, lock order, and worker contexts.
+See [Protocol Testing](docs/protocol-testing.md) for the deterministic boundary, covered state transitions, and the final on-device interoperability gate.
+See [Runtime Resource And Concurrency Budgets](docs/runtime-resource-budgets.md) for fixed capacities, queue pressure, lock order, and worker contexts.
 
 
 ### Devcontainers
@@ -55,7 +53,8 @@ The project ships devcontainer configuration based on the [`devkitPro`](https://
 
 The devcontainers configuration comes with two setup scripts to prepare host and container for the workflow.
 
-- `/.devcontainer/initialize.sh` makes sure two volumes, `codex-data`, and `wg-nx-history`, exist to persist session history and agent configuration across devcontainer sessions. It is currently not possible to opt out of the creation of those volumes, but they do no harm if unused.
+- `/.devcontainer/initialize.sh` makes sure two volumes, `codex-data`, and `wg-nx-history`, exist to persist session history and agent configuration across devcontainer sessions.
+  It is currently not possible to opt out of the creation of those volumes, but they do no harm if unused.
 - `/.devcontainer/postStart.sh` maps those folders into the right locations in the container, so that history survives container rebuilds.
   If you create those volumes manually, they may need to have their permissions tweaked, as the `postStart.sh` script is executed without root permissions in the container and therefore cannot change permissions.
 

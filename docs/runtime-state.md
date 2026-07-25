@@ -1,7 +1,6 @@
 # WireGuard-NX Runtime State Model
 
-This document defines how WireGuard-NX should represent connection state
-internally and externally as the transport and protocol implementation evolves.
+This document defines how WireGuard-NX should represent connection state internally and externally as the transport and protocol implementation evolves.
 
 ## Principles
 
@@ -12,8 +11,7 @@ internally and externally as the transport and protocol implementation evolves.
 
 ## Upstream Alignment
 
-The Linux WireGuard implementation does not expose a primary peer state such as
-`connected`, `connecting`, or `error`.
+The Linux WireGuard implementation does not expose a primary peer state such as `connected`, `connecting`, or `error`.
 
 Instead, the upstream reporting surface exposes peer facts such as:
 
@@ -24,17 +22,13 @@ Instead, the upstream reporting surface exposes peer facts such as:
 - transmitted bytes
 - persistent keepalive interval
 
-This is visible both in the kernel netlink API and in `wg show`, which presents
-those values directly rather than inventing an additional connection-state
-label.
+This is visible both in the kernel netlink API and in `wg show`, which presents those values directly rather than inventing an additional connection-state label.
 
 For WireGuard-NX, this means:
 
 - a simple top-level `inactive` / `active` status is acceptable
-- any `established` interpretation should be derived from observed handshake
-  and traffic data
-- any `error` interpretation should be tied to local failures, not mere lack of
-  UDP response
+- any `established` interpretation should be derived from observed handshake and traffic data
+- any `error` interpretation should be tied to local failures, not mere lack of UDP response
 
 ## Linux Runtime Model
 
@@ -63,8 +57,8 @@ These are peer facts, not user-facing labels.
 
 ### Handshake State
 
-Linux does keep an explicit internal handshake state machine. The handshake
-object moves through phases such as:
+Linux does keep an explicit internal handshake state machine.
+The handshake object moves through phases such as:
 
 - zeroed
 - initiation created
@@ -72,13 +66,11 @@ object moves through phases such as:
 - response created
 - response consumed
 
-This state is useful for protocol implementation, but it is not surfaced
-directly as the main user-facing connection state.
+This state is useful for protocol implementation, but it is not surfaced directly as the main user-facing connection state.
 
 ### Keypair Lifecycle
 
-Session liveness is represented primarily through keypairs rather than through
-a `connected` flag.
+Session liveness is represented primarily through keypairs rather than through a `connected` flag.
 
 Linux tracks:
 
@@ -90,12 +82,12 @@ Linux tracks:
 - sending counter
 - replay protection state
 
-This is one of the main reasons not to invent an overly simple boolean state
-model too early.
+This is one of the main reasons not to invent an overly simple boolean state model too early.
 
 ### Timer-Driven Operation
 
-Linux peer management is heavily timer-driven. The main behaviors are:
+Linux peer management is heavily timer-driven.
+The main behaviors are:
 
 - retransmit handshake when no response arrives after the rekey timeout
 - send keepalive after receive-without-send
@@ -103,18 +95,15 @@ Linux peer management is heavily timer-driven. The main behaviors are:
 - zero ephemeral key material after extended inactivity
 - send periodic persistent keepalives when configured
 
-These timers are a core part of the runtime model and should be treated as part
-of the reference behavior.
+These timers are a core part of the runtime model and should be treated as part of the reference behavior.
 
 ### Traffic-Derived Confirmation
 
-Linux treats successful authenticated packet flow as the strongest confirmation
-of session usability.
+Linux treats successful authenticated packet flow as the strongest confirmation of session usability.
 
 In particular:
 
-- a handshake is treated as complete only after the relevant authenticated
-  traffic/key confirmation path is observed
+- a handshake is treated as complete only after the relevant authenticated traffic/key confirmation path is observed
 - endpoint updates are learned from real packet traffic
 - liveness is inferred from packet activity and timer behavior
 
@@ -130,11 +119,9 @@ To stay close to the reference implementation, WireGuard-NX should prefer:
 
 WireGuard-NX should avoid:
 
-- inventing a primary connection-state enum that claims more certainty than the
-  protocol provides
+- inventing a primary connection-state enum that claims more certainty than the protocol provides
 - treating lack of UDP response as a hard peer error by itself
-- collapsing keypair state, handshake state, and packet activity into a single
-  boolean beyond what the overlay needs to display
+- collapsing keypair state, handshake state, and packet activity into a single boolean beyond what the overlay needs to display
 
 ## User-Facing State
 
@@ -143,8 +130,7 @@ The primary state shown in the overlay should remain simple:
 - `inactive`
 - `active`
 
-This matches what most WireGuard users expect and avoids overpromising on top
-of a connectionless transport.
+This matches what most WireGuard users expect and avoids overpromising on top of a connectionless transport.
 
 ### Meaning
 
@@ -160,14 +146,11 @@ of a connectionless transport.
 
 ## Derived State
 
-Some richer state can be shown as secondary detail rather than the primary
-label.
+Some richer state can be shown as secondary detail rather than the primary label.
 
 - `established`
-  - should only be inferred after receiving valid authenticated traffic for the
-    current session
-  - in practice this means a completed handshake plus recent confirmed receive
-    activity
+  - should only be inferred after receiving valid authenticated traffic for the current session
+  - in practice this means a completed handshake plus recent confirmed receive activity
 
 - `error`
   - should represent a local operational failure
@@ -182,8 +165,7 @@ label.
 
 ## Internal Runtime State
 
-Internally, the sysmodule should track a richer state machine than the overlay
-necessarily exposes.
+Internally, the sysmodule should track a richer state machine than the overlay necessarily exposes.
 
 Recommended internal states:
 
@@ -197,13 +179,11 @@ Recommended internal states:
 - `timed_out`
 - `fatal_error`
 
-These states are intended for logging, control flow, and IPC-visible detail
-fields.
+These states are intended for logging, control flow, and IPC-visible detail fields.
 
 ## Recommended IPC Detail Fields
 
-The top-level state can stay simple if the IPC surface also carries detail
-fields such as:
+The top-level state can stay simple if the IPC surface also carries detail fields such as:
 
 - `endpoint`
 - `persistent_keepalive_interval`
@@ -216,8 +196,7 @@ fields such as:
 - `last_error_stage`
 - `is_established`
 
-This allows the overlay to present better diagnostics without making the main
-status model misleading.
+This allows the overlay to present better diagnostics without making the main status model misleading.
 
 ## Practical Interpretation
 
@@ -230,5 +209,4 @@ For this project, the intended interpretation is:
   - when traffic was last seen
   - whether the sysmodule is locally failing
 
-This keeps the UI honest while still leaving enough detail for debugging and
-future runtime operations.
+This keeps the UI honest while still leaving enough detail for debugging and future runtime operations.
