@@ -11,8 +11,7 @@
 namespace wgnx::wireguard {
 
 constexpr inline std::size_t PeerNameCapacity = 32;
-constexpr inline std::size_t PeerStagedPacketCapacity =
-    wgnx::resource_budget::PacketQueueSlots;
+constexpr inline std::size_t PeerStagedPacketCapacity = wgnx::resource_budget::PacketQueueSlots;
 
 enum class OutboundStagingAction : std::uint8_t {
     Idle = 0,
@@ -63,26 +62,22 @@ struct wg_peer {
 };
 
 struct PeerInitializationView {
-    const char *name{nullptr};
-    const noise_private_key *local_private_key{nullptr};
-    const char *remote_public_key{nullptr};
-    const noise_symmetric_key *preshared_key{nullptr};
+    const char* name{nullptr};
+    const noise_private_key* local_private_key{nullptr};
+    const char* remote_public_key{nullptr};
+    const noise_symmetric_key* preshared_key{nullptr};
     std::uint16_t persistent_keepalive_interval{0};
 };
 
-bool wg_peer_initialize(wg_peer *peer, const PeerInitializationView &config);
-void wg_peer_reset_keypairs(wg_peer *peer);
-OutboundStagingAction wg_peer_get_outbound_staging_action(
-    const wg_peer &peer,
-    MonotonicTimePoint now);
-std::size_t wg_peer_clear_staged_outbound_packets(
-    wg_peer *peer,
-    QueueDisposition disposition = QueueDisposition::Cleared);
-void wg_peer_clear_last_initiation(wg_peer *peer);
-void wg_peer_begin_handshake_retry_sequence(wg_peer *peer);
-HandshakeRetryTimeoutResult wg_peer_handle_handshake_retry_timeout(wg_peer *peer);
-void wg_peer_complete_handshake_retry_sequence(wg_peer *peer);
-void wg_peer_zero_key_material(wg_peer *peer);
-void wg_peer_scrub_transient_state(wg_peer *peer);
+bool wg_peer_initialize(wg_peer* peer, const PeerInitializationView& config);
+void wg_peer_reset_keypairs(wg_peer* peer);
+OutboundStagingAction wg_peer_get_outbound_staging_action(const wg_peer& peer, MonotonicTimePoint now);
+std::size_t wg_peer_clear_staged_outbound_packets(wg_peer* peer, QueueDisposition disposition = QueueDisposition::Cleared);
+void wg_peer_clear_last_initiation(wg_peer* peer);
+void wg_peer_begin_handshake_retry_sequence(wg_peer* peer);
+HandshakeRetryTimeoutResult wg_peer_handle_handshake_retry_timeout(wg_peer* peer);
+void wg_peer_complete_handshake_retry_sequence(wg_peer* peer);
+void wg_peer_zero_key_material(wg_peer* peer);
+void wg_peer_scrub_transient_state(wg_peer* peer);
 
 } // namespace wgnx::wireguard

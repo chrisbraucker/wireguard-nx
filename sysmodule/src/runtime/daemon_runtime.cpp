@@ -37,7 +37,7 @@ struct DaemonState {
 };
 
 class DaemonRuntime {
-public:
+  public:
     DaemonRuntime();
 
     void Initialize();
@@ -47,42 +47,32 @@ public:
     ams::Result SetAutoStartPeer(std::int32_t peer_index);
     ams::Result TriggerDebugPayload(wgnx::DebugTriggerAction action);
     ams::Result BumpUdpBinding();
-    wgnx::PacketSubmissionResult SubmitInnerIpv4Packet(
-        std::span<const std::uint8_t> packet,
-        runtime::ProcessId process_id);
-    wgnx::PacketReceiveResult ReceiveInnerIpv4Packet(
-        std::span<std::uint8_t> packet,
-        runtime::ProcessId process_id);
+    wgnx::PacketSubmissionResult SubmitInnerIpv4Packet(std::span<const std::uint8_t> packet, runtime::ProcessId process_id);
+    wgnx::PacketReceiveResult ReceiveInnerIpv4Packet(std::span<std::uint8_t> packet, runtime::ProcessId process_id);
 
-private:
-    static void ResolverWorkCallback(wgnx::platform::work_struct *work);
-    static void PayloadSubmissionWorkCallback(wgnx::platform::work_struct *work);
-    static void InnerPacketSubmissionWorkCallback(wgnx::platform::work_struct *work);
-    static void PendingDatagramTransmitWorkCallback(wgnx::platform::work_struct *work);
-    static void ReceiveWorkCallback(wgnx::platform::work_struct *work);
-    static void ProtocolTimerCallback(
-        wgnx::wireguard::TimerHook hook,
-        const wgnx::wireguard::TimerToken &token);
+  private:
+    static void ResolverWorkCallback(wgnx::platform::work_struct* work);
+    static void PayloadSubmissionWorkCallback(wgnx::platform::work_struct* work);
+    static void InnerPacketSubmissionWorkCallback(wgnx::platform::work_struct* work);
+    static void PendingDatagramTransmitWorkCallback(wgnx::platform::work_struct* work);
+    static void ReceiveWorkCallback(wgnx::platform::work_struct* work);
+    static void ProtocolTimerCallback(wgnx::wireguard::TimerHook hook, const wgnx::wireguard::TimerToken& token);
     static void DebugProbeTimeoutCallback();
 
-    void ClearInnerPacketStateLocked(const char *reason);
+    void ClearInnerPacketStateLocked(const char* reason);
     runtime::EffectBatch SetPeerInactive(std::size_t peer_index);
-    runtime::DebugProbeQueueResult QueuePayloadSubmissionRequestLocked(
-        wgnx::DebugTriggerAction action);
+    runtime::DebugProbeQueueResult QueuePayloadSubmissionRequestLocked(wgnx::DebugTriggerAction action);
     wgnx::PeerInfo BuildPeerInfo(std::size_t peer_index);
     bool HasRuntimeErrors();
     void EnsureInitialized();
     void InitializeStateLocked();
-    bool CaptureAutoStartPersistenceRequestLocked(
-        std::int32_t peer_index,
-        runtime::AutoStartPersistenceRequest &out_request);
-    bool IsCurrentAutoStartPersistenceRequestLocked(
-        const runtime::AutoStartPersistenceRequest &request) const;
+    bool CaptureAutoStartPersistenceRequestLocked(std::int32_t peer_index, runtime::AutoStartPersistenceRequest& out_request);
+    bool IsCurrentAutoStartPersistenceRequestLocked(const runtime::AutoStartPersistenceRequest& request) const;
     bool IsValidPeerIndex(std::int32_t peer_index) const;
-    void ExecuteRuntimeEffects(const runtime::EffectBatch &effects);
+    void ExecuteRuntimeEffects(const runtime::EffectBatch& effects);
     void InitializeHorizonDispatcher();
 
-    static DaemonRuntime *s_instance;
+    static DaemonRuntime* s_instance;
     DaemonState m_state{};
     ams::os::Mutex m_state_mutex;
     ams::os::Mutex m_initialization_mutex;
@@ -102,32 +92,16 @@ private:
     runtime::RuntimeEffectExecutor m_effect_executor;
 };
 
-static_assert(
-    sizeof(DaemonRuntime) <=
-    wgnx::resource_budget::MaximumDaemonRuntimeBytes);
+static_assert(sizeof(DaemonRuntime) <= wgnx::resource_budget::MaximumDaemonRuntimeBytes);
 
-DaemonRuntime *DaemonRuntime::s_instance = nullptr;
+DaemonRuntime* DaemonRuntime::s_instance = nullptr;
 
 DaemonRuntime::DaemonRuntime()
-    : m_state_mutex(false),
-      m_initialization_mutex(false),
-      m_auto_start_persistence_mutex(false),
-      m_runtime_coordinator(m_state.peers),
+    : m_state_mutex(false), m_initialization_mutex(false), m_auto_start_persistence_mutex(false), m_runtime_coordinator(m_state.peers),
       m_packet_data_plane(m_runtime_coordinator, m_packet_channel),
-      m_receive_pump(
-          m_state_mutex,
-          m_runtime_coordinator,
-          m_horizon_dispatcher),
-      m_effect_executor(
-          m_state_mutex,
-          m_runtime_coordinator,
-          m_endpoint_resolver,
-          m_horizon_dispatcher,
-          m_timer_scheduler,
-          m_packet_data_plane,
-          m_debug_probe_runner,
-          m_network_path_service,
-          m_receive_pump) {
+      m_receive_pump(m_state_mutex, m_runtime_coordinator, m_horizon_dispatcher),
+      m_effect_executor(m_state_mutex, m_runtime_coordinator, m_endpoint_resolver, m_horizon_dispatcher, m_timer_scheduler,
+                        m_packet_data_plane, m_debug_probe_runner, m_network_path_service, m_receive_pump) {
     AMS_ABORT_UNLESS(s_instance == nullptr);
     s_instance = this;
 }
@@ -136,23 +110,19 @@ wgnx::platform::ktime_t GetRuntimeNowNs() {
     return wgnx::platform::ktime_get_coarse_boottime_ns();
 }
 
-void DaemonRuntime::ClearInnerPacketStateLocked(const char *reason) {
+void DaemonRuntime::ClearInnerPacketStateLocked(const char* reason) {
     const auto cleared = m_packet_data_plane.Clear();
     if (cleared.outbound_count != 0 || cleared.inbound_count != 0) {
-        logger::Log(
-            "Cleared inner packet state reason=%s tx=%zu rx=%zu",
-            reason != nullptr ? reason : "unspecified",
-            cleared.outbound_count,
-            cleared.inbound_count);
+        logger::Log("Cleared inner packet state reason=%s tx=%zu rx=%zu", reason != nullptr ? reason : "unspecified",
+                    cleared.outbound_count, cleared.inbound_count);
     }
 }
 
 runtime::EffectBatch DaemonRuntime::SetPeerInactive(std::size_t peer_index) {
-    const auto *lifecycle = m_runtime_coordinator.Lifecycle(peer_index);
+    const auto* lifecycle = m_runtime_coordinator.Lifecycle(peer_index);
     AMS_ABORT_UNLESS(lifecycle != nullptr);
     const runtime::PeerIdentity peer{
-        .peer_index = runtime::PeerIndex{
-            static_cast<std::uint32_t>(peer_index)},
+        .peer_index = runtime::PeerIndex{static_cast<std::uint32_t>(peer_index)},
         .activation_generation = lifecycle->activation_generation,
     };
     m_debug_probe_runner.Cancel(&peer);
@@ -165,18 +135,12 @@ runtime::EffectBatch DaemonRuntime::SetPeerInactive(std::size_t peer_index) {
     return effects;
 }
 
-[[maybe_unused]] runtime::DebugProbeQueueResult
-DaemonRuntime::QueuePayloadSubmissionRequestLocked(
-    wgnx::DebugTriggerAction action) {
+[[maybe_unused]] runtime::DebugProbeQueueResult DaemonRuntime::QueuePayloadSubmissionRequestLocked(wgnx::DebugTriggerAction action) {
     runtime::DebugPeerSnapshot peer{};
     if (!m_runtime_coordinator.SnapshotDebugPeer(peer)) {
         return runtime::DebugProbeQueueResult::NoActivePeer;
     }
-    return m_debug_probe_runner.Queue(
-        peer.peer,
-        peer.source_address.data(),
-        action,
-        GetRuntimeNowNs());
+    return m_debug_probe_runner.Queue(peer.peer, peer.source_address.data(), action, GetRuntimeNowNs());
 }
 
 wgnx::PeerInfo DaemonRuntime::BuildPeerInfo(std::size_t peer_index) {
@@ -195,26 +159,22 @@ void DaemonRuntime::InitializeStateLocked() {
         return;
     }
 
-    auto &config = m_loaded_peer_configuration;
+    auto& config = m_loaded_peer_configuration;
     if (config.peer_count != 0) {
-        const bool assigned = m_runtime_coordinator.Configure(
-            std::span<const wgnx::PeerConfigEntry>(config.peers).first(config.peer_count),
-            std::span<runtime::PeerConfigDerivedInfo>(config.derived).first(config.peer_count),
-            config.auto_start_peer_index,
-            GetRuntimeNowNs());
+        const bool assigned =
+            m_runtime_coordinator.Configure(std::span<const wgnx::PeerConfigEntry>(config.peers).first(config.peer_count),
+                                            std::span<runtime::PeerConfigDerivedInfo>(config.derived).first(config.peer_count),
+                                            config.auto_start_peer_index, GetRuntimeNowNs());
         AMS_ABORT_UNLESS(assigned);
     } else {
-        const auto cleanup_effects =
-            m_runtime_coordinator.ClearConfiguration(GetRuntimeNowNs());
+        const auto cleanup_effects = m_runtime_coordinator.ClearConfiguration(GetRuntimeNowNs());
         AMS_ABORT_UNLESS(cleanup_effects.Empty());
     }
     config.~LoadedPeerConfiguration();
     std::construct_at(std::addressof(config));
 
     m_state.initialized = true;
-    logger::Log(
-        "Initialized peer state with %u configured peer(s)",
-        m_runtime_coordinator.PeerCount());
+    logger::Log("Initialized peer state with %u configured peer(s)", m_runtime_coordinator.PeerCount());
 }
 
 void DaemonRuntime::EnsureInitialized() {
@@ -226,7 +186,7 @@ void DaemonRuntime::EnsureInitialized() {
         }
     }
 
-    auto &config = m_loaded_peer_configuration;
+    auto& config = m_loaded_peer_configuration;
     if (!m_peer_configuration_loader.Load(config)) {
         config.peer_count = 0;
     }
@@ -235,17 +195,14 @@ void DaemonRuntime::EnsureInitialized() {
     InitializeStateLocked();
 }
 
-bool DaemonRuntime::CaptureAutoStartPersistenceRequestLocked(
-    std::int32_t peer_index,
-    runtime::AutoStartPersistenceRequest &out_request) {
+bool DaemonRuntime::CaptureAutoStartPersistenceRequestLocked(std::int32_t peer_index, runtime::AutoStartPersistenceRequest& out_request) {
     if (!IsValidPeerIndex(peer_index)) {
         return false;
     }
 
-    const char *peer_name = nullptr;
+    const char* peer_name = nullptr;
     if (peer_index >= 0) {
-        const auto *configuration = m_runtime_coordinator.Configuration(
-            static_cast<std::size_t>(peer_index));
+        const auto* configuration = m_runtime_coordinator.Configuration(static_cast<std::size_t>(peer_index));
         if (configuration == nullptr) {
             return false;
         }
@@ -255,66 +212,56 @@ bool DaemonRuntime::CaptureAutoStartPersistenceRequestLocked(
     return true;
 }
 
-bool DaemonRuntime::IsCurrentAutoStartPersistenceRequestLocked(
-    const runtime::AutoStartPersistenceRequest &request) const {
-    if (!m_auto_start_persistence.IsCurrent(request) ||
-        !IsValidPeerIndex(request.peer_index)) {
+bool DaemonRuntime::IsCurrentAutoStartPersistenceRequestLocked(const runtime::AutoStartPersistenceRequest& request) const {
+    if (!m_auto_start_persistence.IsCurrent(request) || !IsValidPeerIndex(request.peer_index)) {
         return false;
     }
     if (request.peer_index < 0) {
         return true;
     }
-    const auto *configuration = m_runtime_coordinator.Configuration(
-        static_cast<std::size_t>(request.peer_index));
-    return configuration != nullptr &&
-           std::strncmp(
-               configuration->name.data(),
-               request.peer_name.data(),
-               request.peer_name.size()) == 0;
+    const auto* configuration = m_runtime_coordinator.Configuration(static_cast<std::size_t>(request.peer_index));
+    return configuration != nullptr && std::strncmp(configuration->name.data(), request.peer_name.data(), request.peer_name.size()) == 0;
 }
 
 bool DaemonRuntime::IsValidPeerIndex(std::int32_t peer_index) const {
     return m_runtime_coordinator.IsValidSelection(peer_index);
 }
 
-void DaemonRuntime::ExecuteRuntimeEffects(const runtime::EffectBatch &effects) {
+void DaemonRuntime::ExecuteRuntimeEffects(const runtime::EffectBatch& effects) {
     m_effect_executor.Execute(effects);
 }
 
-void DaemonRuntime::ResolverWorkCallback(wgnx::platform::work_struct *work) {
+void DaemonRuntime::ResolverWorkCallback(wgnx::platform::work_struct* work) {
     AMS_ABORT_UNLESS(s_instance != nullptr);
     static_cast<void>(work);
     s_instance->m_effect_executor.RunEndpointResolver();
 }
 
-void DaemonRuntime::PayloadSubmissionWorkCallback(wgnx::platform::work_struct *work) {
+void DaemonRuntime::PayloadSubmissionWorkCallback(wgnx::platform::work_struct* work) {
     AMS_ABORT_UNLESS(s_instance != nullptr);
     static_cast<void>(work);
     s_instance->m_effect_executor.RunDebugPayloadSubmission();
 }
 
-void DaemonRuntime::InnerPacketSubmissionWorkCallback(wgnx::platform::work_struct *work) {
+void DaemonRuntime::InnerPacketSubmissionWorkCallback(wgnx::platform::work_struct* work) {
     AMS_ABORT_UNLESS(s_instance != nullptr);
     static_cast<void>(work);
     s_instance->m_effect_executor.RunInnerPacketSubmission();
 }
 
-void DaemonRuntime::PendingDatagramTransmitWorkCallback(
-    wgnx::platform::work_struct *work) {
+void DaemonRuntime::PendingDatagramTransmitWorkCallback(wgnx::platform::work_struct* work) {
     AMS_ABORT_UNLESS(s_instance != nullptr);
     static_cast<void>(work);
     s_instance->m_effect_executor.RunPendingDatagramTransmit();
 }
 
-void DaemonRuntime::ReceiveWorkCallback(wgnx::platform::work_struct *work) {
+void DaemonRuntime::ReceiveWorkCallback(wgnx::platform::work_struct* work) {
     AMS_ABORT_UNLESS(s_instance != nullptr);
     static_cast<void>(work);
     s_instance->m_receive_pump.Run(s_instance->m_effect_executor);
 }
 
-void DaemonRuntime::ProtocolTimerCallback(
-    wgnx::wireguard::TimerHook hook,
-    const wgnx::wireguard::TimerToken &token) {
+void DaemonRuntime::ProtocolTimerCallback(wgnx::wireguard::TimerHook hook, const wgnx::wireguard::TimerToken& token) {
     AMS_ABORT_UNLESS(s_instance != nullptr);
     s_instance->m_effect_executor.RunProtocolTimer(hook, token);
 }
@@ -325,20 +272,17 @@ void DaemonRuntime::DebugProbeTimeoutCallback() {
 }
 
 void DaemonRuntime::InitializeHorizonDispatcher() {
-    m_horizon_dispatcher.Initialize(
-        {
-            .resolve = ResolverWorkCallback,
-            .submit_debug_payload = PayloadSubmissionWorkCallback,
-            .submit_inner_packet = InnerPacketSubmissionWorkCallback,
-            .transmit_datagram = PendingDatagramTransmitWorkCallback,
-            .receive = ReceiveWorkCallback,
-        });
-    m_timer_scheduler.Initialize(
-        m_horizon_dispatcher,
-        {
-            .protocol_timer = ProtocolTimerCallback,
-            .debug_probe_timeout = DebugProbeTimeoutCallback,
-        });
+    m_horizon_dispatcher.Initialize({
+        .resolve = ResolverWorkCallback,
+        .submit_debug_payload = PayloadSubmissionWorkCallback,
+        .submit_inner_packet = InnerPacketSubmissionWorkCallback,
+        .transmit_datagram = PendingDatagramTransmitWorkCallback,
+        .receive = ReceiveWorkCallback,
+    });
+    m_timer_scheduler.Initialize(m_horizon_dispatcher, {
+                                                           .protocol_timer = ProtocolTimerCallback,
+                                                           .debug_probe_timeout = DebugProbeTimeoutCallback,
+                                                       });
 
     logger::Log("Started endpoint resolver worker");
     logger::Log("Started shared payload and inner packet submission worker");
@@ -349,7 +293,9 @@ void DaemonRuntime::InitializeHorizonDispatcher() {
 }
 
 wgnx::DaemonStatus DaemonRuntime::GetDaemonStatus() {
-    ON_SCOPE_EXIT { logger::Flush(); };
+    ON_SCOPE_EXIT {
+        logger::Flush();
+    };
     EnsureInitialized();
     std::scoped_lock lock(m_state_mutex);
 
@@ -358,20 +304,19 @@ wgnx::DaemonStatus DaemonRuntime::GetDaemonStatus() {
         .peer_count = m_runtime_coordinator.PeerCount(),
         .active_peer_index = m_runtime_coordinator.ActivePeerIndex(),
         .auto_start_peer_index = m_runtime_coordinator.AutoStartPeerIndex(),
-        .flags = runtime::BuildDaemonFlags(
-            m_runtime_coordinator.ActivePeerIndex() >= 0,
-            HasRuntimeErrors()),
+        .flags = runtime::BuildDaemonFlags(m_runtime_coordinator.ActivePeerIndex() >= 0, HasRuntimeErrors()),
         .reserved = 0,
     };
 }
 
 std::uint32_t DaemonRuntime::CopyPeers(std::span<wgnx::PeerInfo> out) {
-    ON_SCOPE_EXIT { logger::Flush(); };
+    ON_SCOPE_EXIT {
+        logger::Flush();
+    };
     EnsureInitialized();
     std::scoped_lock lock(m_state_mutex);
 
-    const std::size_t copy_count =
-        std::min<std::size_t>(out.size(), m_runtime_coordinator.PeerCount());
+    const std::size_t copy_count = std::min<std::size_t>(out.size(), m_runtime_coordinator.PeerCount());
     for (std::size_t i = 0; i < copy_count; ++i) {
         out[i] = BuildPeerInfo(i);
     }
@@ -380,7 +325,9 @@ std::uint32_t DaemonRuntime::CopyPeers(std::span<wgnx::PeerInfo> out) {
 }
 
 ams::Result DaemonRuntime::SetActivePeer(std::int32_t peer_index) {
-    ON_SCOPE_EXIT { logger::Flush(); };
+    ON_SCOPE_EXIT {
+        logger::Flush();
+    };
     EnsureInitialized();
     std::unique_lock lock(m_state_mutex);
 
@@ -395,18 +342,15 @@ ams::Result DaemonRuntime::SetActivePeer(std::int32_t peer_index) {
     }
 
     runtime::EffectBatch effects{};
-    if (m_runtime_coordinator.ActivePeerIndex() >= 0 &&
-        m_runtime_coordinator.ActivePeerIndex() != peer_index) {
-        const std::size_t old_index =
-            static_cast<std::size_t>(m_runtime_coordinator.ActivePeerIndex());
+    if (m_runtime_coordinator.ActivePeerIndex() >= 0 && m_runtime_coordinator.ActivePeerIndex() != peer_index) {
+        const std::size_t old_index = static_cast<std::size_t>(m_runtime_coordinator.ActivePeerIndex());
         effects = SetPeerInactive(old_index);
     }
 
     AMS_ABORT_UNLESS(m_runtime_coordinator.SetActivePeerIndex(peer_index));
     if (peer_index >= 0) {
         const auto activation_effects = m_runtime_coordinator.Dispatch(runtime::ActivationRequestedEvent{
-            .peer_index = runtime::PeerIndex{
-                static_cast<std::uint32_t>(peer_index)},
+            .peer_index = runtime::PeerIndex{static_cast<std::uint32_t>(peer_index)},
             .occurred_at = GetRuntimeNowNs(),
         });
         effects.Append(activation_effects);
@@ -418,7 +362,9 @@ ams::Result DaemonRuntime::SetActivePeer(std::int32_t peer_index) {
 }
 
 ams::Result DaemonRuntime::SetAutoStartPeer(std::int32_t peer_index) {
-    ON_SCOPE_EXIT { logger::Flush(); };
+    ON_SCOPE_EXIT {
+        logger::Flush();
+    };
     EnsureInitialized();
     runtime::AutoStartPersistenceRequest request{};
     {
@@ -433,15 +379,12 @@ ams::Result DaemonRuntime::SetAutoStartPeer(std::int32_t peer_index) {
     {
         std::scoped_lock state_lock(m_state_mutex);
         if (!IsCurrentAutoStartPersistenceRequestLocked(request)) {
-            logger::Log(
-                "Discarded stale SetAutoStartPeer(%d) before persistence generation=%u",
-                peer_index,
-                request.generation.Value());
+            logger::Log("Discarded stale SetAutoStartPeer(%d) before persistence generation=%u", peer_index, request.generation.Value());
             R_SUCCEED();
         }
     }
 
-    const char *peer_name = peer_index >= 0 ? request.peer_name.data() : nullptr;
+    const char* peer_name = peer_index >= 0 ? request.peer_name.data() : nullptr;
     const ams::Result store_rc = StoreAutoStartPeerName(peer_name);
     if (R_FAILED(store_rc)) {
         logger::Log("Rejected SetAutoStartPeer(%d): persist failed rc=0x%08x", peer_index, static_cast<u32>(store_rc.GetValue()));
@@ -451,10 +394,7 @@ ams::Result DaemonRuntime::SetAutoStartPeer(std::int32_t peer_index) {
     {
         std::scoped_lock state_lock(m_state_mutex);
         if (!IsCurrentAutoStartPersistenceRequestLocked(request)) {
-            logger::Log(
-                "Discarded stale SetAutoStartPeer(%d) after persistence generation=%u",
-                peer_index,
-                request.generation.Value());
+            logger::Log("Discarded stale SetAutoStartPeer(%d) after persistence generation=%u", peer_index, request.generation.Value());
             R_SUCCEED();
         }
         AMS_ABORT_UNLESS(m_runtime_coordinator.SetAutoStartPeerIndex(peer_index));
@@ -464,7 +404,9 @@ ams::Result DaemonRuntime::SetAutoStartPeer(std::int32_t peer_index) {
 }
 
 ams::Result DaemonRuntime::TriggerDebugPayload(wgnx::DebugTriggerAction action) {
-    ON_SCOPE_EXIT { logger::Flush(); };
+    ON_SCOPE_EXIT {
+        logger::Flush();
+    };
     EnsureInitialized();
     runtime::DebugProbeQueueResult queue_result{};
     {
@@ -472,10 +414,8 @@ ams::Result DaemonRuntime::TriggerDebugPayload(wgnx::DebugTriggerAction action) 
         queue_result = QueuePayloadSubmissionRequestLocked(action);
     }
     if (queue_result != runtime::DebugProbeQueueResult::Queued) {
-        logger::Log(
-            "Rejected TriggerDebugPayload(action=%u): reason=%u",
-            static_cast<unsigned int>(action),
-            static_cast<unsigned int>(queue_result));
+        logger::Log("Rejected TriggerDebugPayload(action=%u): reason=%u", static_cast<unsigned int>(action),
+                    static_cast<unsigned int>(queue_result));
         R_THROW(ams::fs::ResultInvalidArgument());
     }
     m_horizon_dispatcher.QueueDebugPayloadSubmission();
@@ -484,7 +424,9 @@ ams::Result DaemonRuntime::TriggerDebugPayload(wgnx::DebugTriggerAction action) 
 }
 
 ams::Result DaemonRuntime::BumpUdpBinding() {
-    ON_SCOPE_EXIT { logger::Flush(); };
+    ON_SCOPE_EXIT {
+        logger::Flush();
+    };
     EnsureInitialized();
     {
         std::scoped_lock lock(m_state_mutex);
@@ -495,16 +437,10 @@ ams::Result DaemonRuntime::BumpUdpBinding() {
         }
 
         const auto peer_index = peer.identity.peer_index;
-        const auto binding =
-            m_runtime_coordinator.BindingSnapshot(peer_index.Value());
-        if ((peer.state != wgnx::PeerRuntimeState::Handshaking &&
-             peer.state != wgnx::PeerRuntimeState::Active) ||
-            !binding.has_endpoint) {
-            logger::Log(
-                "Rejected BumpUdpBinding: peer=%zu state=%s resolved=%u",
-                static_cast<std::size_t>(peer_index.Value()),
-                wgnx::GetPeerRuntimeStateName(peer.state),
-                binding.has_endpoint ? 1U : 0U);
+        const auto binding = m_runtime_coordinator.BindingSnapshot(peer_index.Value());
+        if ((peer.state != wgnx::PeerRuntimeState::Handshaking && peer.state != wgnx::PeerRuntimeState::Active) || !binding.has_endpoint) {
+            logger::Log("Rejected BumpUdpBinding: peer=%zu state=%s resolved=%u", static_cast<std::size_t>(peer_index.Value()),
+                        wgnx::GetPeerRuntimeStateName(peer.state), binding.has_endpoint ? 1U : 0U);
             R_THROW(ams::fs::ResultInvalidArgument());
         }
 
@@ -514,17 +450,12 @@ ams::Result DaemonRuntime::BumpUdpBinding() {
         };
         const auto queue_result = m_receive_pump.QueueRebindLocked(request);
         if (queue_result == runtime::UdpRebindQueueResult::Replaced) {
-            logger::Log(
-                "Coalesced UDP bind bump peer=%zu activation=%u",
-                static_cast<std::size_t>(peer_index.Value()),
-                peer.identity.activation_generation.Value());
+            logger::Log("Coalesced UDP bind bump peer=%zu activation=%u", static_cast<std::size_t>(peer_index.Value()),
+                        peer.identity.activation_generation.Value());
         } else {
-            logger::Log(
-                "Queued UDP bind bump peer=%zu activation=%u socket_generation=%u socket=%d",
-                static_cast<std::size_t>(peer_index.Value()),
-                peer.identity.activation_generation.Value(),
-                binding.generation.Value(),
-                static_cast<int>(binding.socket));
+            logger::Log("Queued UDP bind bump peer=%zu activation=%u socket_generation=%u socket=%d",
+                        static_cast<std::size_t>(peer_index.Value()), peer.identity.activation_generation.Value(),
+                        binding.generation.Value(), static_cast<int>(binding.socket));
         }
     }
 
@@ -532,9 +463,8 @@ ams::Result DaemonRuntime::BumpUdpBinding() {
     R_SUCCEED();
 }
 
-wgnx::PacketSubmissionResult DaemonRuntime::SubmitInnerIpv4Packet(
-    std::span<const std::uint8_t> packet_bytes,
-    runtime::ProcessId process_id) {
+wgnx::PacketSubmissionResult DaemonRuntime::SubmitInnerIpv4Packet(std::span<const std::uint8_t> packet_bytes,
+                                                                  runtime::ProcessId process_id) {
     wgnx::PacketSubmissionResult result = {
         .packet_id = 0,
         .status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::InternalError),
@@ -543,77 +473,55 @@ wgnx::PacketSubmissionResult DaemonRuntime::SubmitInnerIpv4Packet(
         .peer_index = -1,
     };
 
-    ON_SCOPE_EXIT { logger::Flush(); };
+    ON_SCOPE_EXIT {
+        logger::Flush();
+    };
     EnsureInitialized();
     runtime::EffectBatch effects{};
     runtime::PacketSubmissionOutcome outcome{};
     const auto timer_facts = runtime::CaptureTimerFacts();
     {
         std::scoped_lock lock(m_state_mutex);
-        outcome = m_packet_data_plane.SubmitIpv4Packet(
-            packet_bytes,
-            process_id,
-            timer_facts,
-            GetRuntimeNowNs(),
-            effects);
+        outcome = m_packet_data_plane.SubmitIpv4Packet(packet_bytes, process_id, timer_facts, GetRuntimeNowNs(), effects);
         if (outcome.ownership_transferred) {
-            logger::Log(
-                "Transferred packet API ownership pid=%llu discarded_tx=%zu discarded_rx=%zu",
-                static_cast<unsigned long long>(process_id.Value()),
-                outcome.discarded_outbound,
-                outcome.discarded_inbound);
+            logger::Log("Transferred packet API ownership pid=%llu discarded_tx=%zu discarded_rx=%zu",
+                        static_cast<unsigned long long>(process_id.Value()), outcome.discarded_outbound, outcome.discarded_inbound);
         }
     }
 
     result.packet_id = outcome.packet_id.Value();
-    result.activation_generation = outcome.has_peer
-        ? outcome.peer.activation_generation.Value()
-        : 0;
-    result.peer_index = outcome.has_peer
-        ? static_cast<std::int32_t>(outcome.peer.peer_index.Value())
-        : -1;
+    result.activation_generation = outcome.has_peer ? outcome.peer.activation_generation.Value() : 0;
+    result.peer_index = outcome.has_peer ? static_cast<std::int32_t>(outcome.peer.peer_index.Value()) : -1;
     switch (outcome.status) {
-        case runtime::PacketSubmissionStatus::Queued:
-            result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::Queued);
-            logger::Log(
-                "Queued packet API submission id=%llu pid=%llu peer=%u activation=%u bytes=%zu depth=%zu state=%s",
-                static_cast<unsigned long long>(outcome.packet_id.Value()),
-                static_cast<unsigned long long>(process_id.Value()),
-                outcome.peer.peer_index.Value(),
-                outcome.peer.activation_generation.Value(),
-                packet_bytes.size(),
-                outcome.queue_depth,
-                wgnx::GetPeerRuntimeStateName(outcome.peer_state));
-            break;
-        case runtime::PacketSubmissionStatus::MalformedPacket:
-            result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::MalformedPacket);
-            logger::Log(
-                "Rejected packet API submission pid=%llu bytes=%zu validation=%s",
-                static_cast<unsigned long long>(process_id.Value()),
-                packet_bytes.size(),
-                wgnx::wireguard::GetInnerIpValidationErrorName(outcome.validation));
-            break;
-        case runtime::PacketSubmissionStatus::TunnelUnavailable:
-            result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::TunnelUnavailable);
-            break;
-        case runtime::PacketSubmissionStatus::QueueFull:
-            result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::QueueFull);
-            logger::Log(
-                "Rejected packet API submission pid=%llu reason=tx_queue_full",
-                static_cast<unsigned long long>(process_id.Value()));
-            break;
-        case runtime::PacketSubmissionStatus::InternalError:
-            result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::InternalError);
-            break;
+    case runtime::PacketSubmissionStatus::Queued:
+        result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::Queued);
+        logger::Log("Queued packet API submission id=%llu pid=%llu peer=%u activation=%u bytes=%zu depth=%zu state=%s",
+                    static_cast<unsigned long long>(outcome.packet_id.Value()), static_cast<unsigned long long>(process_id.Value()),
+                    outcome.peer.peer_index.Value(), outcome.peer.activation_generation.Value(), packet_bytes.size(), outcome.queue_depth,
+                    wgnx::GetPeerRuntimeStateName(outcome.peer_state));
+        break;
+    case runtime::PacketSubmissionStatus::MalformedPacket:
+        result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::MalformedPacket);
+        logger::Log("Rejected packet API submission pid=%llu bytes=%zu validation=%s", static_cast<unsigned long long>(process_id.Value()),
+                    packet_bytes.size(), wgnx::wireguard::GetInnerIpValidationErrorName(outcome.validation));
+        break;
+    case runtime::PacketSubmissionStatus::TunnelUnavailable:
+        result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::TunnelUnavailable);
+        break;
+    case runtime::PacketSubmissionStatus::QueueFull:
+        result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::QueueFull);
+        logger::Log("Rejected packet API submission pid=%llu reason=tx_queue_full", static_cast<unsigned long long>(process_id.Value()));
+        break;
+    case runtime::PacketSubmissionStatus::InternalError:
+        result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::InternalError);
+        break;
     }
 
     ExecuteRuntimeEffects(effects);
     return result;
 }
 
-wgnx::PacketReceiveResult DaemonRuntime::ReceiveInnerIpv4Packet(
-    std::span<std::uint8_t> packet,
-    runtime::ProcessId process_id) {
+wgnx::PacketReceiveResult DaemonRuntime::ReceiveInnerIpv4Packet(std::span<std::uint8_t> packet, runtime::ProcessId process_id) {
     wgnx::PacketReceiveResult result = {
         .packet_id = 0,
         .status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::QueueEmpty),
@@ -622,7 +530,9 @@ wgnx::PacketReceiveResult DaemonRuntime::ReceiveInnerIpv4Packet(
         .peer_index = -1,
     };
 
-    ON_SCOPE_EXIT { logger::Flush(); };
+    ON_SCOPE_EXIT {
+        logger::Flush();
+    };
     EnsureInitialized();
     runtime::PacketReceiveOutcome outcome{};
     {
@@ -632,35 +542,27 @@ wgnx::PacketReceiveResult DaemonRuntime::ReceiveInnerIpv4Packet(
     result.packet_id = outcome.packet_id.Value();
     result.packet_size = static_cast<std::uint32_t>(outcome.packet_size);
     result.activation_generation = outcome.peer.activation_generation.Value();
-    result.peer_index = !outcome.packet_id.IsZero()
-        ? static_cast<std::int32_t>(outcome.peer.peer_index.Value())
-        : -1;
+    result.peer_index = !outcome.packet_id.IsZero() ? static_cast<std::int32_t>(outcome.peer.peer_index.Value()) : -1;
     switch (outcome.status) {
-        case runtime::PacketReceiveStatus::Success:
-            result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::Success);
-            logger::Log(
-                "Delivered packet API receive id=%llu pid=%llu peer=%u activation=%u bytes=%zu remaining=%zu",
-                static_cast<unsigned long long>(outcome.packet_id.Value()),
-                static_cast<unsigned long long>(process_id.Value()),
-                outcome.peer.peer_index.Value(),
-                outcome.peer.activation_generation.Value(),
-                outcome.packet_size,
-                outcome.queue_depth);
-            break;
-        case runtime::PacketReceiveStatus::QueueEmpty:
-            break;
-        case runtime::PacketReceiveStatus::AccessDenied:
-            result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::AccessDenied);
-            break;
-        case runtime::PacketReceiveStatus::OutputBufferTooSmall:
-            result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::OutputBufferTooSmall);
-            break;
-        case runtime::PacketReceiveStatus::StaleActivation:
-            result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::StaleActivation);
-            logger::Log(
-                "Discarded packet API receive id=%llu reason=stale_activation",
-                static_cast<unsigned long long>(outcome.packet_id.Value()));
-            break;
+    case runtime::PacketReceiveStatus::Success:
+        result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::Success);
+        logger::Log("Delivered packet API receive id=%llu pid=%llu peer=%u activation=%u bytes=%zu remaining=%zu",
+                    static_cast<unsigned long long>(outcome.packet_id.Value()), static_cast<unsigned long long>(process_id.Value()),
+                    outcome.peer.peer_index.Value(), outcome.peer.activation_generation.Value(), outcome.packet_size, outcome.queue_depth);
+        break;
+    case runtime::PacketReceiveStatus::QueueEmpty:
+        break;
+    case runtime::PacketReceiveStatus::AccessDenied:
+        result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::AccessDenied);
+        break;
+    case runtime::PacketReceiveStatus::OutputBufferTooSmall:
+        result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::OutputBufferTooSmall);
+        break;
+    case runtime::PacketReceiveStatus::StaleActivation:
+        result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::StaleActivation);
+        logger::Log("Discarded packet API receive id=%llu reason=stale_activation",
+                    static_cast<unsigned long long>(outcome.packet_id.Value()));
+        break;
     }
     return result;
 }
@@ -705,20 +607,12 @@ ams::Result BumpUdpBinding() {
     R_RETURN(g_daemon_runtime.BumpUdpBinding());
 }
 
-wgnx::PacketSubmissionResult SubmitInnerIpv4Packet(
-    std::span<const std::uint8_t> packet,
-    std::uint64_t process_id) {
-    return g_daemon_runtime.SubmitInnerIpv4Packet(
-        packet,
-        runtime::ProcessId{process_id});
+wgnx::PacketSubmissionResult SubmitInnerIpv4Packet(std::span<const std::uint8_t> packet, std::uint64_t process_id) {
+    return g_daemon_runtime.SubmitInnerIpv4Packet(packet, runtime::ProcessId{process_id});
 }
 
-wgnx::PacketReceiveResult ReceiveInnerIpv4Packet(
-    std::span<std::uint8_t> packet,
-    std::uint64_t process_id) {
-    return g_daemon_runtime.ReceiveInnerIpv4Packet(
-        packet,
-        runtime::ProcessId{process_id});
+wgnx::PacketReceiveResult ReceiveInnerIpv4Packet(std::span<std::uint8_t> packet, std::uint64_t process_id) {
+    return g_daemon_runtime.ReceiveInnerIpv4Packet(packet, runtime::ProcessId{process_id});
 }
 
 } // namespace runtime

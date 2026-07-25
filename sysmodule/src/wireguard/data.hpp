@@ -15,8 +15,7 @@ constexpr inline std::size_t TransportDataPaddingBlockSize = 16;
 constexpr std::size_t GetPaddedTransportPayloadSize(std::size_t payload_size) {
     return payload_size == 0
                ? 0
-               : ((payload_size + TransportDataPaddingBlockSize - 1) /
-                  TransportDataPaddingBlockSize) * TransportDataPaddingBlockSize;
+               : ((payload_size + TransportDataPaddingBlockSize - 1) / TransportDataPaddingBlockSize) * TransportDataPaddingBlockSize;
 }
 
 enum class TransportDataError : std::uint8_t {
@@ -49,25 +48,15 @@ struct IncomingTransportDataResult {
     bool promoted_next_keypair{false};
 };
 
-const char *GetTransportDataErrorName(TransportDataError error);
+const char* GetTransportDataErrorName(TransportDataError error);
 
-TransportDataCreateResult noise_create_transport_data_packet(
-    std::span<std::uint8_t> output,
-    noise_keypair &keypair,
-    std::span<const std::uint8_t> payload);
-TransportDataCreateResult noise_create_keepalive_packet(
-    std::span<std::uint8_t> output,
-    noise_keypair &keypair);
-TransportDataError noise_consume_transport_data_packet(
-    std::span<const std::uint8_t> packet,
-    noise_keypair &keypair,
-    std::span<std::uint8_t> out_payload,
-    TransportDataDecryptResult &out_result);
-TransportDataError noise_consume_incoming_transport_data_packet(
-    std::span<const std::uint8_t> packet,
-    wg_device &device,
-    wg_peer &peer,
-    std::span<std::uint8_t> out_payload,
-    IncomingTransportDataResult &out_result);
+TransportDataCreateResult noise_create_transport_data_packet(std::span<std::uint8_t> output, noise_keypair& keypair,
+                                                             std::span<const std::uint8_t> payload);
+TransportDataCreateResult noise_create_keepalive_packet(std::span<std::uint8_t> output, noise_keypair& keypair);
+TransportDataError noise_consume_transport_data_packet(std::span<const std::uint8_t> packet, noise_keypair& keypair,
+                                                       std::span<std::uint8_t> out_payload, TransportDataDecryptResult& out_result);
+TransportDataError noise_consume_incoming_transport_data_packet(std::span<const std::uint8_t> packet, wg_device& device, wg_peer& peer,
+                                                                std::span<std::uint8_t> out_payload,
+                                                                IncomingTransportDataResult& out_result);
 
 } // namespace wgnx::wireguard

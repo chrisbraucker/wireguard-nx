@@ -5,12 +5,10 @@ namespace wgnx::sysmodule {
 namespace {
 
 std::string_view TrimConfigWhitespace(std::string_view value) {
-    while (!value.empty() &&
-           (value.front() == ' ' || value.front() == '\t' || value.front() == '\r')) {
+    while (!value.empty() && (value.front() == ' ' || value.front() == '\t' || value.front() == '\r')) {
         value.remove_prefix(1);
     }
-    while (!value.empty() &&
-           (value.back() == ' ' || value.back() == '\t' || value.back() == '\r')) {
+    while (!value.empty() && (value.back() == ' ' || value.back() == '\t' || value.back() == '\r')) {
         value.remove_suffix(1);
     }
     return value;
@@ -26,11 +24,8 @@ ConfigLayoutValidation ValidateConnectionConfigLayout(std::string_view text) {
 
     while (true) {
         const std::size_t line_end = remaining.find('\n');
-        std::string_view line =
-            line_end == std::string_view::npos ? remaining : remaining.substr(0, line_end);
-        remaining = line_end == std::string_view::npos
-                        ? std::string_view{}
-                        : remaining.substr(line_end + 1);
+        std::string_view line = line_end == std::string_view::npos ? remaining : remaining.substr(0, line_end);
+        remaining = line_end == std::string_view::npos ? std::string_view{} : remaining.substr(line_end + 1);
         ++line_number;
 
         line = TrimConfigWhitespace(line);
@@ -43,8 +38,7 @@ ConfigLayoutValidation ValidateConnectionConfigLayout(std::string_view text) {
                 };
             }
 
-            const std::string_view section_name =
-                TrimConfigWhitespace(line.substr(1, close - 1));
+            const std::string_view section_name = TrimConfigWhitespace(line.substr(1, close - 1));
             if (section_name == "Interface") {
                 ++interface_sections;
                 if (interface_sections > 1) {
@@ -78,19 +72,20 @@ ConfigLayoutValidation ValidateConnectionConfigLayout(std::string_view text) {
     return {};
 }
 
-const char *GetConfigLayoutErrorMessage(ConfigLayoutError error) {
+const char* GetConfigLayoutErrorMessage(ConfigLayoutError error) {
     switch (error) {
-        case ConfigLayoutError::None: return "none";
-        case ConfigLayoutError::MissingSectionTerminator:
-            return "section header is missing ']'";
-        case ConfigLayoutError::MultipleInterfaceSections:
-            return "multiple [Interface] sections are not supported";
-        case ConfigLayoutError::MultiplePeerSections:
-            return "multiple [Peer] sections are not supported";
-        case ConfigLayoutError::MissingInterfaceSection:
-            return "missing [Interface] section";
-        case ConfigLayoutError::MissingPeerSection:
-            return "missing [Peer] section";
+    case ConfigLayoutError::None:
+        return "none";
+    case ConfigLayoutError::MissingSectionTerminator:
+        return "section header is missing ']'";
+    case ConfigLayoutError::MultipleInterfaceSections:
+        return "multiple [Interface] sections are not supported";
+    case ConfigLayoutError::MultiplePeerSections:
+        return "multiple [Peer] sections are not supported";
+    case ConfigLayoutError::MissingInterfaceSection:
+        return "missing [Interface] section";
+    case ConfigLayoutError::MissingPeerSection:
+        return "missing [Peer] section";
     }
     return "unknown config layout error";
 }

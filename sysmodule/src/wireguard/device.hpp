@@ -45,26 +45,21 @@ struct wg_device {
     bool has_peer{false};
 };
 
-bool wg_device_init_from_config_entry(wg_device *device, const wgnx::PeerConfigEntry &config);
-bool wg_device_init_from_parsed_config(
-    wg_device *device,
-    const wgnx::PeerConfigEntry &config,
-    const noise_private_key &local_private_key,
-    const noise_symmetric_key *preshared_key);
-void wg_device_reset(wg_device *device);
-std::uint32_t wg_device_allocate_index(wg_device *device);
-void wg_device_clear_index_registry(wg_device *device);
-void wg_device_register_handshake_index(wg_device *device, std::uint32_t index);
-bool wg_device_create_handshake_initiation(
-    wg_device *device,
-    message_handshake_initiation *out_message);
-bool wg_device_promote_next_keypair(wg_device *device, wg_peer *peer);
-void wg_device_refresh_keypair_indices(wg_device *device, const wg_peer *peer);
-wg_index_slot wg_device_lookup_index_slot(const wg_device *device, std::uint32_t index);
-bool wg_device_index_matches_slot(const wg_device *device, wg_index_slot slot, std::uint32_t index);
-noise_keypair *wg_peer_keypair_for_slot(wg_peer *peer, wg_index_slot slot);
-const noise_keypair *wg_peer_keypair_for_slot(const wg_peer *peer, wg_index_slot slot);
-wg_peer *wg_device_first_peer(wg_device *device);
-const wg_peer *wg_device_first_peer(const wg_device *device);
+bool wg_device_init_from_config_entry(wg_device* device, const wgnx::PeerConfigEntry& config);
+bool wg_device_init_from_parsed_config(wg_device* device, const wgnx::PeerConfigEntry& config, const noise_private_key& local_private_key,
+                                       const noise_symmetric_key* preshared_key);
+void wg_device_reset(wg_device* device);
+std::uint32_t wg_device_allocate_index(wg_device* device);
+void wg_device_clear_index_registry(wg_device* device);
+void wg_device_register_handshake_index(wg_device* device, std::uint32_t index);
+bool wg_device_create_handshake_initiation(wg_device* device, message_handshake_initiation* out_message);
+bool wg_device_promote_next_keypair(wg_device* device, wg_peer* peer);
+void wg_device_refresh_keypair_indices(wg_device* device, const wg_peer* peer);
+wg_index_slot wg_device_lookup_index_slot(const wg_device* device, std::uint32_t index);
+bool wg_device_index_matches_slot(const wg_device* device, wg_index_slot slot, std::uint32_t index);
+noise_keypair* wg_peer_keypair_for_slot(wg_peer* peer, wg_index_slot slot);
+const noise_keypair* wg_peer_keypair_for_slot(const wg_peer* peer, wg_index_slot slot);
+wg_peer* wg_device_first_peer(wg_device* device);
+const wg_peer* wg_device_first_peer(const wg_device* device);
 
 } // namespace wgnx::wireguard

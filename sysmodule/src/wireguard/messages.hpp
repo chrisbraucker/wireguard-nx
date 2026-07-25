@@ -61,48 +61,28 @@ struct ParseResult {
 };
 
 constexpr inline std::size_t HandshakeInitiationSize =
-    MessageTypeSize + MessageSenderIndexSize + NoisePublicKeySize +
-    EncryptedStaticSize + EncryptedTimestampSize + (2 * NoiseMacSize);
+    MessageTypeSize + MessageSenderIndexSize + NoisePublicKeySize + EncryptedStaticSize + EncryptedTimestampSize + (2 * NoiseMacSize);
 constexpr inline std::size_t HandshakeResponseSize =
-    MessageTypeSize + MessageSenderIndexSize + MessageReceiverIndexSize +
-    NoisePublicKeySize + EncryptedNothingSize + (2 * NoiseMacSize);
-constexpr inline std::size_t HandshakeCookieSize =
-    MessageTypeSize + MessageReceiverIndexSize + CookieNonceSize + EncryptedCookieSize;
-constexpr inline std::size_t TransportDataHeaderSize =
-    MessageTypeSize + MessageReceiverIndexSize + MessageCounterSize;
+    MessageTypeSize + MessageSenderIndexSize + MessageReceiverIndexSize + NoisePublicKeySize + EncryptedNothingSize + (2 * NoiseMacSize);
+constexpr inline std::size_t HandshakeCookieSize = MessageTypeSize + MessageReceiverIndexSize + CookieNonceSize + EncryptedCookieSize;
+constexpr inline std::size_t TransportDataHeaderSize = MessageTypeSize + MessageReceiverIndexSize + MessageCounterSize;
 
-const char *GetMessageTypeName(MessageType type);
-const char *GetParseErrorName(ParseError error);
+const char* GetMessageTypeName(MessageType type);
+const char* GetParseErrorName(ParseError error);
 
 ParseResult InspectMessageType(std::span<const std::uint8_t> packet);
-void SetMessageType(std::uint32_t &field, MessageType type);
+void SetMessageType(std::uint32_t& field, MessageType type);
 MessageType GetMessageType(std::uint32_t field);
 
-ParseResult ParseHandshakeInitiation(
-    std::span<const std::uint8_t> packet,
-    message_handshake_initiation &out_message);
-ParseResult ParseHandshakeResponse(
-    std::span<const std::uint8_t> packet,
-    message_handshake_response &out_message);
-ParseResult ParseHandshakeCookie(
-    std::span<const std::uint8_t> packet,
-    message_handshake_cookie &out_message);
-ParseResult ParseTransportDataHeader(
-    std::span<const std::uint8_t> packet,
-    message_transport_data &out_message);
+ParseResult ParseHandshakeInitiation(std::span<const std::uint8_t> packet, message_handshake_initiation& out_message);
+ParseResult ParseHandshakeResponse(std::span<const std::uint8_t> packet, message_handshake_response& out_message);
+ParseResult ParseHandshakeCookie(std::span<const std::uint8_t> packet, message_handshake_cookie& out_message);
+ParseResult ParseTransportDataHeader(std::span<const std::uint8_t> packet, message_transport_data& out_message);
 
-ParseError SerializeHandshakeInitiation(
-    std::span<std::uint8_t> output,
-    const message_handshake_initiation &message);
-ParseError SerializeHandshakeResponse(
-    std::span<std::uint8_t> output,
-    const message_handshake_response &message);
-ParseError SerializeHandshakeCookie(
-    std::span<std::uint8_t> output,
-    const message_handshake_cookie &message);
-ParseError SerializeTransportDataHeader(
-    std::span<std::uint8_t> output,
-    const message_transport_data &message);
+ParseError SerializeHandshakeInitiation(std::span<std::uint8_t> output, const message_handshake_initiation& message);
+ParseError SerializeHandshakeResponse(std::span<std::uint8_t> output, const message_handshake_response& message);
+ParseError SerializeHandshakeCookie(std::span<std::uint8_t> output, const message_handshake_cookie& message);
+ParseError SerializeTransportDataHeader(std::span<std::uint8_t> output, const message_transport_data& message);
 
 static_assert(sizeof(message_macs) == 32);
 static_assert(sizeof(message_handshake_initiation) == 148);

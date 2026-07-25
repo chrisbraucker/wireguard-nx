@@ -3,7 +3,7 @@
 #include "GuiMain.hpp"
 
 class OverlayWireguard : public tsl::Overlay {
-public:
+  public:
     // libtesla already initialized fs, hid, pl, pmdmnt, hid:sys and set:sys
     virtual void initServices() override {
         pmshellInitialize();
@@ -20,6 +20,6 @@ public:
     }
 };
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
     return tsl::loop<OverlayWireguard>(argc, argv);
 }

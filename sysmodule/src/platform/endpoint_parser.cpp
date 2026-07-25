@@ -35,7 +35,7 @@ bool CopyView(std::span<char> dst, std::string_view value) {
 
 } // namespace
 
-bool ParseEndpointText(std::string_view configured_endpoint, EndpointTextParts *out) {
+bool ParseEndpointText(std::string_view configured_endpoint, EndpointTextParts* out) {
     if (out == nullptr) {
         return false;
     }
@@ -47,8 +47,7 @@ bool ParseEndpointText(std::string_view configured_endpoint, EndpointTextParts *
 
     if (endpoint.front() == '[') {
         const std::size_t closing = endpoint.find(']');
-        if (closing == std::string_view::npos || closing == 1 ||
-            (closing + 1) >= endpoint.size() || endpoint[closing + 1] != ':') {
+        if (closing == std::string_view::npos || closing == 1 || (closing + 1) >= endpoint.size() || endpoint[closing + 1] != ':') {
             return false;
         }
 
@@ -64,8 +63,7 @@ bool ParseEndpointText(std::string_view configured_endpoint, EndpointTextParts *
             break;
         }
     }
-    if (separator == std::string_view::npos || separator == 0 ||
-        (separator + 1) >= endpoint.size() ||
+    if (separator == std::string_view::npos || separator == 0 || (separator + 1) >= endpoint.size() ||
         endpoint.substr(0, separator).find(':') != std::string_view::npos) {
         return false;
     }
@@ -75,12 +73,12 @@ bool ParseEndpointText(std::string_view configured_endpoint, EndpointTextParts *
     return CopyView(out->host, host) && CopyView(out->service, service);
 }
 
-bool ParseEndpointPort(const char *service) {
+bool ParseEndpointPort(const char* service) {
     if (service == nullptr || service[0] == '\0') {
         return false;
     }
 
-    char *end = nullptr;
+    char* end = nullptr;
     errno = 0;
     const unsigned long value = std::strtoul(service, &end, 10);
     return errno == 0 && end != service && *end == '\0' && value > 0 && value <= 65535;

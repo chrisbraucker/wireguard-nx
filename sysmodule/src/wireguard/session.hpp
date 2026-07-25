@@ -37,10 +37,10 @@ struct noise_private_key {
 
     noise_private_key() = default;
     ~noise_private_key();
-    noise_private_key(const noise_private_key &) = delete;
-    noise_private_key &operator=(const noise_private_key &) = delete;
-    noise_private_key(noise_private_key &&other) noexcept;
-    noise_private_key &operator=(noise_private_key &&other) noexcept;
+    noise_private_key(const noise_private_key&) = delete;
+    noise_private_key& operator=(const noise_private_key&) = delete;
+    noise_private_key(noise_private_key&& other) noexcept;
+    noise_private_key& operator=(noise_private_key&& other) noexcept;
     void Clear();
 };
 
@@ -50,10 +50,10 @@ struct noise_symmetric_key {
 
     noise_symmetric_key() = default;
     ~noise_symmetric_key();
-    noise_symmetric_key(const noise_symmetric_key &) = delete;
-    noise_symmetric_key &operator=(const noise_symmetric_key &) = delete;
-    noise_symmetric_key(noise_symmetric_key &&other) noexcept;
-    noise_symmetric_key &operator=(noise_symmetric_key &&other) noexcept;
+    noise_symmetric_key(const noise_symmetric_key&) = delete;
+    noise_symmetric_key& operator=(const noise_symmetric_key&) = delete;
+    noise_symmetric_key(noise_symmetric_key&& other) noexcept;
+    noise_symmetric_key& operator=(noise_symmetric_key&& other) noexcept;
     void Clear();
 };
 
@@ -63,10 +63,10 @@ struct noise_secret32 {
 
     noise_secret32() = default;
     ~noise_secret32();
-    noise_secret32(const noise_secret32 &) = delete;
-    noise_secret32 &operator=(const noise_secret32 &) = delete;
-    noise_secret32(noise_secret32 &&other) noexcept;
-    noise_secret32 &operator=(noise_secret32 &&other) noexcept;
+    noise_secret32(const noise_secret32&) = delete;
+    noise_secret32& operator=(const noise_secret32&) = delete;
+    noise_secret32(noise_secret32&& other) noexcept;
+    noise_secret32& operator=(noise_secret32&& other) noexcept;
     void Clear();
 };
 
@@ -79,10 +79,10 @@ struct noise_cookie {
 
     noise_cookie() = default;
     ~noise_cookie();
-    noise_cookie(const noise_cookie &) = delete;
-    noise_cookie &operator=(const noise_cookie &) = delete;
-    noise_cookie(noise_cookie &&other) noexcept;
-    noise_cookie &operator=(noise_cookie &&other) noexcept;
+    noise_cookie(const noise_cookie&) = delete;
+    noise_cookie& operator=(const noise_cookie&) = delete;
+    noise_cookie(noise_cookie&& other) noexcept;
+    noise_cookie& operator=(noise_cookie&& other) noexcept;
     void Clear();
 };
 
@@ -103,7 +103,7 @@ struct noise_handshake_material {
 };
 
 class ReplayWindow {
-public:
+  public:
     static constexpr std::size_t BlockBitLog = 6;
     static constexpr std::size_t BlockBits = std::size_t{1} << BlockBitLog;
     static constexpr std::size_t RingBlocks = std::size_t{1} << 7;
@@ -112,10 +112,14 @@ public:
     bool TryAdvance(std::uint64_t counter);
     void Reset();
 
-    bool HasReceivedPacket() const { return m_initialized; }
-    std::uint64_t HighestCounter() const { return m_highest_counter; }
+    bool HasReceivedPacket() const {
+        return m_initialized;
+    }
+    std::uint64_t HighestCounter() const {
+        return m_highest_counter;
+    }
 
-private:
+  private:
     static constexpr std::size_t BlockMask = RingBlocks - 1;
     static constexpr std::size_t BitMask = BlockBits - 1;
 
@@ -136,7 +140,7 @@ enum class KeypairSendState : std::uint8_t {
     CounterExhausted,
 };
 
-const char *GetKeypairSendStateName(KeypairSendState state);
+const char* GetKeypairSendStateName(KeypairSendState state);
 
 struct KeypairAgeResult {
     bool valid{false};
@@ -144,43 +148,58 @@ struct KeypairAgeResult {
 };
 
 class noise_keypair {
-public:
+  public:
     noise_keypair() = default;
     ~noise_keypair();
-    noise_keypair(const noise_keypair &) = delete;
-    noise_keypair &operator=(const noise_keypair &) = delete;
-    noise_keypair(noise_keypair &&other) noexcept;
-    noise_keypair &operator=(noise_keypair &&other) noexcept;
+    noise_keypair(const noise_keypair&) = delete;
+    noise_keypair& operator=(const noise_keypair&) = delete;
+    noise_keypair(noise_keypair&& other) noexcept;
+    noise_keypair& operator=(noise_keypair&& other) noexcept;
 
-    void Establish(
-        std::uint32_t local_index,
-        std::uint32_t remote_index,
-        MonotonicTimePoint birth_time,
-        const noise_symmetric_key &sending_key,
-        const noise_symmetric_key &receiving_key,
-        std::uint64_t send_counter = 0,
-        bool is_initiator = true);
+    void Establish(std::uint32_t local_index, std::uint32_t remote_index, MonotonicTimePoint birth_time,
+                   const noise_symmetric_key& sending_key, const noise_symmetric_key& receiving_key, std::uint64_t send_counter = 0,
+                   bool is_initiator = true);
     void Reset();
 
     bool IsValid() const;
     bool CanSendAt(MonotonicTimePoint now) const;
     bool CanReceiveAt(MonotonicTimePoint now) const;
     KeypairSendState SendStateAt(MonotonicTimePoint now) const;
-    KeypairState State() const { return m_state; }
-    std::uint32_t LocalIndex() const { return m_local_index; }
-    std::uint32_t RemoteIndex() const { return m_remote_index; }
-    std::uint64_t SendCounter() const { return m_send_counter; }
-    bool IsInitiator() const { return m_is_initiator; }
+    KeypairState State() const {
+        return m_state;
+    }
+    std::uint32_t LocalIndex() const {
+        return m_local_index;
+    }
+    std::uint32_t RemoteIndex() const {
+        return m_remote_index;
+    }
+    std::uint64_t SendCounter() const {
+        return m_send_counter;
+    }
+    bool IsInitiator() const {
+        return m_is_initiator;
+    }
     bool NeedsRekeyAt(MonotonicTimePoint now) const;
-    KeypairSendState ReserveSendCounterAt(MonotonicTimePoint now, std::uint64_t &out_counter);
-    MonotonicTimePoint BirthTime() const { return m_birth_time; }
+    KeypairSendState ReserveSendCounterAt(MonotonicTimePoint now, std::uint64_t& out_counter);
+    MonotonicTimePoint BirthTime() const {
+        return m_birth_time;
+    }
     KeypairAgeResult AgeAt(MonotonicTimePoint now) const;
-    const noise_symmetric_key &SendingKey() const { return m_sending_key; }
-    const noise_symmetric_key &ReceivingKey() const { return m_receiving_key; }
-    const ReplayWindow &ReceiveReplayWindow() const { return m_receive_replay_window; }
-    ReplayWindow &ReceiveReplayWindow() { return m_receive_replay_window; }
+    const noise_symmetric_key& SendingKey() const {
+        return m_sending_key;
+    }
+    const noise_symmetric_key& ReceivingKey() const {
+        return m_receiving_key;
+    }
+    const ReplayWindow& ReceiveReplayWindow() const {
+        return m_receive_replay_window;
+    }
+    ReplayWindow& ReceiveReplayWindow() {
+        return m_receive_replay_window;
+    }
 
-private:
+  private:
     KeypairState m_state{KeypairState::Empty};
     std::uint32_t m_local_index{0};
     std::uint32_t m_remote_index{0};
@@ -195,32 +214,24 @@ private:
 static_assert(!std::is_copy_constructible_v<noise_keypair>);
 static_assert(std::is_nothrow_move_constructible_v<noise_keypair>);
 
-void noise_cookie_reset(noise_cookie *cookie);
-void noise_cookie_record_last_mac1(noise_cookie *cookie, const std::uint8_t mac1[NoiseMacSize]);
-bool noise_cookie_is_valid(const noise_cookie *cookie);
-void noise_static_identity_reset(noise_static_identity *identity);
-void noise_handshake_material_reset(noise_handshake_material *material);
+void noise_cookie_reset(noise_cookie* cookie);
+void noise_cookie_record_last_mac1(noise_cookie* cookie, const std::uint8_t mac1[NoiseMacSize]);
+bool noise_cookie_is_valid(const noise_cookie* cookie);
+void noise_static_identity_reset(noise_static_identity* identity);
+void noise_handshake_material_reset(noise_handshake_material* material);
 
 bool noise_is_valid_encoded_key(std::string_view text, bool allow_empty = false);
-bool noise_parse_private_key(noise_private_key *out_key, std::string_view text);
-bool noise_parse_public_key(noise_public_key *out_key, std::string_view text);
-bool noise_parse_preshared_key(noise_symmetric_key *out_key, std::string_view text);
-bool noise_public_key_to_text(std::span<char> out_text, const noise_public_key *key);
-bool noise_derive_public_key(noise_public_key *out_key, const noise_private_key *private_key);
-bool noise_derive_public_key_text(std::span<char> out_text, const noise_private_key *private_key);
+bool noise_parse_private_key(noise_private_key* out_key, std::string_view text);
+bool noise_parse_public_key(noise_public_key* out_key, std::string_view text);
+bool noise_parse_preshared_key(noise_symmetric_key* out_key, std::string_view text);
+bool noise_public_key_to_text(std::span<char> out_text, const noise_public_key* key);
+bool noise_derive_public_key(noise_public_key* out_key, const noise_private_key* private_key);
+bool noise_derive_public_key_text(std::span<char> out_text, const noise_private_key* private_key);
 bool noise_derive_public_key_text(std::span<char> out_text, std::string_view private_key_text);
-bool noise_static_identity_init(
-    noise_static_identity *identity,
-    std::string_view private_key_text,
-    std::string_view peer_public_key_text,
-    std::string_view preshared_key_text);
-bool noise_static_identity_init_from_keys(
-    noise_static_identity *identity,
-    const noise_private_key *private_key,
-    std::string_view peer_public_key_text,
-    const noise_symmetric_key *preshared_key);
-bool noise_precompute_static_static(
-    noise_handshake_material *material,
-    const noise_static_identity *identity);
+bool noise_static_identity_init(noise_static_identity* identity, std::string_view private_key_text, std::string_view peer_public_key_text,
+                                std::string_view preshared_key_text);
+bool noise_static_identity_init_from_keys(noise_static_identity* identity, const noise_private_key* private_key,
+                                          std::string_view peer_public_key_text, const noise_symmetric_key* preshared_key);
+bool noise_precompute_static_static(noise_handshake_material* material, const noise_static_identity* identity);
 
 } // namespace wgnx::wireguard

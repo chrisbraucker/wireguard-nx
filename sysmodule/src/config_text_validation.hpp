@@ -25,6 +25,6 @@ struct ConfigLayoutValidation {
 };
 
 ConfigLayoutValidation ValidateConnectionConfigLayout(std::string_view text);
-const char *GetConfigLayoutErrorMessage(ConfigLayoutError error);
+const char* GetConfigLayoutErrorMessage(ConfigLayoutError error);
 
 } // namespace wgnx::sysmodule

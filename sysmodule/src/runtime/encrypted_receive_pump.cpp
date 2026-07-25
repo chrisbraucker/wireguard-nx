@@ -17,16 +17,13 @@ namespace wgnx::sysmodule::runtime {
 
 namespace {
 
-constexpr inline auto AmbiguousReceiveRetryDelay =
-    ams::TimeSpan::FromMilliSeconds(25);
+constexpr inline auto AmbiguousReceiveRetryDelay = ams::TimeSpan::FromMilliSeconds(25);
 
 wgnx::platform::ktime_t GetRuntimeNowNs() {
     return wgnx::platform::ktime_get_coarse_boottime_ns();
 }
 
-void FormatEndpointText(
-    const wgnx::platform::endpoint &endpoint,
-    std::span<char> out_text) {
+void FormatEndpointText(const wgnx::platform::endpoint& endpoint, std::span<char> out_text) {
     if (out_text.empty()) {
         return;
     }
@@ -37,8 +34,7 @@ void FormatEndpointText(
 
 } // namespace
 
-UdpRebindQueueResult EncryptedReceivePump::QueueRebindLocked(
-    const UdpRebindRequest &request) {
+UdpRebindQueueResult EncryptedReceivePump::QueueRebindLocked(const UdpRebindRequest& request) {
     return m_rebind_requests.Queue(request);
 }
 
@@ -46,14 +42,12 @@ void EncryptedReceivePump::Queue() {
     m_dispatcher.QueueReceive();
 }
 
-bool EncryptedReceivePump::SnapshotReceiveRuntime(
-    ReceiveRuntimeSnapshot &out) {
+bool EncryptedReceivePump::SnapshotReceiveRuntime(ReceiveRuntimeSnapshot& out) {
     std::scoped_lock lock(m_state_mutex);
     return m_coordinator.SnapshotReceiveRuntime(out);
 }
 
-void EncryptedReceivePump::ProcessPendingRebind(
-    RuntimeEffectExecutor &effect_executor) {
+void EncryptedReceivePump::ProcessPendingRebind(RuntimeEffectExecutor& effect_executor) {
     std::unique_lock lock(m_state_mutex);
     const auto pending = m_rebind_requests.Take();
     if (!pending.has_value()) {
@@ -65,68 +59,50 @@ void EncryptedReceivePump::ProcessPendingRebind(
         .peer_index = request.peer_index,
         .activation_generation = request.activation_generation,
     };
-    logger::Log(
-        "Dispatching UDP bind bump peer=%zu activation=%u",
-        static_cast<std::size_t>(request.peer_index.Value()),
-        request.activation_generation.Value());
-    const EffectBatch effects = m_coordinator.Dispatch(
-        UdpRebindRequestedEvent{
-            .peer = identity,
-            .occurred_at = GetRuntimeNowNs(),
-        });
+    logger::Log("Dispatching UDP bind bump peer=%zu activation=%u", static_cast<std::size_t>(request.peer_index.Value()),
+                request.activation_generation.Value());
+    const EffectBatch effects = m_coordinator.Dispatch(UdpRebindRequestedEvent{
+        .peer = identity,
+        .occurred_at = GetRuntimeNowNs(),
+    });
     lock.unlock();
     effect_executor.Execute(effects);
 }
 
-NOINLINE void EncryptedReceivePump::CommitReceivedPacket(
-    const ReceiveRuntimeSnapshot &snapshot,
-    std::span<const std::uint8_t> packet,
-    const wgnx::platform::endpoint &source,
-    EffectBatch &out_effects) {
+NOINLINE void EncryptedReceivePump::CommitReceivedPacket(const ReceiveRuntimeSnapshot& snapshot, std::span<const std::uint8_t> packet,
+                                                         const wgnx::platform::endpoint& source, EffectBatch& out_effects) {
     out_effects.Clear();
     const auto timer_facts = CaptureTimerFacts();
     std::scoped_lock lock(m_state_mutex);
-    const auto binding =
-        m_coordinator.BindingSnapshot(snapshot.peer.peer_index.Value());
-    if (!m_coordinator.IsActiveTransportIdentity(snapshot.peer) ||
-        !binding.Matches(snapshot.socket_generation, snapshot.socket)) {
+    const auto binding = m_coordinator.BindingSnapshot(snapshot.peer.peer_index.Value());
+    if (!m_coordinator.IsActiveTransportIdentity(snapshot.peer) || !binding.Matches(snapshot.socket_generation, snapshot.socket)) {
         return;
     }
 
     std::array<char, sizeof(wgnx::PeerInfo::resolved_endpoint)> source_text{};
     FormatEndpointText(source, source_text);
-    out_effects = m_coordinator.Dispatch(
-        EncryptedDatagramReceivedEvent{
-            .peer = snapshot.peer,
-            .packet = packet,
-            .source = source,
-            .source_text = source_text,
-            .timer_facts = timer_facts,
-            .occurred_at = GetRuntimeNowNs(),
-        });
+    out_effects = m_coordinator.Dispatch(EncryptedDatagramReceivedEvent{
+        .peer = snapshot.peer,
+        .packet = packet,
+        .source = source,
+        .source_text = source_text,
+        .timer_facts = timer_facts,
+        .occurred_at = GetRuntimeNowNs(),
+    });
 }
 
-void EncryptedReceivePump::CommitReceiveFailure(
-    const ReceiveRuntimeSnapshot &snapshot,
-    const wgnx::platform::udp_receive_result &result,
-    RuntimeEffectExecutor &effect_executor) {
+void EncryptedReceivePump::CommitReceiveFailure(const ReceiveRuntimeSnapshot& snapshot, const wgnx::platform::udp_receive_result& result,
+                                                RuntimeEffectExecutor& effect_executor) {
     EffectBatch effects{};
     std::unique_lock lock(m_state_mutex);
-    const auto binding =
-        m_coordinator.BindingSnapshot(snapshot.peer.peer_index.Value());
-    if (!m_coordinator.IsActiveTransportIdentity(snapshot.peer) ||
-        !binding.Matches(snapshot.socket_generation, snapshot.socket)) {
+    const auto binding = m_coordinator.BindingSnapshot(snapshot.peer.peer_index.Value());
+    if (!m_coordinator.IsActiveTransportIdentity(snapshot.peer) || !binding.Matches(snapshot.socket_generation, snapshot.socket)) {
         return;
     }
 
-    logger::Log(
-        "UDP receive failed for peer %u endpoint=%s error=%u native_condition=%u native_result=%lld native_error=%u",
-        snapshot.peer.peer_index.Value(),
-        binding.endpoint_text.data(),
-        static_cast<unsigned int>(result.error),
-        static_cast<unsigned int>(result.native_condition),
-        static_cast<long long>(result.native_result),
-        result.native_error);
+    logger::Log("UDP receive failed for peer %u endpoint=%s error=%u native_condition=%u native_result=%lld native_error=%u",
+                snapshot.peer.peer_index.Value(), binding.endpoint_text.data(), static_cast<unsigned int>(result.error),
+                static_cast<unsigned int>(result.native_condition), static_cast<long long>(result.native_result), result.native_error);
     effects = m_coordinator.Dispatch(TransportFailureEvent{
         .peer = snapshot.peer,
         .operation = TransportIoOperation::Receive,
@@ -135,18 +111,17 @@ void EncryptedReceivePump::CommitReceiveFailure(
         .error = result.error,
         .occurred_at = GetRuntimeNowNs(),
     });
-    logger::Log(
-        "WG receive worker stopped after transport failure peer=%u activation=%u socket_generation=%u socket=%d",
-        snapshot.peer.peer_index.Value(),
-        snapshot.peer.activation_generation.Value(),
-        snapshot.socket_generation.Value(),
-        static_cast<int>(snapshot.socket));
+    logger::Log("WG receive worker stopped after transport failure peer=%u activation=%u socket_generation=%u socket=%d",
+                snapshot.peer.peer_index.Value(), snapshot.peer.activation_generation.Value(), snapshot.socket_generation.Value(),
+                static_cast<int>(snapshot.socket));
     lock.unlock();
     effect_executor.Execute(effects);
 }
 
-void EncryptedReceivePump::Run(RuntimeEffectExecutor &effect_executor) {
-    ON_SCOPE_EXIT { logger::Flush(); };
+void EncryptedReceivePump::Run(RuntimeEffectExecutor& effect_executor) {
+    ON_SCOPE_EXIT {
+        logger::Flush();
+    };
     // HorizonDispatcher serializes this callback on one ordered work queue, so
     // the process-lifetime receive storage has one exclusive user at a time.
     wgnx::platform::packet_buffer packet{
@@ -163,34 +138,20 @@ void EncryptedReceivePump::Run(RuntimeEffectExecutor &effect_executor) {
         }
 
         if constexpr (development_config::VerboseHeartbeatLogging) {
-            logger::Log(
-                "WG receive iteration begin peer=%u activation=%u socket_generation=%u socket=%d",
-                snapshot.peer.peer_index.Value(),
-                snapshot.peer.activation_generation.Value(),
-                snapshot.socket_generation.Value(),
-                static_cast<int>(snapshot.socket));
+            logger::Log("WG receive iteration begin peer=%u activation=%u socket_generation=%u socket=%d", snapshot.peer.peer_index.Value(),
+                        snapshot.peer.activation_generation.Value(), snapshot.socket_generation.Value(), static_cast<int>(snapshot.socket));
         }
-        const auto receive_result = wgnx::platform::udp_receive(
-            snapshot.socket,
-            packet.storage());
+        const auto receive_result = wgnx::platform::udp_receive(snapshot.socket, packet.storage());
         if constexpr (development_config::VerboseHeartbeatLogging) {
-            logger::Log(
-                "WG receive iteration end peer=%u activation=%u socket_generation=%u socket=%d disposition=%u error=%u native_condition=%u native_result=%lld native_error=%u bytes=%zu",
-                snapshot.peer.peer_index.Value(),
-                snapshot.peer.activation_generation.Value(),
-                snapshot.socket_generation.Value(),
-                static_cast<int>(snapshot.socket),
-                static_cast<unsigned int>(receive_result.disposition),
-                static_cast<unsigned int>(receive_result.error),
-                static_cast<unsigned int>(receive_result.native_condition),
-                static_cast<long long>(receive_result.native_result),
-                receive_result.native_error,
-                receive_result.bytes_received);
+            logger::Log("WG receive iteration end peer=%u activation=%u socket_generation=%u socket=%d disposition=%u error=%u "
+                        "native_condition=%u native_result=%lld native_error=%u bytes=%zu",
+                        snapshot.peer.peer_index.Value(), snapshot.peer.activation_generation.Value(), snapshot.socket_generation.Value(),
+                        static_cast<int>(snapshot.socket), static_cast<unsigned int>(receive_result.disposition),
+                        static_cast<unsigned int>(receive_result.error), static_cast<unsigned int>(receive_result.native_condition),
+                        static_cast<long long>(receive_result.native_result), receive_result.native_error, receive_result.bytes_received);
         }
-        if (receive_result.disposition ==
-            wgnx::platform::udp_receive_disposition::retry) {
-            if (wgnx::platform::udp_receive_retry_requires_pacing(
-                    receive_result)) {
+        if (receive_result.disposition == wgnx::platform::udp_receive_disposition::retry) {
+            if (wgnx::platform::udp_receive_retry_requires_pacing(receive_result)) {
                 // This Horizon-specific result has no usable error condition.
                 // Keep it local to this dedicated worker; future NIFM-driven
                 // path/lifecycle policy must not infer state from this read.
@@ -198,8 +159,7 @@ void EncryptedReceivePump::Run(RuntimeEffectExecutor &effect_executor) {
             }
             continue;
         }
-        if (receive_result.disposition ==
-            wgnx::platform::udp_receive_disposition::failure) {
+        if (receive_result.disposition == wgnx::platform::udp_receive_disposition::failure) {
             CommitReceiveFailure(snapshot, receive_result, effect_executor);
             // A receive error is a transport fact, not proof that the active
             // descriptor must be replaced. Keep the binding live and retry
@@ -209,13 +169,8 @@ void EncryptedReceivePump::Run(RuntimeEffectExecutor &effect_executor) {
             continue;
         }
 
-        AMS_ABORT_UNLESS(wgnx::platform::packet_set_len(
-            std::addressof(packet), receive_result.bytes_received));
-        CommitReceivedPacket(
-            snapshot,
-            packet.bytes(),
-            receive_result.source,
-            m_receive_effects);
+        AMS_ABORT_UNLESS(wgnx::platform::packet_set_len(std::addressof(packet), receive_result.bytes_received));
+        CommitReceivedPacket(snapshot, packet.bytes(), receive_result.source, m_receive_effects);
         effect_executor.Execute(m_receive_effects);
         m_receive_effects.Clear();
         wgnx::platform::packet_clear(std::addressof(packet));

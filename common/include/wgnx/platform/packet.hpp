@@ -15,7 +15,7 @@ namespace wgnx::platform {
  * semantics remain future transport concerns.
  */
 struct packet_buffer {
-    std::uint8_t *data{nullptr};
+    std::uint8_t* data{nullptr};
     std::size_t len{0};
     std::size_t capacity{0};
 
@@ -36,17 +36,17 @@ struct packet_buffer {
     }
 };
 
-inline void packet_init(packet_buffer *packet, void *data, std::size_t capacity) {
+inline void packet_init(packet_buffer* packet, void* data, std::size_t capacity) {
     if (packet == nullptr) {
         return;
     }
 
-    packet->data = static_cast<std::uint8_t *>(data);
+    packet->data = static_cast<std::uint8_t*>(data);
     packet->len = 0;
     packet->capacity = capacity;
 }
 
-inline void packet_clear(packet_buffer *packet) {
+inline void packet_clear(packet_buffer* packet) {
     if (packet == nullptr) {
         return;
     }
@@ -54,7 +54,7 @@ inline void packet_clear(packet_buffer *packet) {
     packet->len = 0;
 }
 
-inline bool packet_set_len(packet_buffer *packet, std::size_t len) {
+inline bool packet_set_len(packet_buffer* packet, std::size_t len) {
     if (packet == nullptr || len > packet->capacity) {
         return false;
     }
@@ -63,8 +63,7 @@ inline bool packet_set_len(packet_buffer *packet, std::size_t len) {
     return true;
 }
 
-template<std::size_t Capacity>
-struct static_packet_buffer {
+template <std::size_t Capacity> struct static_packet_buffer {
     std::array<std::uint8_t, Capacity> storage{};
     packet_buffer packet{};
 

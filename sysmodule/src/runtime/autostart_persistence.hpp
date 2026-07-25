@@ -20,29 +20,24 @@ struct AutoStartPersistenceRequest {
 // filesystem work separately and uses this token to reject obsolete requests
 // before and after a persistence attempt.
 class AutoStartPersistenceState {
-public:
-    [[nodiscard]] AutoStartPersistenceRequest Begin(
-        std::int32_t peer_index,
-        const char *peer_name) {
+  public:
+    [[nodiscard]] AutoStartPersistenceRequest Begin(std::int32_t peer_index, const char* peer_name) {
         AutoStartPersistenceRequest request{
             .generation = AllocateGeneration(m_next_generation),
             .peer_index = peer_index,
         };
         if (peer_name != nullptr) {
-            std::strncpy(
-                request.peer_name.data(),
-                peer_name,
-                request.peer_name.size() - 1);
+            std::strncpy(request.peer_name.data(), peer_name, request.peer_name.size() - 1);
         }
         m_current_generation = request.generation;
         return request;
     }
 
-    [[nodiscard]] bool IsCurrent(const AutoStartPersistenceRequest &request) const {
+    [[nodiscard]] bool IsCurrent(const AutoStartPersistenceRequest& request) const {
         return request.generation == m_current_generation;
     }
 
-private:
+  private:
     AutoStartRequestGeneration m_next_generation{1};
     AutoStartRequestGeneration m_current_generation{};
 };

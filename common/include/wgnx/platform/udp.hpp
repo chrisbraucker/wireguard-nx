@@ -68,8 +68,7 @@ enum class udp_receive_native_condition : std::uint8_t {
 struct udp_receive_result {
     udp_receive_disposition disposition{udp_receive_disposition::failure};
     udp_receive_retry_reason retry_reason{udp_receive_retry_reason::none};
-    udp_receive_native_condition native_condition{
-        udp_receive_native_condition::other};
+    udp_receive_native_condition native_condition{udp_receive_native_condition::other};
     std::size_t bytes_received{0};
     endpoint source{};
     socket_error error{socket_error::receive_failed};
@@ -77,11 +76,9 @@ struct udp_receive_result {
     std::uint32_t native_error{0};
 };
 
-[[nodiscard]] constexpr udp_receive_result classify_udp_receive_result(
-    std::int64_t native_result,
-    udp_receive_native_condition native_condition,
-    std::uint32_t native_error,
-    const endpoint &source = {}) {
+[[nodiscard]] constexpr udp_receive_result classify_udp_receive_result(std::int64_t native_result,
+                                                                       udp_receive_native_condition native_condition,
+                                                                       std::uint32_t native_error, const endpoint& source = {}) {
     if (native_result >= 0) {
         return {
             .disposition = udp_receive_disposition::datagram,
@@ -95,8 +92,7 @@ struct udp_receive_result {
         };
     }
 
-    if (native_condition == udp_receive_native_condition::would_block ||
-        native_condition == udp_receive_native_condition::timed_out ||
+    if (native_condition == udp_receive_native_condition::would_block || native_condition == udp_receive_native_condition::timed_out ||
         native_condition == udp_receive_native_condition::interrupted) {
         return {
             .disposition = udp_receive_disposition::retry,
@@ -112,8 +108,7 @@ struct udp_receive_result {
 
     // Horizon BSD has been observed to return a negative RecvFrom result while
     // GetLastError reports success. This is not evidence of a path transition.
-    if (native_condition == udp_receive_native_condition::none &&
-        native_error == 0) {
+    if (native_condition == udp_receive_native_condition::none && native_error == 0) {
         return {
             .disposition = udp_receive_disposition::retry,
             .retry_reason = udp_receive_retry_reason::missing_native_error,
@@ -138,11 +133,8 @@ struct udp_receive_result {
     };
 }
 
-[[nodiscard]] constexpr bool udp_receive_retry_requires_pacing(
-    const udp_receive_result &result) {
-    return result.disposition == udp_receive_disposition::retry &&
-           result.retry_reason ==
-               udp_receive_retry_reason::missing_native_error;
+[[nodiscard]] constexpr bool udp_receive_retry_requires_pacing(const udp_receive_result& result) {
+    return result.disposition == udp_receive_disposition::retry && result.retry_reason == udp_receive_retry_reason::missing_native_error;
 }
 
 /*
@@ -153,7 +145,7 @@ struct udp_receive_result {
  * adapter remains responsible for translating to native socket types.
  */
 endpoint_resolution_result resolve_endpoint(std::string_view configured_endpoint);
-bool endpoint_to_string(const endpoint &endpoint, std::span<char> out_text);
+bool endpoint_to_string(const endpoint& endpoint, std::span<char> out_text);
 
 /*
  * Deviation from Linux:
@@ -163,15 +155,9 @@ bool endpoint_to_string(const endpoint &endpoint, std::span<char> out_text);
  */
 constexpr inline socket_handle InvalidSocket = -1;
 
-socket_error udp_open(socket_handle *out_socket, address_family family);
+socket_error udp_open(socket_handle* out_socket, address_family family);
 void udp_close(socket_handle socket);
-socket_error udp_send(
-    socket_handle socket,
-    const endpoint &destination,
-    std::span<const std::uint8_t> data,
-    std::size_t *out_sent);
-[[nodiscard]] udp_receive_result udp_receive(
-    socket_handle socket,
-    std::span<std::uint8_t> buffer);
+socket_error udp_send(socket_handle socket, const endpoint& destination, std::span<const std::uint8_t> data, std::size_t* out_sent);
+[[nodiscard]] udp_receive_result udp_receive(socket_handle socket, std::span<std::uint8_t> buffer);
 
 } // namespace wgnx::platform

@@ -13,7 +13,7 @@ struct TimerOwner {
     std::uint32_t activation_generation{0};
     std::uint32_t protocol_sequence{0};
 
-    friend constexpr bool operator==(const TimerOwner &, const TimerOwner &) = default;
+    friend constexpr bool operator==(const TimerOwner&, const TimerOwner&) = default;
 };
 
 struct TimerToken {
@@ -21,19 +21,21 @@ struct TimerToken {
     TimerOwner owner{};
     std::uint32_t generation{0};
 
-    constexpr bool IsValid() const { return generation != 0; }
-    friend constexpr bool operator==(const TimerToken &, const TimerToken &) = default;
+    constexpr bool IsValid() const {
+        return generation != 0;
+    }
+    friend constexpr bool operator==(const TimerToken&, const TimerToken&) = default;
 };
 
 class TimerCoordinator {
-public:
+  public:
     TimerToken Arm(TimerHook hook, TimerOwner owner);
     TimerToken Cancel(TimerHook hook);
     void CancelAll();
-    bool IsCurrent(const TimerToken &token, TimerOwner current_owner) const;
+    bool IsCurrent(const TimerToken& token, TimerOwner current_owner) const;
     bool IsArmed(TimerHook hook) const;
 
-private:
+  private:
     struct HookState {
         TimerToken token{};
         bool armed{false};

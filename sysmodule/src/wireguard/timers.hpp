@@ -50,20 +50,15 @@ struct wg_timers {
     bool need_another_keepalive{false};
 };
 
-const char *GetTimerHookName(TimerHook hook);
+const char* GetTimerHookName(TimerHook hook);
 
-void wg_timers_init(wg_timers *timers);
-void wg_timers_schedule(
-    wg_timers *timers,
-    TimerHook hook,
-    TimerDeadline deadline,
-    const char *peer_name);
-void wg_timers_cancel(wg_timers *timers, TimerHook hook, const char *peer_name);
-void wg_timers_cancel_all(wg_timers *timers, const char *peer_name);
-bool wg_timers_any_pending(const wg_timers &timers);
+void wg_timers_init(wg_timers* timers);
+void wg_timers_schedule(wg_timers* timers, TimerHook hook, TimerDeadline deadline, const char* peer_name);
+void wg_timers_cancel(wg_timers* timers, TimerHook hook, const char* peer_name);
+void wg_timers_cancel_all(wg_timers* timers, const char* peer_name);
+bool wg_timers_any_pending(const wg_timers& timers);
 constexpr TimerDelay GetHandshakeRetryDelay(std::uint32_t jitter_ms) {
-    return std::chrono::duration_cast<TimerDelay>(RekeyTimeout) +
-           std::chrono::milliseconds{jitter_ms % RekeyTimeoutJitterMaxMs};
+    return std::chrono::duration_cast<TimerDelay>(RekeyTimeout) + std::chrono::milliseconds{jitter_ms % RekeyTimeoutJitterMaxMs};
 }
 
 } // namespace wgnx::wireguard

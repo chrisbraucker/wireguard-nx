@@ -18,11 +18,12 @@ using namespace wgnx::sysmodule::runtime;
 wgnx::platform::endpoint_resolution_result DefaultResolutionResult() {
     wgnx::platform::endpoint_resolution_result result{
         .success = true,
-        .resolved = {
-            .family = wgnx::platform::address_family::inet,
-            .port = 51820,
-            .address = {192, 0, 2, 1},
-        },
+        .resolved =
+            {
+                .family = wgnx::platform::address_family::inet,
+                .port = 51820,
+                .address = {192, 0, 2, 1},
+            },
     };
     std::snprintf(result.text.data(), result.text.size(), "192.0.2.1:51820");
     return result;
@@ -30,14 +31,10 @@ wgnx::platform::endpoint_resolution_result DefaultResolutionResult() {
 
 } // namespace
 
-ScriptedPlatform::ScriptedPlatform(
-    RuntimeCoordinator &coordinator,
-    wgnx::platform::ktime_t initial_time)
-    : m_coordinator(coordinator),
-      m_now(initial_time) {}
+ScriptedPlatform::ScriptedPlatform(RuntimeCoordinator& coordinator, wgnx::platform::ktime_t initial_time)
+    : m_coordinator(coordinator), m_now(initial_time) {}
 
-void ScriptedPlatform::QueueResolutionResult(
-    const wgnx::platform::endpoint_resolution_result &result) {
+void ScriptedPlatform::QueueResolutionResult(const wgnx::platform::endpoint_resolution_result& result) {
     m_resolution_results.push_back(result);
 }
 
@@ -57,10 +54,8 @@ void ScriptedPlatform::QueuePersistenceResult(bool success) {
     m_persistence_results.push_back(success);
 }
 
-void ScriptedPlatform::Execute(const EffectBatch &effects) {
-    DrainEffectBatches(effects, [this](const RuntimeEffect &effect, EffectBatch &generated) {
-        ExecuteEffect(effect, generated);
-    });
+void ScriptedPlatform::Execute(const EffectBatch& effects) {
+    DrainEffectBatches(effects, [this](const RuntimeEffect& effect, EffectBatch& generated) { ExecuteEffect(effect, generated); });
 }
 
 bool ScriptedPlatform::CompleteNextResolution() {
@@ -113,20 +108,13 @@ bool ScriptedPlatform::CompleteNextUdpSend() {
     const SendPendingDatagramEffect request = m_udp_send_requests.front();
     m_udp_send_requests.pop_front();
     PendingDatagramSnapshot snapshot{};
-    const bool available = m_coordinator.SnapshotPendingDatagram(
-        request.peer,
-        request.datagram_generation,
-        snapshot);
-    const UdpSendResult result = available
-        ? TakeUdpSendResult()
-        : UdpSendResult{.error = wgnx::platform::socket_error::send_failed};
+    const bool available = m_coordinator.SnapshotPendingDatagram(request.peer, request.datagram_generation, snapshot);
+    const UdpSendResult result = available ? TakeUdpSendResult() : UdpSendResult{.error = wgnx::platform::socket_error::send_failed};
     Execute(m_coordinator.Dispatch(PendingDatagramSentEvent{
         .peer = request.peer,
         .datagram_generation = request.datagram_generation,
-        .bytes_sent = result.error == wgnx::platform::socket_error::none &&
-                result.bytes_sent == 0 && available
-            ? snapshot.size
-            : result.bytes_sent,
+        .bytes_sent =
+            result.error == wgnx::platform::socket_error::none && result.bytes_sent == 0 && available ? snapshot.size : result.bytes_sent,
         .error = result.error,
         .occurred_at = NextTime(),
     }));
@@ -192,10 +180,11 @@ bool ScriptedPlatform::DeliverCapturedTimer(wgnx::wireguard::TimerHook hook) {
     }
 
     Execute(m_coordinator.Dispatch(ProtocolTimerExpiredEvent{
-        .peer = {
-            .peer_index = PeerIndex{token.owner.peer_index},
-            .activation_generation = ActivationGeneration{token.owner.activation_generation},
-        },
+        .peer =
+            {
+                .peer_index = PeerIndex{token.owner.peer_index},
+                .activation_generation = ActivationGeneration{token.owner.activation_generation},
+            },
         .hook = hook,
         .token = token,
         .timer_facts = {.now = wgnx::wireguard::TimerDeadlineFromJiffies(500)},
@@ -204,15 +193,13 @@ bool ScriptedPlatform::DeliverCapturedTimer(wgnx::wireguard::TimerHook hook) {
     return true;
 }
 
-bool ScriptedPlatform::CancelResolution(const PeerIdentity &peer) {
+bool ScriptedPlatform::CancelResolution(const PeerIdentity& peer) {
     const auto before = m_resolver.Statistics().cancelled;
     m_resolver.Cancel(peer);
     return m_resolver.Statistics().cancelled != before;
 }
 
-bool ScriptedPlatform::PersistAutoStart(
-    AutoStartPersistenceState &state,
-    const AutoStartPersistenceRequest &request) {
+bool ScriptedPlatform::PersistAutoStart(AutoStartPersistenceState& state, const AutoStartPersistenceRequest& request) {
     if (!state.IsCurrent(request)) {
         return false;
     }
@@ -250,13 +237,13 @@ std::span<const wgnx::platform::socket_handle> ScriptedPlatform::ClosedSockets()
     return m_closed_sockets;
 }
 
-const ScriptedPlatform::Statistics &ScriptedPlatform::GetStatistics() const {
+const ScriptedPlatform::Statistics& ScriptedPlatform::GetStatistics() const {
     return m_statistics;
 }
 
-void ScriptedPlatform::ExecuteEffect(const RuntimeEffect &effect, EffectBatch &generated) {
+void ScriptedPlatform::ExecuteEffect(const RuntimeEffect& effect, EffectBatch& generated) {
     std::visit(
-        [this, &generated](const auto &value) {
+        [this, &generated](const auto& value) {
             using Effect = std::remove_cvref_t<decltype(value)>;
             if constexpr (std::is_same_v<Effect, ResolveEndpointEffect>) {
                 ++m_statistics.resolve_requests;
@@ -268,19 +255,17 @@ void ScriptedPlatform::ExecuteEffect(const RuntimeEffect &effect, EffectBatch &g
                     .success = true,
                     .occurred_at = NextTime(),
                 }));
-                generated.Append(m_coordinator.Dispatch(
-                    NetworkPathAvailabilityChangedEvent{
-                        .peer = value.peer,
-                        .path_generation = value.path_generation,
-                        .observation = {
-                            .availability =
-                                wgnx::platform::network_path_availability::available,
-                            .raw_state =
-                                wgnx::platform::network_path_raw_state::available,
+                generated.Append(m_coordinator.Dispatch(NetworkPathAvailabilityChangedEvent{
+                    .peer = value.peer,
+                    .path_generation = value.path_generation,
+                    .observation =
+                        {
+                            .availability = wgnx::platform::network_path_availability::available,
+                            .raw_state = wgnx::platform::network_path_raw_state::available,
                             .request_generation = value.path_generation.Value(),
                         },
-                        .occurred_at = NextTime(),
-                    }));
+                    .occurred_at = NextTime(),
+                }));
             } else if constexpr (std::is_same_v<Effect, StopNetworkPathRequestEffect>) {
                 static_cast<void>(value);
             } else if constexpr (std::is_same_v<Effect, OpenUdpBindEffect>) {
@@ -303,11 +288,10 @@ void ScriptedPlatform::ExecuteEffect(const RuntimeEffect &effect, EffectBatch &g
                 }
             } else if constexpr (std::is_same_v<Effect, CancelProtocolTimerEffect>) {
                 static_cast<void>(m_timers.Cancel(value.token));
-            } else if constexpr (
-                std::is_same_v<Effect, QueueInnerPacketSubmissionEffect> ||
-                std::is_same_v<Effect, PublishDecryptedPacketEffect> ||
-                std::is_same_v<Effect, ArmDebugProbeTimeoutEffect> ||
-                std::is_same_v<Effect, CancelDebugProbeTimeoutEffect>) {
+            } else if constexpr (std::is_same_v<Effect, QueueInnerPacketSubmissionEffect> ||
+                                 std::is_same_v<Effect, PublishDecryptedPacketEffect> ||
+                                 std::is_same_v<Effect, ArmDebugProbeTimeoutEffect> ||
+                                 std::is_same_v<Effect, CancelDebugProbeTimeoutEffect>) {
                 static_cast<void>(generated);
             }
         },

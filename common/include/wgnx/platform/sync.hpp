@@ -10,7 +10,7 @@ namespace impl {
 constexpr inline std::size_t LockStorageSize = 128;
 constexpr inline std::size_t LockStorageAlignment = 16;
 
-}
+} // namespace impl
 
 /*
  * Deviation from Linux:
@@ -43,14 +43,14 @@ struct rw_semaphore {
     alignas(impl::LockStorageAlignment) std::byte storage[impl::LockStorageSize];
 };
 
-void mutex_init(mutex *lock);
-void mutex_lock(mutex *lock);
-bool mutex_trylock(mutex *lock);
-void mutex_unlock(mutex *lock);
+void mutex_init(mutex* lock);
+void mutex_lock(mutex* lock);
+bool mutex_trylock(mutex* lock);
+void mutex_unlock(mutex* lock);
 
 class MutexGuard {
-public:
-    explicit MutexGuard(mutex &lock) : m_lock(&lock) {
+  public:
+    explicit MutexGuard(mutex& lock) : m_lock(&lock) {
         mutex_lock(m_lock);
     }
 
@@ -60,24 +60,24 @@ public:
         }
     }
 
-    MutexGuard(const MutexGuard &) = delete;
-    MutexGuard &operator=(const MutexGuard &) = delete;
-    MutexGuard(MutexGuard &&) = delete;
-    MutexGuard &operator=(MutexGuard &&) = delete;
+    MutexGuard(const MutexGuard&) = delete;
+    MutexGuard& operator=(const MutexGuard&) = delete;
+    MutexGuard(MutexGuard&&) = delete;
+    MutexGuard& operator=(MutexGuard&&) = delete;
 
-private:
-    mutex *m_lock;
+  private:
+    mutex* m_lock;
 };
 
-void spin_lock_init(spinlock_t *lock);
-void spin_lock(spinlock_t *lock);
-bool spin_trylock(spinlock_t *lock);
-void spin_unlock(spinlock_t *lock);
+void spin_lock_init(spinlock_t* lock);
+void spin_lock(spinlock_t* lock);
+bool spin_trylock(spinlock_t* lock);
+void spin_unlock(spinlock_t* lock);
 
-void init_rwsem(rw_semaphore *lock);
-void down_read(rw_semaphore *lock);
-void up_read(rw_semaphore *lock);
-void down_write(rw_semaphore *lock);
-void up_write(rw_semaphore *lock);
+void init_rwsem(rw_semaphore* lock);
+void down_read(rw_semaphore* lock);
+void up_read(rw_semaphore* lock);
+void down_write(rw_semaphore* lock);
+void up_write(rw_semaphore* lock);
 
 } // namespace wgnx::platform

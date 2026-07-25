@@ -18,7 +18,7 @@ struct PendingSlotStatistics {
 };
 
 class PendingSlotAccounting {
-public:
+  public:
     void RecordAdmission(bool replaced) {
         ++m_statistics.admitted;
         if (replaced) {
@@ -42,11 +42,11 @@ public:
         m_statistics.depth = 0;
     }
 
-    const PendingSlotStatistics &Statistics() const {
+    const PendingSlotStatistics& Statistics() const {
         return m_statistics;
     }
 
-private:
+  private:
     PendingSlotStatistics m_statistics{};
 };
 

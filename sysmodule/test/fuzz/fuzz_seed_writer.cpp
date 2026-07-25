@@ -6,13 +6,12 @@
 
 namespace {
 
-bool WriteSeed(const std::filesystem::path &root, const wgnx::fuzz::FuzzSeed &seed) {
+bool WriteSeed(const std::filesystem::path& root, const wgnx::fuzz::FuzzSeed& seed) {
     const std::filesystem::path path = root / std::filesystem::path{seed.relative_path};
     std::error_code error;
     std::filesystem::create_directories(path.parent_path(), error);
     if (error) {
-        std::cerr << "failed to create " << path.parent_path() << ": " << error.message()
-                  << '\n';
+        std::cerr << "failed to create " << path.parent_path() << ": " << error.message() << '\n';
         return false;
     }
 
@@ -32,14 +31,14 @@ bool WriteSeed(const std::filesystem::path &root, const wgnx::fuzz::FuzzSeed &se
 
 } // namespace
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
     if (argc != 2) {
         std::cerr << "usage: fuzz_seed_writer <output-directory>\n";
         return 1;
     }
 
     const std::filesystem::path output_directory{argv[1]};
-    for (const wgnx::fuzz::FuzzSeed &seed : wgnx::fuzz::kBinaryFuzzSeeds) {
+    for (const wgnx::fuzz::FuzzSeed& seed : wgnx::fuzz::kBinaryFuzzSeeds) {
         if (!WriteSeed(output_directory, seed)) {
             return 1;
         }

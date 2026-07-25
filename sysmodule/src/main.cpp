@@ -6,12 +6,11 @@
 #include "logger.hpp"
 
 namespace ams {
-    void Main()
-    {
-        wgnx::sysmodule::logger::Initialize();
-        wgnx::sysmodule::logger::Log("Main entered");
-        wgnx::sysmodule::logger::Log("Build: %s-%s", VERSION, wgnx::BuildId);
-        wgnx::sysmodule::logger::Log("Starting IPC server");
-        wgnx::sysmodule::RunIpcServer();
-    }
+void Main() {
+    wgnx::sysmodule::logger::Initialize();
+    wgnx::sysmodule::logger::Log("Main entered");
+    wgnx::sysmodule::logger::Log("Build: %s-%s", VERSION, wgnx::BuildId);
+    wgnx::sysmodule::logger::Log("Starting IPC server");
+    wgnx::sysmodule::RunIpcServer();
 }
+} // namespace ams

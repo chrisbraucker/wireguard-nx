@@ -9,11 +9,9 @@
 namespace wgnx::sysmodule::runtime {
 
 class TimerSchedule {
-public:
-    bool Arm(
-        const wgnx::wireguard::TimerToken &token,
-        wgnx::wireguard::TimerDeadline deadline);
-    bool Cancel(const wgnx::wireguard::TimerToken &token);
+  public:
+    bool Arm(const wgnx::wireguard::TimerToken& token, wgnx::wireguard::TimerDeadline deadline);
+    bool Cancel(const wgnx::wireguard::TimerToken& token);
     void Cancel(wgnx::wireguard::TimerHook hook);
     void CancelAll();
 
@@ -24,7 +22,7 @@ public:
     wgnx::wireguard::TimerToken ArmedToken(wgnx::wireguard::TimerHook hook) const;
     wgnx::wireguard::TimerDeadline Deadline(wgnx::wireguard::TimerHook hook) const;
 
-private:
+  private:
     struct Slot {
         wgnx::wireguard::TimerToken armed_token{};
         wgnx::wireguard::TimerToken queued_token{};
@@ -32,8 +30,7 @@ private:
         bool armed{false};
     };
 
-    static constexpr std::size_t HookCount =
-        wgnx::resource_budget::ProtocolTimerSlots;
+    static constexpr std::size_t HookCount = wgnx::resource_budget::ProtocolTimerSlots;
     static std::size_t HookIndex(wgnx::wireguard::TimerHook hook);
 
     std::array<Slot, HookCount> m_slots{};

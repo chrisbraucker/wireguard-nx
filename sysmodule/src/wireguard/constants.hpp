@@ -34,15 +34,13 @@ constexpr inline std::size_t EncryptedCookieSize = CookieValueSize + NoiseTagSiz
 
 // WireGuard protocol limits, matching wireguard-go/device/constants.go.
 constexpr inline std::uint64_t RekeyAfterMessages = std::uint64_t{1} << 60U;
-constexpr inline std::uint64_t RejectAfterMessages =
-    std::numeric_limits<std::uint64_t>::max() - (std::uint64_t{1} << 13U);
+constexpr inline std::uint64_t RejectAfterMessages = std::numeric_limits<std::uint64_t>::max() - (std::uint64_t{1} << 13U);
 constexpr inline auto RekeyAfterTime = std::chrono::seconds{120};
 constexpr inline auto RekeyAttemptTime = std::chrono::seconds{90};
 constexpr inline auto RekeyTimeout = std::chrono::seconds{5};
 constexpr inline auto KeepaliveTimeout = std::chrono::seconds{10};
 constexpr inline auto HandshakeInitiationRate = std::chrono::milliseconds{20};
-constexpr inline std::uint32_t MaxTimerHandshakes =
-    static_cast<std::uint32_t>(RekeyAttemptTime / RekeyTimeout);
+constexpr inline std::uint32_t MaxTimerHandshakes = static_cast<std::uint32_t>(RekeyAttemptTime / RekeyTimeout);
 constexpr inline std::uint32_t RekeyTimeoutJitterMaxMs = 334;
 constexpr inline auto RejectAfterTime = std::chrono::seconds{180};
 constexpr inline auto ZeroKeyMaterialAfterTime = RejectAfterTime * 3;

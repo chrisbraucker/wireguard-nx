@@ -13,7 +13,7 @@ struct EndpointTextParts {
     std::array<char, 6> service{};
 };
 
-bool ParseEndpointText(std::string_view configured_endpoint, EndpointTextParts *out);
-bool ParseEndpointPort(const char *service);
+bool ParseEndpointText(std::string_view configured_endpoint, EndpointTextParts* out);
+bool ParseEndpointPort(const char* service);
 
 } // namespace wgnx::platform

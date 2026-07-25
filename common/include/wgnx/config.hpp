@@ -9,14 +9,14 @@
 namespace wgnx {
 
 enum PeerConfigFieldFlags : std::uint32_t {
-    PeerConfigField_PrivateKey           = 1U << 0,
-    PeerConfigField_ListenPort           = 1U << 1,
-    PeerConfigField_Dns                  = 1U << 2,
-    PeerConfigField_Mtu                  = 1U << 3,
-    PeerConfigField_PublicKey            = 1U << 4,
-    PeerConfigField_PresharedKey         = 1U << 5,
-    PeerConfigField_AllowedIps           = 1U << 6,
-    PeerConfigField_PersistentKeepalive  = 1U << 7,
+    PeerConfigField_PrivateKey = 1U << 0,
+    PeerConfigField_ListenPort = 1U << 1,
+    PeerConfigField_Dns = 1U << 2,
+    PeerConfigField_Mtu = 1U << 3,
+    PeerConfigField_PublicKey = 1U << 4,
+    PeerConfigField_PresharedKey = 1U << 5,
+    PeerConfigField_AllowedIps = 1U << 6,
+    PeerConfigField_PersistentKeepalive = 1U << 7,
 };
 
 struct PeerConfigEntry {

@@ -8,14 +8,16 @@
 #define VERSION_WITH_BUILD VERSION "-" BUILD_ID
 
 constexpr const char* const descriptions[2][2] = {
-    [0] = {
-        [0] = "\uE098\uE031Off",
-        [1] = "\uE0F4\uE031Off",
-    },
-    [1] = {
-        [0] = "\uE098\uE031On",
-        [1] = "\uE0F4\uE031On",
-    },
+    [0] =
+        {
+            [0] = "\uE098\uE031Off",
+            [1] = "\uE0F4\uE031Off",
+        },
+    [1] =
+        {
+            [0] = "\uE098\uE031On",
+            [1] = "\uE0F4\uE031On",
+        },
 };
 
 std::string formatHex32(std::uint32_t value);
@@ -61,25 +63,24 @@ GuiMain::GuiMain() {
     }
 }
 
-GuiMain::~GuiMain() {
-}
+GuiMain::~GuiMain() {}
 
 tsl::elm::Element* GuiMain::createUI() {
-    tsl::elm::OverlayFrame *rootFrame = new tsl::elm::OverlayFrame(APP_TITLE, VERSION_WITH_BUILD);
+    tsl::elm::OverlayFrame* rootFrame = new tsl::elm::OverlayFrame(APP_TITLE, VERSION_WITH_BUILD);
 
     if (!this->smIsRunning()) {
-        const char *desc = "WireGuard-NX SysModule\n          is not running!";
+        const char* desc = "WireGuard-NX SysModule\n          is not running!";
 
-        auto *warning = new tsl::elm::CustomDrawer([desc](tsl::gfx::Renderer *renderer, s32 x, s32 y, s32 w, s32 h) {
+        auto* warning = new tsl::elm::CustomDrawer([desc](tsl::gfx::Renderer* renderer, s32 x, s32 y, s32 w, s32 h) {
             renderer->drawString("\uE150", false, 180, 250, 90, renderer->a(0xFFFF));
             renderer->drawString(desc, false, 60, 340, 25, tsl::warningTextColor);
         });
 
         rootFrame->setContent(warning);
     } else if (this->m_peers.empty()) {
-        const char *desc = "No servers configured!";
+        const char* desc = "No servers configured!";
 
-        auto *warning = new tsl::elm::CustomDrawer([desc](tsl::gfx::Renderer *renderer, s32 x, s32 y, s32 w, s32 h) {
+        auto* warning = new tsl::elm::CustomDrawer([desc](tsl::gfx::Renderer* renderer, s32 x, s32 y, s32 w, s32 h) {
             renderer->drawString("\uE150", false, 180, 250, 90, renderer->a(0xFFFF));
             renderer->drawString(desc, false, 90, 340, 25, tsl::warningTextColor);
         });
@@ -89,10 +90,13 @@ tsl::elm::Element* GuiMain::createUI() {
         tsl::elm::List* peerList = new tsl::elm::List();
 
         peerList->addItem(new tsl::elm::CategoryHeader("Servers  |  \uE0E3 Auto Start  |  \uE0E0 Toggle", true));
-        peerList->addItem(new tsl::elm::CustomDrawer([](tsl::gfx::Renderer *renderer, s32 x, s32 y, s32 w, s32 h) {
-            renderer->drawString("\uE016 Only one peer can be running! Stop others first.", false, x + 5, y + 10, 15, tsl::warningTextColor);
-            renderer->drawString("\uE016 Only one peer can be enabled for auto-start.", false, x + 5, y + 30, 15, tsl::warningTextColor);
-        }), 45);
+        peerList->addItem(new tsl::elm::CustomDrawer([](tsl::gfx::Renderer* renderer, s32 x, s32 y, s32 w, s32 h) {
+                              renderer->drawString("\uE016 Only one peer can be running! Stop others first.", false, x + 5, y + 10, 15,
+                                                   tsl::warningTextColor);
+                              renderer->drawString("\uE016 Only one peer can be enabled for auto-start.", false, x + 5, y + 30, 15,
+                                                   tsl::warningTextColor);
+                          }),
+                          45);
 
         for (const auto& peer : this->m_peers) {
             peer.listItem->enableShortHoldKey();
@@ -106,7 +110,7 @@ tsl::elm::Element* GuiMain::createUI() {
                 break;
             }
         }
-        m_peerInfoDrawer = new tsl::elm::CustomDrawer([this](tsl::gfx::Renderer *renderer, s32 x, s32 y, s32 w, s32 h) {
+        m_peerInfoDrawer = new tsl::elm::CustomDrawer([this](tsl::gfx::Renderer* renderer, s32 x, s32 y, s32 w, s32 h) {
             if (this->m_activePeer == nullptr) {
                 renderer->drawString("No active peer", false, x + 15, y + 10, 15, tsl::infoTextColor);
                 return;
@@ -117,27 +121,27 @@ tsl::elm::Element* GuiMain::createUI() {
             renderer->drawString("Address: " + peer.address, false, x + 15, y + 50, 15, tsl::infoTextColor);
             renderer->drawString("Endpoint: " + displayEndpoint(peer), false, x + 15, y + 70, 15, tsl::infoTextColor);
             renderer->drawString("Last Handshake: " + moment(peer.lastHandshake), false, x + 15, y + 90, 15, tsl::infoTextColor);
-            renderer->drawString("Last RX: " + moment(peer.lastRx) + ",   Last TX: " + moment(peer.lastTx), false, x + 15, y + 110, 15, tsl::infoTextColor);
-            renderer->drawString("RX: " + formatBytes(peer.rxBytes) + ",   TX: " + formatBytes(peer.txBytes), false, x + 15, y + 130, 15, tsl::infoTextColor);
-            renderer->drawString("Keepalive: " + (peer.persistentKeepaliveInterval > 0 ? (std::to_string(peer.persistentKeepaliveInterval) + "s") : std::string("false")), false, x + 15, y + 150, 15, tsl::infoTextColor);
+            renderer->drawString("Last RX: " + moment(peer.lastRx) + ",   Last TX: " + moment(peer.lastTx), false, x + 15, y + 110, 15,
+                                 tsl::infoTextColor);
+            renderer->drawString("RX: " + formatBytes(peer.rxBytes) + ",   TX: " + formatBytes(peer.txBytes), false, x + 15, y + 130, 15,
+                                 tsl::infoTextColor);
+            renderer->drawString("Keepalive: " + (peer.persistentKeepaliveInterval > 0
+                                                      ? (std::to_string(peer.persistentKeepaliveInterval) + "s")
+                                                      : std::string("false")),
+                                 false, x + 15, y + 150, 15, tsl::infoTextColor);
             if (peer.debugProbeStatus != static_cast<std::uint32_t>(wgnx::DebugProbeStatus::None)) {
                 renderer->drawString(
-                    "Probe: " +
-                        std::string(wgnx::GetDebugTriggerActionName(static_cast<wgnx::DebugTriggerAction>(peer.debugProbeAction))) +
-                        " / " +
-                        std::string(wgnx::GetDebugProbeStatusName(static_cast<wgnx::DebugProbeStatus>(peer.debugProbeStatus))) +
-                        " / " +
-                        moment(peer.lastDebugProbe),
-                    false,
-                    x + 15,
-                    y + 170,
-                    15,
-                    peer.debugProbeStatus == static_cast<std::uint32_t>(wgnx::DebugProbeStatus::ReplyValidated)
-                        ? tsl::infoTextColor
-                        : tsl::warningTextColor);
+                    "Probe: " + std::string(wgnx::GetDebugTriggerActionName(static_cast<wgnx::DebugTriggerAction>(peer.debugProbeAction))) +
+                        " / " + std::string(wgnx::GetDebugProbeStatusName(static_cast<wgnx::DebugProbeStatus>(peer.debugProbeStatus))) +
+                        " / " + moment(peer.lastDebugProbe),
+                    false, x + 15, y + 170, 15,
+                    peer.debugProbeStatus == static_cast<std::uint32_t>(wgnx::DebugProbeStatus::ReplyValidated) ? tsl::infoTextColor
+                                                                                                                : tsl::warningTextColor);
             }
             if (peer.hasError) {
-                renderer->drawString("Error: " + peerErrorStage(peer.errorStage) + " / " + peerErrorCode(peer.lastErrorCode), false, x + 15, y + (peer.debugProbeStatus != static_cast<std::uint32_t>(wgnx::DebugProbeStatus::None) ? 190 : 170), 15, tsl::warningTextColor);
+                renderer->drawString("Error: " + peerErrorStage(peer.errorStage) + " / " + peerErrorCode(peer.lastErrorCode), false, x + 15,
+                                     y + (peer.debugProbeStatus != static_cast<std::uint32_t>(wgnx::DebugProbeStatus::None) ? 190 : 170),
+                                     15, tsl::warningTextColor);
             }
         });
         peerList->addItem(m_peerInfoDrawer);
@@ -160,7 +164,8 @@ void GuiMain::update() {
         m_peerInfoDrawer->invalidate();
 }
 
-bool GuiMain::handleInput(u64 keysDown, u64 keysHeld, const HidTouchState &touchPos, HidAnalogStickState leftJoyStick, HidAnalogStickState rightJoyStick) {
+bool GuiMain::handleInput(u64 keysDown, u64 keysHeld, const HidTouchState& touchPos, HidAnalogStickState leftJoyStick,
+                          HidAnalogStickState rightJoyStick) {
     // Side-note: Not sure why it is needed, but for some reason the Overlay handleInput is being cannibalized. Added to ensure behavior.
     // Navigational boundary cases for handling wrapping
     static bool lastDirectionPressed = true;
@@ -227,9 +232,8 @@ bool GuiMain::refreshPeers() {
 
     m_activePeer = nullptr;
     for (auto& peer : this->m_peers) {
-        const auto remote_peer = std::find_if(remote_peers.begin(), remote_peers.end(), [&peer](const WireGuardPeer& candidate) {
-            return candidate.index == peer.index;
-        });
+        const auto remote_peer = std::find_if(remote_peers.begin(), remote_peers.end(),
+                                              [&peer](const WireGuardPeer& candidate) { return candidate.index == peer.index; });
         if (remote_peer == remote_peers.end())
             continue;
 
@@ -264,9 +268,8 @@ bool GuiMain::refreshPeers() {
 }
 
 WireGuardPeer* GuiMain::findPeerByIndex(std::int32_t peerIndex) {
-    const auto it = std::find_if(m_peers.begin(), m_peers.end(), [peerIndex](const WireGuardPeer& peer) {
-        return peer.index == peerIndex;
-    });
+    const auto it =
+        std::find_if(m_peers.begin(), m_peers.end(), [peerIndex](const WireGuardPeer& peer) { return peer.index == peerIndex; });
     return it != m_peers.end() ? std::addressof(*it) : nullptr;
 }
 
@@ -324,16 +327,16 @@ std::string peerStateSummary(const WireGuardPeer& peer) {
 
 std::string peerStateDetail(const WireGuardPeer& peer) {
     switch (static_cast<wgnx::PeerRuntimeState>(peer.runtimeState)) {
-        case wgnx::PeerRuntimeState::Inactive:
-            return "configured but stopped";
-        case wgnx::PeerRuntimeState::ResolvingEndpoint:
-            return "resolving endpoint";
-        case wgnx::PeerRuntimeState::Handshaking:
-            return "handshaking";
-        case wgnx::PeerRuntimeState::Active:
-            return peer.isEstablished ? "established" : "active";
-        case wgnx::PeerRuntimeState::Error:
-            return "local failure";
+    case wgnx::PeerRuntimeState::Inactive:
+        return "configured but stopped";
+    case wgnx::PeerRuntimeState::ResolvingEndpoint:
+        return "resolving endpoint";
+    case wgnx::PeerRuntimeState::Handshaking:
+        return "handshaking";
+    case wgnx::PeerRuntimeState::Active:
+        return peer.isEstablished ? "established" : "active";
+    case wgnx::PeerRuntimeState::Error:
+        return "local failure";
     }
 
     return "configured but stopped";

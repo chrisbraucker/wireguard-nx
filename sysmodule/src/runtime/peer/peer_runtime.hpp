@@ -60,8 +60,7 @@ struct PeerProtocolSnapshot {
 };
 
 constexpr inline std::size_t MaxEncryptedDatagramSize =
-    wgnx::wireguard::TransportDataHeaderSize +
-    wgnx::wireguard::GetPaddedTransportPayloadSize(wgnx::wireguard::MaxInnerIpPacketSize) +
+    wgnx::wireguard::TransportDataHeaderSize + wgnx::wireguard::GetPaddedTransportPayloadSize(wgnx::wireguard::MaxInnerIpPacketSize) +
     wgnx::wireguard::NoiseMacSize;
 
 enum class PendingDatagramKind : std::uint8_t {
@@ -72,13 +71,18 @@ enum class PendingDatagramKind : std::uint8_t {
     Keepalive,
 };
 
-constexpr const char *GetPendingDatagramKindName(PendingDatagramKind kind) {
+constexpr const char* GetPendingDatagramKindName(PendingDatagramKind kind) {
     switch (kind) {
-        case PendingDatagramKind::None: return "none";
-        case PendingDatagramKind::HandshakeInitiation: return "handshake_initiation";
-        case PendingDatagramKind::HandshakeResponse: return "handshake_response";
-        case PendingDatagramKind::TransportData: return "transport_data";
-        case PendingDatagramKind::Keepalive: return "keepalive";
+    case PendingDatagramKind::None:
+        return "none";
+    case PendingDatagramKind::HandshakeInitiation:
+        return "handshake_initiation";
+    case PendingDatagramKind::HandshakeResponse:
+        return "handshake_response";
+    case PendingDatagramKind::TransportData:
+        return "transport_data";
+    case PendingDatagramKind::Keepalive:
+        return "keepalive";
     }
     return "unknown";
 }
@@ -90,7 +94,9 @@ struct PendingDatagram {
     PacketId inner_packet_id{};
     PendingDatagramKind kind{PendingDatagramKind::None};
 
-    bool IsPending() const { return kind != PendingDatagramKind::None; }
+    bool IsPending() const {
+        return kind != PendingDatagramKind::None;
+    }
 };
 
 struct PendingDatagramSnapshot {
@@ -107,8 +113,7 @@ struct DecryptedPacketView {
 };
 
 constexpr inline std::size_t MaxDecryptedPayloadSize =
-    wgnx::wireguard::GetPaddedTransportPayloadSize(
-        wgnx::wireguard::MaxInnerIpPacketSize);
+    wgnx::wireguard::GetPaddedTransportPayloadSize(wgnx::wireguard::MaxInnerIpPacketSize);
 
 struct DecryptedPacketSlot {
     std::array<std::uint8_t, MaxDecryptedPayloadSize> bytes{};
@@ -117,162 +122,98 @@ struct DecryptedPacketSlot {
 };
 
 class PeerRuntime {
-public:
-    const PeerRuntimeInfo &Lifecycle() const { return m_lifecycle; }
-    const wgnx::PeerConfigEntry &Configuration() const { return m_config; }
-    UdpBinding::Snapshot BindingSnapshot() const { return m_binding.StateSnapshot(); }
+  public:
+    const PeerRuntimeInfo& Lifecycle() const {
+        return m_lifecycle;
+    }
+    const wgnx::PeerConfigEntry& Configuration() const {
+        return m_config;
+    }
+    UdpBinding::Snapshot BindingSnapshot() const {
+        return m_binding.StateSnapshot();
+    }
     PeerProtocolSnapshot ProtocolSnapshot() const;
     bool IsCurrentActivation(ActivationGeneration activation_generation) const;
-    bool IsCurrentPathRequest(
-        ActivationGeneration activation_generation,
-        PathRequestGeneration path_generation) const;
+    bool IsCurrentPathRequest(ActivationGeneration activation_generation, PathRequestGeneration path_generation) const;
     bool IsInTransportState() const;
     bool AcceptsInnerPacketSubmission() const;
     bool CanSendTransportNow() const;
-    bool IsTimerCurrent(
-        const wgnx::wireguard::TimerToken &token,
-        const wgnx::wireguard::TimerOwner &owner) const;
-    wgnx::wireguard::TimerOwner CurrentTimerOwner(
-        wgnx::wireguard::TimerHook hook) const;
-    wgnx::PeerInfo BuildInfo(
-        wgnx::platform::ktime_t now,
-        bool is_active,
-        bool is_auto_start) const;
-    bool SnapshotPendingDatagram(
-        ActivationGeneration activation_generation,
-        DatagramGeneration datagram_generation,
-        PendingDatagramSnapshot &out) const;
-    bool HasPendingDatagram(
-        ActivationGeneration activation_generation,
-        DatagramGeneration datagram_generation) const;
-    bool ViewDecryptedPacket(
-        ActivationGeneration activation_generation,
-        PacketGeneration packet_generation,
-        DecryptedPacketView &out) const;
+    bool IsTimerCurrent(const wgnx::wireguard::TimerToken& token, const wgnx::wireguard::TimerOwner& owner) const;
+    wgnx::wireguard::TimerOwner CurrentTimerOwner(wgnx::wireguard::TimerHook hook) const;
+    wgnx::PeerInfo BuildInfo(wgnx::platform::ktime_t now, bool is_active, bool is_auto_start) const;
+    bool SnapshotPendingDatagram(ActivationGeneration activation_generation, DatagramGeneration datagram_generation,
+                                 PendingDatagramSnapshot& out) const;
+    bool HasPendingDatagram(ActivationGeneration activation_generation, DatagramGeneration datagram_generation) const;
+    bool ViewDecryptedPacket(ActivationGeneration activation_generation, PacketGeneration packet_generation,
+                             DecryptedPacketView& out) const;
     bool CanStageInnerPacket() const;
     std::size_t StagedInnerPacketCount() const;
 
     // Closed owner transitions used by PeerRegistry. These mutate only
     // peer-owned state and return any platform work as explicit effects.
-    void Configure(
-        PeerIndex peer_index,
-        const wgnx::PeerConfigEntry &config,
-        PeerConfigDerivedInfo derived,
-        wgnx::platform::ktime_t now);
-    [[nodiscard]] wgnx::platform::socket_handle ClearConfiguration(
-        wgnx::platform::ktime_t now);
-    [[nodiscard]] EffectBatch Handle(const PeerEvent &event);
+    void Configure(PeerIndex peer_index, const wgnx::PeerConfigEntry& config, PeerConfigDerivedInfo derived, wgnx::platform::ktime_t now);
+    [[nodiscard]] wgnx::platform::socket_handle ClearConfiguration(wgnx::platform::ktime_t now);
+    [[nodiscard]] EffectBatch Handle(const PeerEvent& event);
     std::size_t ClearStagedInnerPackets();
 
-private:
+  private:
     void Deactivate(wgnx::platform::ktime_t now);
     ActivationGeneration BeginActivation(wgnx::platform::ktime_t now);
     bool EnterHandshaking(ActivationGeneration activation_generation, wgnx::platform::ktime_t now);
     bool EnterActive(ActivationGeneration activation_generation, wgnx::platform::ktime_t now);
-    void EnterError(
-        wgnx::PeerErrorStage stage,
-        wgnx::PeerErrorCode code,
-        wgnx::platform::ktime_t now);
+    void EnterError(wgnx::PeerErrorStage stage, wgnx::PeerErrorCode code, wgnx::platform::ktime_t now);
     void RecordReceivedBytes(std::size_t byte_count, wgnx::platform::ktime_t now);
     void RecordTransmittedBytes(std::size_t byte_count, wgnx::platform::ktime_t now);
-    void ResetLifecycle(
-        wgnx::PeerRuntimeState state,
-        ActivationGeneration activation_generation,
-        wgnx::platform::ktime_t now);
+    void ResetLifecycle(wgnx::PeerRuntimeState state, ActivationGeneration activation_generation, wgnx::platform::ktime_t now);
     wgnx::PeerErrorCode ValidateConfiguration() const;
     bool InstantiateProtocol();
     void ResetProtocol();
-    wgnx::wireguard::wg_peer *ProtocolPeer();
-    const wgnx::wireguard::wg_peer *ProtocolPeer() const;
+    wgnx::wireguard::wg_peer* ProtocolPeer();
+    const wgnx::wireguard::wg_peer* ProtocolPeer() const;
     bool PrepareHandshakeInitiation(PendingDatagramKind kind);
     bool PrepareHandshakeResponse();
-    bool PrepareTransportDatagram(
-        std::span<const std::uint8_t> payload,
-        PendingDatagramKind kind,
-        PacketId inner_packet_id,
-        wgnx::wireguard::TransportDataError &out_error);
-    bool StartHandshake(
-        const PeerIdentity &identity,
-        const TimerFacts &timer_facts,
-        EffectBatch &effects,
-        bool retry);
-    void ProcessOutboundQueue(
-        const PeerIdentity &identity,
-        const TimerFacts &timer_facts,
-        wgnx::platform::ktime_t now,
-        EffectBatch &effects);
-    void HandlePendingDatagramCompletion(
-        const PendingDatagramSentEvent &event,
-        EffectBatch &effects);
-    void HandleEncryptedDatagram(
-        const EncryptedDatagramReceivedEvent &event,
-        EffectBatch &effects);
-    void CompleteInitiatorSession(
-        const EncryptedDatagramReceivedEvent &event,
-        EffectBatch &effects);
-    void HandleTransportData(
-        const EncryptedDatagramReceivedEvent &event,
-        EffectBatch &effects);
-    void UpdateEndpointFromAuthenticatedPacket(
-        const EncryptedDatagramReceivedEvent &event);
+    bool PrepareTransportDatagram(std::span<const std::uint8_t> payload, PendingDatagramKind kind, PacketId inner_packet_id,
+                                  wgnx::wireguard::TransportDataError& out_error);
+    bool StartHandshake(const PeerIdentity& identity, const TimerFacts& timer_facts, EffectBatch& effects, bool retry);
+    void ProcessOutboundQueue(const PeerIdentity& identity, const TimerFacts& timer_facts, wgnx::platform::ktime_t now,
+                              EffectBatch& effects);
+    void HandlePendingDatagramCompletion(const PendingDatagramSentEvent& event, EffectBatch& effects);
+    void HandleEncryptedDatagram(const EncryptedDatagramReceivedEvent& event, EffectBatch& effects);
+    void CompleteInitiatorSession(const EncryptedDatagramReceivedEvent& event, EffectBatch& effects);
+    void HandleTransportData(const EncryptedDatagramReceivedEvent& event, EffectBatch& effects);
+    void UpdateEndpointFromAuthenticatedPacket(const EncryptedDatagramReceivedEvent& event);
     SocketGeneration AllocateSocketGeneration();
     DatagramGeneration AllocateDatagramGeneration();
     PacketGeneration AllocateDecryptedPacketGeneration();
-    void EnterActivationError(
-        wgnx::PeerErrorStage stage,
-        wgnx::PeerErrorCode code,
-        wgnx::platform::ktime_t now,
-        EffectBatch *effects);
-    void FinalizeTimerEffects(EffectBatch &effects);
-    wgnx::wireguard::TimerDeadline HandshakeRetryDeadline(
-        const TimerFacts &timer_facts) const;
-    wgnx::wireguard::TimerDeadline KeepaliveDeadline(
-        const TimerFacts &timer_facts) const;
-    wgnx::wireguard::TimerDeadline NewHandshakeDeadline(
-        const TimerFacts &timer_facts) const;
-    wgnx::wireguard::TimerDeadline PersistentKeepaliveDeadline(
-        const TimerFacts &timer_facts) const;
-    wgnx::wireguard::TimerDeadline ZeroKeyMaterialDeadline(
-        const TimerFacts &timer_facts) const;
-    void OnAuthenticatedPacketTraversal(
-        const PeerIdentity &identity,
-        const TimerFacts &timer_facts,
-        EffectBatch &effects);
-    void OnAuthenticatedPacketSent(const PeerIdentity &identity, EffectBatch &effects);
-    void OnAuthenticatedPacketReceived(const PeerIdentity &identity, EffectBatch &effects);
-    void OnDataPacketSent(
-        const PeerIdentity &identity,
-        const TimerFacts &timer_facts,
-        EffectBatch &effects);
-    void OnDataPacketReceived(
-        const PeerIdentity &identity,
-        const TimerFacts &timer_facts,
-        EffectBatch &effects);
-    void OnSessionDerived(
-        const PeerIdentity &identity,
-        const TimerFacts &timer_facts,
-        EffectBatch &effects);
-    void OnHandshakeComplete(const PeerIdentity &identity, EffectBatch &effects);
-    void SuspendTransport(const PeerIdentity &identity, EffectBatch &effects);
-    void RecoverTransport(
-        const PeerIdentity &identity,
-        const TimerFacts &timer_facts,
-        wgnx::platform::ktime_t now,
-        EffectBatch &effects);
-    [[nodiscard]] EffectBatch HandleEvent(const ActivationRequestedEvent &event);
-    [[nodiscard]] EffectBatch HandleEvent(const DeactivationRequestedEvent &event);
-    [[nodiscard]] EffectBatch HandleEvent(const NetworkPathRequestStartedEvent &event);
-    [[nodiscard]] EffectBatch HandleEvent(
-        const NetworkPathAvailabilityChangedEvent &event);
-    [[nodiscard]] EffectBatch HandleEvent(const TransportFailureEvent &event);
-    [[nodiscard]] EffectBatch HandleEvent(const EndpointResolvedEvent &event);
-    [[nodiscard]] EffectBatch HandleEvent(const UdpBindOpenedEvent &event);
-    [[nodiscard]] EffectBatch HandleEvent(const UdpRebindRequestedEvent &event);
-    [[nodiscard]] EffectBatch HandleEvent(const EncryptedDatagramReceivedEvent &event);
-    [[nodiscard]] EffectBatch HandleEvent(const PendingDatagramSentEvent &event);
-    [[nodiscard]] EffectBatch HandleEvent(const InnerPacketStagedEvent &event);
-    [[nodiscard]] EffectBatch HandleEvent(const ProcessOutboundQueueEvent &event);
-    [[nodiscard]] EffectBatch HandleEvent(const ProtocolTimerExpiredEvent &event);
+    void EnterActivationError(wgnx::PeerErrorStage stage, wgnx::PeerErrorCode code, wgnx::platform::ktime_t now, EffectBatch* effects);
+    void FinalizeTimerEffects(EffectBatch& effects);
+    wgnx::wireguard::TimerDeadline HandshakeRetryDeadline(const TimerFacts& timer_facts) const;
+    wgnx::wireguard::TimerDeadline KeepaliveDeadline(const TimerFacts& timer_facts) const;
+    wgnx::wireguard::TimerDeadline NewHandshakeDeadline(const TimerFacts& timer_facts) const;
+    wgnx::wireguard::TimerDeadline PersistentKeepaliveDeadline(const TimerFacts& timer_facts) const;
+    wgnx::wireguard::TimerDeadline ZeroKeyMaterialDeadline(const TimerFacts& timer_facts) const;
+    void OnAuthenticatedPacketTraversal(const PeerIdentity& identity, const TimerFacts& timer_facts, EffectBatch& effects);
+    void OnAuthenticatedPacketSent(const PeerIdentity& identity, EffectBatch& effects);
+    void OnAuthenticatedPacketReceived(const PeerIdentity& identity, EffectBatch& effects);
+    void OnDataPacketSent(const PeerIdentity& identity, const TimerFacts& timer_facts, EffectBatch& effects);
+    void OnDataPacketReceived(const PeerIdentity& identity, const TimerFacts& timer_facts, EffectBatch& effects);
+    void OnSessionDerived(const PeerIdentity& identity, const TimerFacts& timer_facts, EffectBatch& effects);
+    void OnHandshakeComplete(const PeerIdentity& identity, EffectBatch& effects);
+    void SuspendTransport(const PeerIdentity& identity, EffectBatch& effects);
+    void RecoverTransport(const PeerIdentity& identity, const TimerFacts& timer_facts, wgnx::platform::ktime_t now, EffectBatch& effects);
+    [[nodiscard]] EffectBatch HandleEvent(const ActivationRequestedEvent& event);
+    [[nodiscard]] EffectBatch HandleEvent(const DeactivationRequestedEvent& event);
+    [[nodiscard]] EffectBatch HandleEvent(const NetworkPathRequestStartedEvent& event);
+    [[nodiscard]] EffectBatch HandleEvent(const NetworkPathAvailabilityChangedEvent& event);
+    [[nodiscard]] EffectBatch HandleEvent(const TransportFailureEvent& event);
+    [[nodiscard]] EffectBatch HandleEvent(const EndpointResolvedEvent& event);
+    [[nodiscard]] EffectBatch HandleEvent(const UdpBindOpenedEvent& event);
+    [[nodiscard]] EffectBatch HandleEvent(const UdpRebindRequestedEvent& event);
+    [[nodiscard]] EffectBatch HandleEvent(const EncryptedDatagramReceivedEvent& event);
+    [[nodiscard]] EffectBatch HandleEvent(const PendingDatagramSentEvent& event);
+    [[nodiscard]] EffectBatch HandleEvent(const InnerPacketStagedEvent& event);
+    [[nodiscard]] EffectBatch HandleEvent(const ProcessOutboundQueueEvent& event);
+    [[nodiscard]] EffectBatch HandleEvent(const ProtocolTimerExpiredEvent& event);
 
     wgnx::PeerConfigEntry m_config{};
     PeerConfigDerivedInfo m_derived{};
@@ -283,8 +224,7 @@ private:
     ActivationGeneration m_next_activation_generation{1};
     PathRequestGeneration m_next_path_request_generation{1};
     PathRequestGeneration m_path_request_generation{};
-    wgnx::platform::network_path_availability m_path_availability{
-        wgnx::platform::network_path_availability::unknown};
+    wgnx::platform::network_path_availability m_path_availability{wgnx::platform::network_path_availability::unknown};
     wgnx::platform::network_path_observation m_last_path_observation{};
     bool m_has_path_observation{false};
     // An indeterminate NIFM observation cannot suspend a known-good binding,
@@ -305,45 +245,48 @@ private:
 };
 
 class PeerRegistry {
-public:
+  public:
     static constexpr std::size_t Capacity = wgnx::resource_budget::PeerSlots;
 
-    constexpr std::uint32_t Count() const { return m_count; }
-    constexpr bool Empty() const { return m_count == 0; }
+    constexpr std::uint32_t Count() const {
+        return m_count;
+    }
+    constexpr bool Empty() const {
+        return m_count == 0;
+    }
 
     constexpr bool IsValidSelection(std::int32_t peer_index) const {
         return IsValidPeerSelection(peer_index, m_count);
     }
 
-    constexpr std::int32_t ActivePeerIndex() const { return m_active_peer_index; }
-    constexpr std::int32_t AutoStartPeerIndex() const { return m_auto_start_peer_index; }
+    constexpr std::int32_t ActivePeerIndex() const {
+        return m_active_peer_index;
+    }
+    constexpr std::int32_t AutoStartPeerIndex() const {
+        return m_auto_start_peer_index;
+    }
 
-    [[nodiscard]] bool Configure(
-        std::span<const wgnx::PeerConfigEntry> configured_peers,
-        std::span<PeerConfigDerivedInfo> derived,
-        std::int32_t auto_start_peer_index,
-        wgnx::platform::ktime_t now);
+    [[nodiscard]] bool Configure(std::span<const wgnx::PeerConfigEntry> configured_peers, std::span<PeerConfigDerivedInfo> derived,
+                                 std::int32_t auto_start_peer_index, wgnx::platform::ktime_t now);
     [[nodiscard]] EffectBatch ClearConfiguration(wgnx::platform::ktime_t now);
     [[nodiscard]] bool SetActivePeerIndex(std::int32_t peer_index);
     [[nodiscard]] bool SetAutoStartPeerIndex(std::int32_t peer_index);
 
-    [[nodiscard]] EffectBatch Dispatch(const PeerEvent &event);
-    [[nodiscard]] const PeerRuntime *PeerAt(PeerIndex peer_index) const;
+    [[nodiscard]] EffectBatch Dispatch(const PeerEvent& event);
+    [[nodiscard]] const PeerRuntime* PeerAt(PeerIndex peer_index) const;
     [[nodiscard]] bool HasRuntimeErrors() const;
     std::size_t ClearStagedInnerPackets(PeerIndex peer_index);
     std::size_t ClearAllStagedInnerPackets();
 
-private:
+  private:
     std::array<PeerRuntime, wgnx::resource_budget::PeerSlots> m_peers{};
     std::uint32_t m_count{0};
     std::int32_t m_active_peer_index{-1};
     std::int32_t m_auto_start_peer_index{-1};
 };
 
-static_assert(
-    sizeof(PeerRuntime) <= wgnx::resource_budget::MaximumPeerRuntimeBytes);
-static_assert(
-    sizeof(PeerRegistry) <= wgnx::resource_budget::MaximumPeerRegistryBytes);
+static_assert(sizeof(PeerRuntime) <= wgnx::resource_budget::MaximumPeerRuntimeBytes);
+static_assert(sizeof(PeerRegistry) <= wgnx::resource_budget::MaximumPeerRegistryBytes);
 static_assert(PeerRegistry::Capacity <= EffectBatch::Capacity);
 
 } // namespace wgnx::sysmodule::runtime

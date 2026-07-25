@@ -25,24 +25,22 @@ struct PeerIdentity {
     PeerIndex peer_index{};
     ActivationGeneration activation_generation{};
 
-    constexpr bool operator==(const PeerIdentity &) const = default;
+    constexpr bool operator==(const PeerIdentity&) const = default;
 };
 
 class SynchronousPacketView {
-public:
-    explicit constexpr SynchronousPacketView(std::span<const std::uint8_t> bytes)
-        : m_bytes(bytes) {}
+  public:
+    explicit constexpr SynchronousPacketView(std::span<const std::uint8_t> bytes) : m_bytes(bytes) {}
 
-    template<typename Range>
-        requires requires(const Range &range) {
-            std::span<const std::uint8_t>{range};
-        }
-    constexpr SynchronousPacketView(const Range &range)
-        : m_bytes(std::span<const std::uint8_t>{range}) {}
+    template <typename Range>
+        requires requires(const Range& range) { std::span<const std::uint8_t>{range}; }
+    constexpr SynchronousPacketView(const Range& range) : m_bytes(std::span<const std::uint8_t>{range}) {}
 
-    constexpr std::span<const std::uint8_t> Bytes() const { return m_bytes; }
+    constexpr std::span<const std::uint8_t> Bytes() const {
+        return m_bytes;
+    }
 
-private:
+  private:
     std::span<const std::uint8_t> m_bytes;
 };
 
@@ -154,45 +152,25 @@ struct ProtocolTimerExpiredEvent {
     wgnx::platform::ktime_t occurred_at{0};
 };
 
-using PeerEvent = std::variant<
-    ActivationRequestedEvent,
-    DeactivationRequestedEvent,
-    NetworkPathRequestStartedEvent,
-    NetworkPathAvailabilityChangedEvent,
-    TransportFailureEvent,
-    EndpointResolvedEvent,
-    UdpBindOpenedEvent,
-    UdpRebindRequestedEvent,
-    EncryptedDatagramReceivedEvent,
-    PendingDatagramSentEvent,
-    InnerPacketStagedEvent,
-    ProcessOutboundQueueEvent,
-    ProtocolTimerExpiredEvent>;
+using PeerEvent =
+    std::variant<ActivationRequestedEvent, DeactivationRequestedEvent, NetworkPathRequestStartedEvent, NetworkPathAvailabilityChangedEvent,
+                 TransportFailureEvent, EndpointResolvedEvent, UdpBindOpenedEvent, UdpRebindRequestedEvent, EncryptedDatagramReceivedEvent,
+                 PendingDatagramSentEvent, InnerPacketStagedEvent, ProcessOutboundQueueEvent, ProtocolTimerExpiredEvent>;
 
-template<typename Event>
-consteval std::size_t MaxEffectsForEvent() {
-    if constexpr (
-        std::is_same_v<Event, ActivationRequestedEvent> ||
-        std::is_same_v<Event, NetworkPathRequestStartedEvent> ||
-        std::is_same_v<Event, EndpointResolvedEvent> ||
-        std::is_same_v<Event, PendingDatagramSentEvent> ||
-        std::is_same_v<Event, InnerPacketStagedEvent> ||
-        std::is_same_v<Event, ProcessOutboundQueueEvent>) {
+template <typename Event> consteval std::size_t MaxEffectsForEvent() {
+    if constexpr (std::is_same_v<Event, ActivationRequestedEvent> || std::is_same_v<Event, NetworkPathRequestStartedEvent> ||
+                  std::is_same_v<Event, EndpointResolvedEvent> || std::is_same_v<Event, PendingDatagramSentEvent> ||
+                  std::is_same_v<Event, InnerPacketStagedEvent> || std::is_same_v<Event, ProcessOutboundQueueEvent>) {
         return 5;
-    } else if constexpr (
-        std::is_same_v<Event, TransportFailureEvent>) {
+    } else if constexpr (std::is_same_v<Event, TransportFailureEvent>) {
         return 6;
     } else if constexpr (std::is_same_v<Event, DeactivationRequestedEvent>) {
         return 7;
-    } else if constexpr (
-        std::is_same_v<Event, NetworkPathAvailabilityChangedEvent> ||
-        std::is_same_v<Event, UdpBindOpenedEvent>) {
+    } else if constexpr (std::is_same_v<Event, NetworkPathAvailabilityChangedEvent> || std::is_same_v<Event, UdpBindOpenedEvent>) {
         return 7;
     } else if constexpr (std::is_same_v<Event, UdpRebindRequestedEvent>) {
         return 1;
-    } else if constexpr (
-        std::is_same_v<Event, EncryptedDatagramReceivedEvent> ||
-        std::is_same_v<Event, ProtocolTimerExpiredEvent>) {
+    } else if constexpr (std::is_same_v<Event, EncryptedDatagramReceivedEvent> || std::is_same_v<Event, ProtocolTimerExpiredEvent>) {
         return 6;
     } else {
         static_assert(!sizeof(Event), "Peer event is missing an effect budget");
@@ -211,8 +189,7 @@ struct OpenUdpBindEffect {
     wgnx::platform::endpoint endpoint{};
     std::array<char, sizeof(wgnx::PeerInfo::resolved_endpoint)> endpoint_text{};
     SocketGeneration socket_generation{};
-    wgnx::platform::socket_handle replaces_socket{
-        wgnx::platform::InvalidSocket};
+    wgnx::platform::socket_handle replaces_socket{wgnx::platform::InvalidSocket};
     UdpBindPurpose purpose{UdpBindPurpose::Activation};
 };
 
@@ -269,32 +246,21 @@ struct ArmDebugProbeTimeoutEffect {
 
 struct CancelDebugProbeTimeoutEffect {};
 
-using RuntimeEffect = std::variant<
-    ResolveEndpointEffect,
-    StartNetworkPathRequestEffect,
-    StopNetworkPathRequestEffect,
-    OpenUdpBindEffect,
-    CloseUdpSocketEffect,
-    SendPendingDatagramEffect,
-    QueueReceiveEffect,
-    ArmProtocolTimerEffect,
-    CancelProtocolTimerEffect,
-    QueueInnerPacketSubmissionEffect,
-    PublishDecryptedPacketEffect,
-    ArmDebugProbeTimeoutEffect,
-    CancelDebugProbeTimeoutEffect>;
+using RuntimeEffect =
+    std::variant<ResolveEndpointEffect, StartNetworkPathRequestEffect, StopNetworkPathRequestEffect, OpenUdpBindEffect,
+                 CloseUdpSocketEffect, SendPendingDatagramEffect, QueueReceiveEffect, ArmProtocolTimerEffect, CancelProtocolTimerEffect,
+                 QueueInnerPacketSubmissionEffect, PublishDecryptedPacketEffect, ArmDebugProbeTimeoutEffect, CancelDebugProbeTimeoutEffect>;
 
 class EffectBatch {
-public:
-    static constexpr std::size_t Capacity =
-        wgnx::resource_budget::EffectBatchSlots;
+  public:
+    static constexpr std::size_t Capacity = wgnx::resource_budget::EffectBatchSlots;
 
     enum class InsertionResult : std::uint8_t {
         Inserted = 0,
         CapacityExhausted,
     };
 
-    [[nodiscard]] InsertionResult TryAdd(const RuntimeEffect &effect) {
+    [[nodiscard]] InsertionResult TryAdd(const RuntimeEffect& effect) {
         if (m_size == m_effects.size()) {
             return InsertionResult::CapacityExhausted;
         }
@@ -302,43 +268,56 @@ public:
         return InsertionResult::Inserted;
     }
 
-    [[nodiscard]] InsertionResult TryAppend(const EffectBatch &other) {
+    [[nodiscard]] InsertionResult TryAppend(const EffectBatch& other) {
         if (other.m_size > m_effects.size() - m_size) {
             return InsertionResult::CapacityExhausted;
         }
-        for (const auto &effect : other) {
+        for (const auto& effect : other) {
             m_effects[m_size++] = effect;
         }
         return InsertionResult::Inserted;
     }
 
-    void Add(const RuntimeEffect &effect) {
+    void Add(const RuntimeEffect& effect) {
         if (TryAdd(effect) != InsertionResult::Inserted) {
             std::abort();
         }
     }
 
-    void Append(const EffectBatch &other) {
+    void Append(const EffectBatch& other) {
         if (TryAppend(other) != InsertionResult::Inserted) {
             std::abort();
         }
     }
 
-    constexpr std::size_t Size() const { return m_size; }
-    constexpr bool Empty() const { return m_size == 0; }
-    constexpr void Clear() { m_size = 0; }
-    constexpr const RuntimeEffect *begin() const { return m_effects.data(); }
-    constexpr const RuntimeEffect *end() const { return m_effects.data() + m_size; }
-    constexpr RuntimeEffect *begin() { return m_effects.data(); }
-    constexpr RuntimeEffect *end() { return m_effects.data() + m_size; }
+    constexpr std::size_t Size() const {
+        return m_size;
+    }
+    constexpr bool Empty() const {
+        return m_size == 0;
+    }
+    constexpr void Clear() {
+        m_size = 0;
+    }
+    constexpr const RuntimeEffect* begin() const {
+        return m_effects.data();
+    }
+    constexpr const RuntimeEffect* end() const {
+        return m_effects.data() + m_size;
+    }
+    constexpr RuntimeEffect* begin() {
+        return m_effects.data();
+    }
+    constexpr RuntimeEffect* end() {
+        return m_effects.data() + m_size;
+    }
 
-private:
+  private:
     std::array<RuntimeEffect, Capacity> m_effects{};
     std::size_t m_size{0};
 };
 
-static_assert(
-    sizeof(EffectBatch) <= wgnx::resource_budget::MaximumEffectBatchBytes);
+static_assert(sizeof(EffectBatch) <= wgnx::resource_budget::MaximumEffectBatchBytes);
 
 static_assert(!std::is_constructible_v<RuntimeEffect, SynchronousPacketView>);
 static_assert(MaxEffectsForEvent<ActivationRequestedEvent>() <= EffectBatch::Capacity);
@@ -355,18 +334,18 @@ static_assert(MaxEffectsForEvent<InnerPacketStagedEvent>() <= EffectBatch::Capac
 static_assert(MaxEffectsForEvent<ProcessOutboundQueueEvent>() <= EffectBatch::Capacity);
 static_assert(MaxEffectsForEvent<ProtocolTimerExpiredEvent>() <= EffectBatch::Capacity);
 
-inline std::size_t GetEventEffectBudget(const PeerEvent &event) {
+inline std::size_t GetEventEffectBudget(const PeerEvent& event) {
     return std::visit(
-        [](const auto &value) {
+        [](const auto& value) {
             using Event = std::remove_cvref_t<decltype(value)>;
             return MaxEffectsForEvent<Event>();
         },
         event);
 }
 
-inline PeerIdentity GetPeerIdentity(const PeerEvent &event) {
+inline PeerIdentity GetPeerIdentity(const PeerEvent& event) {
     return std::visit(
-        [](const auto &value) -> PeerIdentity {
+        [](const auto& value) -> PeerIdentity {
             using Event = std::remove_cvref_t<decltype(value)>;
             if constexpr (std::is_same_v<Event, ActivationRequestedEvent>) {
                 return {.peer_index = value.peer_index};

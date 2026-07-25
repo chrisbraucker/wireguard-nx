@@ -15,8 +15,8 @@ struct LoadedPeerConfiguration {
 };
 
 class PeerConfigurationLoader {
-public:
-    bool Load(LoadedPeerConfiguration &out) const;
+  public:
+    bool Load(LoadedPeerConfiguration& out) const;
 };
 
 } // namespace wgnx::sysmodule::runtime

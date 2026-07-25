@@ -178,150 +178,150 @@ struct PacketReceiveResult {
     std::int32_t peer_index;
 };
 
-constexpr inline const char *GetPeerRuntimeStateName(PeerRuntimeState state) {
+constexpr inline const char* GetPeerRuntimeStateName(PeerRuntimeState state) {
     switch (state) {
-        case PeerRuntimeState::Inactive:
-            return "inactive";
-        case PeerRuntimeState::ResolvingEndpoint:
-            return "resolving";
-        case PeerRuntimeState::Handshaking:
-            return "handshaking";
-        case PeerRuntimeState::Active:
-            return "active";
-        case PeerRuntimeState::Error:
-            return "error";
+    case PeerRuntimeState::Inactive:
+        return "inactive";
+    case PeerRuntimeState::ResolvingEndpoint:
+        return "resolving";
+    case PeerRuntimeState::Handshaking:
+        return "handshaking";
+    case PeerRuntimeState::Active:
+        return "active";
+    case PeerRuntimeState::Error:
+        return "error";
     }
 
     return "unknown";
 }
 
-constexpr inline const char *GetPeerErrorStageName(PeerErrorStage stage) {
+constexpr inline const char* GetPeerErrorStageName(PeerErrorStage stage) {
     switch (stage) {
-        case PeerErrorStage::None:
-            return "none";
-        case PeerErrorStage::Config:
-            return "config";
-        case PeerErrorStage::ResolveEndpoint:
-            return "resolve";
-        case PeerErrorStage::Handshake:
-            return "handshake";
-        case PeerErrorStage::Transport:
-            return "transport";
-        case PeerErrorStage::Internal:
-            return "internal";
+    case PeerErrorStage::None:
+        return "none";
+    case PeerErrorStage::Config:
+        return "config";
+    case PeerErrorStage::ResolveEndpoint:
+        return "resolve";
+    case PeerErrorStage::Handshake:
+        return "handshake";
+    case PeerErrorStage::Transport:
+        return "transport";
+    case PeerErrorStage::Internal:
+        return "internal";
     }
 
     return "unknown";
 }
 
-constexpr inline const char *GetPeerErrorCodeName(PeerErrorCode code) {
+constexpr inline const char* GetPeerErrorCodeName(PeerErrorCode code) {
     switch (code) {
-        case PeerErrorCode::None:
-            return "none";
-        case PeerErrorCode::ConfigInvalid:
-            return "config invalid";
-        case PeerErrorCode::EndpointMissing:
-            return "endpoint missing";
-        case PeerErrorCode::EndpointMalformed:
-            return "endpoint malformed";
-        case PeerErrorCode::EndpointResolutionFailed:
-            return "endpoint resolution failed";
-        case PeerErrorCode::TransportInitFailed:
-            return "transport init failed";
-        case PeerErrorCode::InternalFailure:
-            return "internal failure";
-        case PeerErrorCode::KeyInvalid:
-            return "key invalid";
-        case PeerErrorCode::HandshakeInitFailed:
-            return "handshake init failed";
-        case PeerErrorCode::TransportOpenFailed:
-            return "transport open failed";
-        case PeerErrorCode::TransportSendFailed:
-            return "transport send failed";
-        case PeerErrorCode::TransportReceiveFailed:
-            return "transport receive failed";
-        case PeerErrorCode::HandshakeTimedOut:
-            return "handshake timed out";
+    case PeerErrorCode::None:
+        return "none";
+    case PeerErrorCode::ConfigInvalid:
+        return "config invalid";
+    case PeerErrorCode::EndpointMissing:
+        return "endpoint missing";
+    case PeerErrorCode::EndpointMalformed:
+        return "endpoint malformed";
+    case PeerErrorCode::EndpointResolutionFailed:
+        return "endpoint resolution failed";
+    case PeerErrorCode::TransportInitFailed:
+        return "transport init failed";
+    case PeerErrorCode::InternalFailure:
+        return "internal failure";
+    case PeerErrorCode::KeyInvalid:
+        return "key invalid";
+    case PeerErrorCode::HandshakeInitFailed:
+        return "handshake init failed";
+    case PeerErrorCode::TransportOpenFailed:
+        return "transport open failed";
+    case PeerErrorCode::TransportSendFailed:
+        return "transport send failed";
+    case PeerErrorCode::TransportReceiveFailed:
+        return "transport receive failed";
+    case PeerErrorCode::HandshakeTimedOut:
+        return "handshake timed out";
     }
 
     return "unknown";
 }
 
-constexpr inline const char *GetPeerResolvedFamilyName(PeerResolvedFamily family) {
+constexpr inline const char* GetPeerResolvedFamilyName(PeerResolvedFamily family) {
     switch (family) {
-        case PeerResolvedFamily::Unspecified:
-            return "unspecified";
-        case PeerResolvedFamily::Inet:
-            return "inet";
-        case PeerResolvedFamily::Inet6:
-            return "inet6";
+    case PeerResolvedFamily::Unspecified:
+        return "unspecified";
+    case PeerResolvedFamily::Inet:
+        return "inet";
+    case PeerResolvedFamily::Inet6:
+        return "inet6";
     }
 
     return "unknown";
 }
 
-constexpr inline const char *GetDebugTriggerActionName(DebugTriggerAction action) {
+constexpr inline const char* GetDebugTriggerActionName(DebugTriggerAction action) {
     switch (action) {
-        case DebugTriggerAction::None:
-            return "none";
-        case DebugTriggerAction::PingTunnelPeer:
-            return "ping-tunnel-peer";
-        case DebugTriggerAction::PingPublicDns:
-            return "ping-public-dns";
+    case DebugTriggerAction::None:
+        return "none";
+    case DebugTriggerAction::PingTunnelPeer:
+        return "ping-tunnel-peer";
+    case DebugTriggerAction::PingPublicDns:
+        return "ping-public-dns";
     }
 
     return "unknown";
 }
 
-constexpr inline const char *GetDebugProbeStatusName(DebugProbeStatus status) {
+constexpr inline const char* GetDebugProbeStatusName(DebugProbeStatus status) {
     switch (status) {
-        case DebugProbeStatus::None:
-            return "none";
-        case DebugProbeStatus::Queued:
-            return "queued";
-        case DebugProbeStatus::Sent:
-            return "sent";
-        case DebugProbeStatus::ReplyValidated:
-            return "reply validated";
-        case DebugProbeStatus::ReplyRejected:
-            return "reply rejected";
-        case DebugProbeStatus::TimedOut:
-            return "timed out";
-        case DebugProbeStatus::StaleActivation:
-            return "stale activation";
-        case DebugProbeStatus::InvalidState:
-            return "invalid state";
-        case DebugProbeStatus::BuildFailed:
-            return "build failed";
-        case DebugProbeStatus::SendFailed:
-            return "send failed";
+    case DebugProbeStatus::None:
+        return "none";
+    case DebugProbeStatus::Queued:
+        return "queued";
+    case DebugProbeStatus::Sent:
+        return "sent";
+    case DebugProbeStatus::ReplyValidated:
+        return "reply validated";
+    case DebugProbeStatus::ReplyRejected:
+        return "reply rejected";
+    case DebugProbeStatus::TimedOut:
+        return "timed out";
+    case DebugProbeStatus::StaleActivation:
+        return "stale activation";
+    case DebugProbeStatus::InvalidState:
+        return "invalid state";
+    case DebugProbeStatus::BuildFailed:
+        return "build failed";
+    case DebugProbeStatus::SendFailed:
+        return "send failed";
     }
 
     return "unknown";
 }
 
-constexpr inline const char *GetPacketApiStatusName(PacketApiStatus status) {
+constexpr inline const char* GetPacketApiStatusName(PacketApiStatus status) {
     switch (status) {
-        case PacketApiStatus::Success:
-            return "success";
-        case PacketApiStatus::Queued:
-            return "queued";
-        case PacketApiStatus::QueueEmpty:
-            return "queue empty";
-        case PacketApiStatus::QueueFull:
-            return "queue full";
-        case PacketApiStatus::TunnelUnavailable:
-            return "tunnel unavailable";
-        case PacketApiStatus::MalformedPacket:
-            return "malformed packet";
-        case PacketApiStatus::OutputBufferTooSmall:
-            return "output buffer too small";
-        case PacketApiStatus::StaleActivation:
-            return "stale activation";
-        case PacketApiStatus::AccessDenied:
-            return "access denied";
-        case PacketApiStatus::InternalError:
-            return "internal error";
+    case PacketApiStatus::Success:
+        return "success";
+    case PacketApiStatus::Queued:
+        return "queued";
+    case PacketApiStatus::QueueEmpty:
+        return "queue empty";
+    case PacketApiStatus::QueueFull:
+        return "queue full";
+    case PacketApiStatus::TunnelUnavailable:
+        return "tunnel unavailable";
+    case PacketApiStatus::MalformedPacket:
+        return "malformed packet";
+    case PacketApiStatus::OutputBufferTooSmall:
+        return "output buffer too small";
+    case PacketApiStatus::StaleActivation:
+        return "stale activation";
+    case PacketApiStatus::AccessDenied:
+        return "access denied";
+    case PacketApiStatus::InternalError:
+        return "internal error";
     }
 
     return "unknown";

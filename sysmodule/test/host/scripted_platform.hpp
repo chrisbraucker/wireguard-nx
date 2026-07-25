@@ -18,7 +18,7 @@ namespace wgnx::test {
 // not reproduce WireGuard decisions: RuntimeCoordinator remains the production
 // state owner, while scripts determine how platform work completes.
 class ScriptedPlatform {
-public:
+  public:
     struct UdpOpenResult {
         wgnx::platform::socket_handle socket{wgnx::platform::InvalidSocket};
         wgnx::platform::socket_error error{wgnx::platform::socket_error::none};
@@ -51,28 +51,24 @@ public:
         std::size_t persistence_attempts{0};
     };
 
-    explicit ScriptedPlatform(
-        wgnx::sysmodule::runtime::RuntimeCoordinator &coordinator,
-        wgnx::platform::ktime_t initial_time = 1'000);
+    explicit ScriptedPlatform(wgnx::sysmodule::runtime::RuntimeCoordinator& coordinator, wgnx::platform::ktime_t initial_time = 1'000);
 
-    void QueueResolutionResult(
-        const wgnx::platform::endpoint_resolution_result &result);
+    void QueueResolutionResult(const wgnx::platform::endpoint_resolution_result& result);
     void QueueUdpOpenResult(UdpOpenResult result);
     void QueueUdpSendResult(UdpSendResult result);
     void QueueUdpReceiveResult(UdpReceiveResult result);
     void QueuePersistenceResult(bool success);
 
-    void Execute(const wgnx::sysmodule::runtime::EffectBatch &effects);
+    void Execute(const wgnx::sysmodule::runtime::EffectBatch& effects);
     bool CompleteNextResolution();
     bool CompleteNextUdpOpen();
     bool CompleteNextUdpSend();
     bool CompleteNextUdpReceive();
     bool CaptureTimerExpiration(wgnx::wireguard::TimerHook hook);
     bool DeliverCapturedTimer(wgnx::wireguard::TimerHook hook);
-    bool CancelResolution(const wgnx::sysmodule::runtime::PeerIdentity &peer);
-    bool PersistAutoStart(
-        wgnx::sysmodule::runtime::AutoStartPersistenceState &state,
-        const wgnx::sysmodule::runtime::AutoStartPersistenceRequest &request);
+    bool CancelResolution(const wgnx::sysmodule::runtime::PeerIdentity& peer);
+    bool PersistAutoStart(wgnx::sysmodule::runtime::AutoStartPersistenceState& state,
+                          const wgnx::sysmodule::runtime::AutoStartPersistenceRequest& request);
 
     bool HasPendingResolution() const;
     bool HasPendingUdpOpen() const;
@@ -80,20 +76,20 @@ public:
     bool HasPendingUdpReceive() const;
     bool IsTimerArmed(wgnx::wireguard::TimerHook hook) const;
     std::span<const wgnx::platform::socket_handle> ClosedSockets() const;
-    const Statistics &GetStatistics() const;
+    const Statistics& GetStatistics() const;
 
-private:
+  private:
     using RuntimeEffect = wgnx::sysmodule::runtime::RuntimeEffect;
     using EffectBatch = wgnx::sysmodule::runtime::EffectBatch;
     using PeerIdentity = wgnx::sysmodule::runtime::PeerIdentity;
 
-    void ExecuteEffect(const RuntimeEffect &effect, EffectBatch &generated);
+    void ExecuteEffect(const RuntimeEffect& effect, EffectBatch& generated);
     wgnx::platform::endpoint_resolution_result TakeResolutionResult();
     UdpOpenResult TakeUdpOpenResult();
     UdpSendResult TakeUdpSendResult();
     wgnx::platform::ktime_t NextTime();
 
-    wgnx::sysmodule::runtime::RuntimeCoordinator &m_coordinator;
+    wgnx::sysmodule::runtime::RuntimeCoordinator& m_coordinator;
     wgnx::sysmodule::runtime::EndpointResolver m_resolver{};
     wgnx::sysmodule::runtime::TimerSchedule m_timers{};
     std::deque<wgnx::platform::endpoint_resolution_result> m_resolution_results{};

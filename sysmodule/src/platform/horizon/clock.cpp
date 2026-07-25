@@ -9,7 +9,7 @@ namespace {
 constinit bool g_time_initialized = false;
 ams::os::SdkMutex g_time_initialize_mutex;
 
-void SetFallbackMonotonicTime(timespec64 *ts) {
+void SetFallbackMonotonicTime(timespec64* ts) {
     const ktime_t ns = ktime_get_coarse_boottime_ns();
     ts->tv_sec = ns / NSEC_PER_SEC;
     ts->tv_nsec = ns % NSEC_PER_SEC;
@@ -37,7 +37,7 @@ ktime_t ktime_get_coarse_boottime_ns() {
     return ams::os::GetSystemTick().ToTimeSpan().GetNanoSeconds();
 }
 
-void ktime_get_real_ts64(timespec64 *ts) {
+void ktime_get_real_ts64(timespec64* ts) {
     if (ts == nullptr) {
         return;
     }
@@ -51,8 +51,7 @@ void ktime_get_real_ts64(timespec64 *ts) {
      */
     if (EnsureTimeInitialized()) {
         ams::time::PosixTime current_time{};
-        if (R_SUCCEEDED(ams::time::StandardUserSystemClock::GetCurrentTime(std::addressof(current_time))) &&
-            current_time.value > 0) {
+        if (R_SUCCEEDED(ams::time::StandardUserSystemClock::GetCurrentTime(std::addressof(current_time))) && current_time.value > 0) {
             ts->tv_sec = static_cast<std::int64_t>(current_time.value);
             ts->tv_nsec = 0;
             return;

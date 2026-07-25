@@ -24,8 +24,7 @@ enum class PacketSubmissionStatus : std::uint8_t {
 
 struct PacketSubmissionOutcome {
     PacketSubmissionStatus status{PacketSubmissionStatus::InternalError};
-    wireguard::InnerIpValidationError validation{
-        wireguard::InnerIpValidationError::None};
+    wireguard::InnerIpValidationError validation{wireguard::InnerIpValidationError::None};
     PeerIdentity peer{};
     PacketId packet_id{};
     std::size_t packet_size{0};
@@ -48,8 +47,7 @@ enum class PacketDeliveryStatus : std::uint8_t {
 
 struct PacketDeliveryOutcome {
     PacketDeliveryStatus status{PacketDeliveryStatus::StalePeer};
-    wireguard::InnerIpValidationError validation{
-        wireguard::InnerIpValidationError::None};
+    wireguard::InnerIpValidationError validation{wireguard::InnerIpValidationError::None};
     wireguard::InnerIpVersion version{wireguard::InnerIpVersion::Unknown};
     PacketId packet_id{};
     std::size_t packet_size{0};
@@ -79,51 +77,31 @@ struct PacketClearOutcome {
 };
 
 class PacketDataPlane {
-public:
-    PacketDataPlane(
-        RuntimeCoordinator &coordinator,
-        PacketTransport &transport)
-        : m_coordinator(coordinator), m_transport(transport) {}
+  public:
+    PacketDataPlane(RuntimeCoordinator& coordinator, PacketTransport& transport) : m_coordinator(coordinator), m_transport(transport) {}
 
-    [[nodiscard]] PacketSubmissionOutcome SubmitIpPacket(
-        std::span<const std::uint8_t> packet,
-        ProcessId consumer_id,
-        const TimerFacts &timer_facts,
-        wgnx::platform::ktime_t occurred_at,
-        EffectBatch &out_effects);
-    [[nodiscard]] PacketSubmissionOutcome SubmitIpv4Packet(
-        std::span<const std::uint8_t> packet,
-        ProcessId consumer_id,
-        const TimerFacts &timer_facts,
-        wgnx::platform::ktime_t occurred_at,
-        EffectBatch &out_effects);
-    [[nodiscard]] PacketSubmissionOutcome SubmitInternalIpPacket(
-        std::span<const std::uint8_t> packet,
-        const TimerFacts &timer_facts,
-        wgnx::platform::ktime_t occurred_at,
-        EffectBatch &out_effects);
+    [[nodiscard]] PacketSubmissionOutcome SubmitIpPacket(std::span<const std::uint8_t> packet, ProcessId consumer_id,
+                                                         const TimerFacts& timer_facts, wgnx::platform::ktime_t occurred_at,
+                                                         EffectBatch& out_effects);
+    [[nodiscard]] PacketSubmissionOutcome SubmitIpv4Packet(std::span<const std::uint8_t> packet, ProcessId consumer_id,
+                                                           const TimerFacts& timer_facts, wgnx::platform::ktime_t occurred_at,
+                                                           EffectBatch& out_effects);
+    [[nodiscard]] PacketSubmissionOutcome SubmitInternalIpPacket(std::span<const std::uint8_t> packet, const TimerFacts& timer_facts,
+                                                                 wgnx::platform::ktime_t occurred_at, EffectBatch& out_effects);
 
-    [[nodiscard]] PacketDeliveryOutcome DeliverDecryptedPacket(
-        const PeerIdentity &peer,
-        std::span<const std::uint8_t> packet);
-    [[nodiscard]] PacketReceiveOutcome ReceivePacket(
-        std::span<std::uint8_t> packet,
-        ProcessId consumer_id);
+    [[nodiscard]] PacketDeliveryOutcome DeliverDecryptedPacket(const PeerIdentity& peer, std::span<const std::uint8_t> packet);
+    [[nodiscard]] PacketReceiveOutcome ReceivePacket(std::span<std::uint8_t> packet, ProcessId consumer_id);
     [[nodiscard]] PacketClearOutcome Clear();
 
-private:
-    PacketSubmissionOutcome SubmitValidatedPacket(
-        std::span<const std::uint8_t> packet,
-        ProcessId consumer_id,
-        const TimerFacts &timer_facts,
-        wgnx::platform::ktime_t occurred_at,
-        wireguard::InnerIpValidationError validation,
-        bool claim_transport,
-        EffectBatch &out_effects);
+  private:
+    PacketSubmissionOutcome SubmitValidatedPacket(std::span<const std::uint8_t> packet, ProcessId consumer_id,
+                                                  const TimerFacts& timer_facts, wgnx::platform::ktime_t occurred_at,
+                                                  wireguard::InnerIpValidationError validation, bool claim_transport,
+                                                  EffectBatch& out_effects);
     PacketId AllocatePacketId();
 
-    RuntimeCoordinator &m_coordinator;
-    PacketTransport &m_transport;
+    RuntimeCoordinator& m_coordinator;
+    PacketTransport& m_transport;
     PacketId m_next_packet_id{1};
 };
 

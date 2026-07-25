@@ -49,8 +49,7 @@ constexpr inline std::size_t NifmPathThreadStackBytes = KiB(16);
 // Layout ceilings turn otherwise silent fixed-footprint growth into a review gate.
 constexpr inline std::size_t MaximumInnerPacketRecordBytes = 1536;
 constexpr inline std::size_t MaximumPacketQueueBytes = KiB(13);
-constexpr inline std::size_t MaximumPacketChannelBytes =
-    MaximumPacketQueueBytes + 128;
+constexpr inline std::size_t MaximumPacketChannelBytes = MaximumPacketQueueBytes + 128;
 constexpr inline std::size_t MaximumEffectBatchBytes = 2304;
 constexpr inline std::size_t MaximumPeerRuntimeBytes = KiB(24);
 constexpr inline std::size_t MaximumPeerRegistryBytes = KiB(192);
@@ -67,10 +66,7 @@ static_assert(IpcServerPorts == 1);
 static_assert(PacketQueueSlots > 0);
 static_assert(EffectBatchSlots > 0);
 static_assert(OrderedWorkqueueSlots == 5);
-static_assert(
-    ResolveWorkSlots + SubmissionWorkSlots + TransmitWorkSlots +
-        ReceiveWorkSlots + TimerWorkSlots ==
-    11);
+static_assert(ResolveWorkSlots + SubmissionWorkSlots + TransmitWorkSlots + ReceiveWorkSlots + TimerWorkSlots == 11);
 static_assert(MainThreadStackBytes == WorkqueueThreadStackBytes);
 static_assert(WorkqueueThreadStackBytes == TimerThreadStackBytes);
 static_assert(NifmPathThreadStackBytes == WorkqueueThreadStackBytes);

@@ -2,7 +2,7 @@
 
 namespace wgnx::sysmodule::runtime {
 
-EndpointQueueResult EndpointResolver::Queue(const ResolveEndpointEffect &request) {
+EndpointQueueResult EndpointResolver::Queue(const ResolveEndpointEffect& request) {
     const bool replaced = m_pending.has_value();
     m_pending = request;
     m_accounting.RecordAdmission(replaced);
@@ -14,9 +14,7 @@ EndpointQueueResult EndpointResolver::Queue(const ResolveEndpointEffect &request
     if (should_schedule) {
         return EndpointQueueResult::Scheduled;
     }
-    return replaced
-        ? EndpointQueueResult::Replaced
-        : EndpointQueueResult::Coalesced;
+    return replaced ? EndpointQueueResult::Replaced : EndpointQueueResult::Coalesced;
 }
 
 void EndpointResolver::MarkWorkerIdle() {
@@ -32,7 +30,7 @@ std::optional<ResolveEndpointEffect> EndpointResolver::Take() {
     return pending;
 }
 
-void EndpointResolver::Cancel(const PeerIdentity &peer) {
+void EndpointResolver::Cancel(const PeerIdentity& peer) {
     if (m_pending.has_value() && m_pending->peer == peer) {
         m_pending.reset();
         m_accounting.RecordCancellation();

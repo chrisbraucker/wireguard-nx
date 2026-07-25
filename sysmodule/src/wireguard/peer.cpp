@@ -8,7 +8,7 @@
 
 namespace wgnx::wireguard {
 
-bool wg_peer_initialize(wg_peer *peer, const PeerInitializationView &config) {
+bool wg_peer_initialize(wg_peer* peer, const PeerInitializationView& config) {
     if (peer == nullptr) {
         return false;
     }
@@ -26,11 +26,8 @@ bool wg_peer_initialize(wg_peer *peer, const PeerInitializationView &config) {
     wg_peer_reset_keypairs(peer);
     wg_peer_clear_last_initiation(peer);
     peer->handshake_retry = {};
-    if (!noise_static_identity_init_from_keys(
-            &peer->static_identity,
-            config.local_private_key,
-            config.remote_public_key != nullptr ? config.remote_public_key : "",
-            config.preshared_key)) {
+    if (!noise_static_identity_init_from_keys(&peer->static_identity, config.local_private_key,
+                                              config.remote_public_key != nullptr ? config.remote_public_key : "", config.preshared_key)) {
         wgnx::sysmodule::logger::Log("WG peer '%s': invalid static identity or peer keys", peer->name);
         return false;
     }
@@ -44,7 +41,7 @@ bool wg_peer_initialize(wg_peer *peer, const PeerInitializationView &config) {
     return true;
 }
 
-void wg_peer_reset_keypairs(wg_peer *peer) {
+void wg_peer_reset_keypairs(wg_peer* peer) {
     if (peer == nullptr) {
         return;
     }
@@ -54,46 +51,34 @@ void wg_peer_reset_keypairs(wg_peer *peer) {
     peer->previous_keypair.Reset();
 }
 
-OutboundStagingAction wg_peer_get_outbound_staging_action(
-    const wg_peer &peer,
-    MonotonicTimePoint now) {
+OutboundStagingAction wg_peer_get_outbound_staging_action(const wg_peer& peer, MonotonicTimePoint now) {
     if (peer.staged_outbound_packets.Size() == 0) {
         return OutboundStagingAction::Idle;
     }
-    return peer.current_keypair.CanSendAt(now)
-        ? OutboundStagingAction::Send
-        : OutboundStagingAction::InitiateHandshake;
+    return peer.current_keypair.CanSendAt(now) ? OutboundStagingAction::Send : OutboundStagingAction::InitiateHandshake;
 }
 
-std::size_t wg_peer_clear_staged_outbound_packets(
-    wg_peer *peer,
-    QueueDisposition disposition) {
+std::size_t wg_peer_clear_staged_outbound_packets(wg_peer* peer, QueueDisposition disposition) {
     if (peer == nullptr) {
         return 0;
     }
 
     const std::size_t count = peer->staged_outbound_packets.Clear(disposition);
     if (count != 0) {
-        const QueueStatistics &statistics = peer->staged_outbound_packets.Statistics();
+        const QueueStatistics& statistics = peer->staged_outbound_packets.Statistics();
         wgnx::sysmodule::logger::Log(
-            "WG staging peer='%s' removed=%zu disposition=%s pushed=%llu popped=%llu sent=%llu send_failed=%llu retry_exhausted=%llu stale=%llu unavailable=%llu cleared=%llu high_watermark=%zu",
-            peer->name,
-            count,
-            GetQueueDispositionName(disposition),
-            static_cast<unsigned long long>(statistics.pushed),
-            static_cast<unsigned long long>(statistics.popped),
-            static_cast<unsigned long long>(statistics.sent),
-            static_cast<unsigned long long>(statistics.send_failed),
-            static_cast<unsigned long long>(statistics.retry_exhausted),
-            static_cast<unsigned long long>(statistics.stale),
-            static_cast<unsigned long long>(statistics.unavailable),
-            static_cast<unsigned long long>(statistics.cleared),
-            statistics.high_watermark);
+            "WG staging peer='%s' removed=%zu disposition=%s pushed=%llu popped=%llu sent=%llu send_failed=%llu retry_exhausted=%llu "
+            "stale=%llu unavailable=%llu cleared=%llu high_watermark=%zu",
+            peer->name, count, GetQueueDispositionName(disposition), static_cast<unsigned long long>(statistics.pushed),
+            static_cast<unsigned long long>(statistics.popped), static_cast<unsigned long long>(statistics.sent),
+            static_cast<unsigned long long>(statistics.send_failed), static_cast<unsigned long long>(statistics.retry_exhausted),
+            static_cast<unsigned long long>(statistics.stale), static_cast<unsigned long long>(statistics.unavailable),
+            static_cast<unsigned long long>(statistics.cleared), statistics.high_watermark);
     }
     return count;
 }
 
-void wg_peer_clear_last_initiation(wg_peer *peer) {
+void wg_peer_clear_last_initiation(wg_peer* peer) {
     if (peer == nullptr) {
         return;
     }
@@ -102,7 +87,7 @@ void wg_peer_clear_last_initiation(wg_peer *peer) {
     peer->has_last_initiation = false;
 }
 
-void wg_peer_begin_handshake_retry_sequence(wg_peer *peer) {
+void wg_peer_begin_handshake_retry_sequence(wg_peer* peer) {
     if (peer == nullptr) {
         return;
     }
@@ -112,7 +97,7 @@ void wg_peer_begin_handshake_retry_sequence(wg_peer *peer) {
     ++peer->handshake_retry.sequence_count;
 }
 
-HandshakeRetryTimeoutResult wg_peer_handle_handshake_retry_timeout(wg_peer *peer) {
+HandshakeRetryTimeoutResult wg_peer_handle_handshake_retry_timeout(wg_peer* peer) {
     if (peer == nullptr || !peer->handshake_retry.active) {
         return {};
     }
@@ -129,9 +114,7 @@ HandshakeRetryTimeoutResult wg_peer_handle_handshake_retry_timeout(wg_peer *peer
 
     peer->handshake_retry.active = false;
     ++peer->handshake_retry.exhausted_sequence_count;
-    const std::size_t dropped = wg_peer_clear_staged_outbound_packets(
-        peer,
-        QueueDisposition::RetryExhausted);
+    const std::size_t dropped = wg_peer_clear_staged_outbound_packets(peer, QueueDisposition::RetryExhausted);
     wg_peer_clear_last_initiation(peer);
     return {
         .action = HandshakeRetryTimeoutAction::Exhausted,
@@ -139,7 +122,7 @@ HandshakeRetryTimeoutResult wg_peer_handle_handshake_retry_timeout(wg_peer *peer
     };
 }
 
-void wg_peer_complete_handshake_retry_sequence(wg_peer *peer) {
+void wg_peer_complete_handshake_retry_sequence(wg_peer* peer) {
     if (peer == nullptr) {
         return;
     }
@@ -149,7 +132,7 @@ void wg_peer_complete_handshake_retry_sequence(wg_peer *peer) {
     wg_peer_clear_last_initiation(peer);
 }
 
-void wg_peer_zero_key_material(wg_peer *peer) {
+void wg_peer_zero_key_material(wg_peer* peer) {
     if (peer == nullptr) {
         return;
     }
@@ -161,7 +144,7 @@ void wg_peer_zero_key_material(wg_peer *peer) {
     static_cast<void>(wg_peer_clear_staged_outbound_packets(peer));
 }
 
-void wg_peer_scrub_transient_state(wg_peer *peer) {
+void wg_peer_scrub_transient_state(wg_peer* peer) {
     if (peer == nullptr) {
         return;
     }

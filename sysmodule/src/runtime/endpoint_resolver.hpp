@@ -15,19 +15,18 @@ enum class EndpointQueueResult : std::uint8_t {
 };
 
 class EndpointResolver {
-public:
-    static constexpr std::size_t RequestCapacity =
-        wgnx::resource_budget::EndpointRequestSlots;
+  public:
+    static constexpr std::size_t RequestCapacity = wgnx::resource_budget::EndpointRequestSlots;
 
-    [[nodiscard]] EndpointQueueResult Queue(const ResolveEndpointEffect &request);
+    [[nodiscard]] EndpointQueueResult Queue(const ResolveEndpointEffect& request);
     [[nodiscard]] std::optional<ResolveEndpointEffect> Take();
     void MarkWorkerIdle();
-    void Cancel(const PeerIdentity &peer);
-    const PendingSlotStatistics &Statistics() const {
+    void Cancel(const PeerIdentity& peer);
+    const PendingSlotStatistics& Statistics() const {
         return m_accounting.Statistics();
     }
 
-private:
+  private:
     static_assert(RequestCapacity == PendingSlotStatistics::Capacity);
 
     std::optional<ResolveEndpointEffect> m_pending{};
@@ -35,8 +34,6 @@ private:
     bool m_worker_scheduled{false};
 };
 
-static_assert(
-    sizeof(EndpointResolver) <=
-    wgnx::resource_budget::MaximumEndpointResolverBytes);
+static_assert(sizeof(EndpointResolver) <= wgnx::resource_budget::MaximumEndpointResolverBytes);
 
 } // namespace wgnx::sysmodule::runtime

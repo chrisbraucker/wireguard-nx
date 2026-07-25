@@ -13,9 +13,9 @@ struct State {
     std::uint64_t random_bytes_generated;
 };
 
-void Reset(const State &state);
+void Reset(const State& state);
 void SetMonotonicTime(wgnx::platform::ktime_t time_ns);
-void SetRealtime(const wgnx::platform::timespec64 &time);
+void SetRealtime(const wgnx::platform::timespec64& time);
 State GetState();
 
 } // namespace wgnx::test::runtime

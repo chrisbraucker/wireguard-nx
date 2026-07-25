@@ -13,51 +13,43 @@ namespace wgnx::sysmodule::runtime {
 class HorizonDispatcher;
 
 struct TimerSchedulerCallbacks {
-    void (*protocol_timer)(
-        wgnx::wireguard::TimerHook,
-        const wgnx::wireguard::TimerToken &){nullptr};
+    void (*protocol_timer)(wgnx::wireguard::TimerHook, const wgnx::wireguard::TimerToken&){nullptr};
     void (*debug_probe_timeout)(){nullptr};
 };
 
 class TimerScheduler {
-public:
-    void Initialize(
-        HorizonDispatcher &dispatcher,
-        const TimerSchedulerCallbacks &callbacks);
+  public:
+    void Initialize(HorizonDispatcher& dispatcher, const TimerSchedulerCallbacks& callbacks);
 
-    void ArmProtocolTimer(
-        const wgnx::wireguard::TimerToken &token,
-        wgnx::wireguard::TimerDeadline deadline);
-    void CancelProtocolTimer(const wgnx::wireguard::TimerToken &token);
+    void ArmProtocolTimer(const wgnx::wireguard::TimerToken& token, wgnx::wireguard::TimerDeadline deadline);
+    void CancelProtocolTimer(const wgnx::wireguard::TimerToken& token);
     void CancelProtocolTimer(wgnx::wireguard::TimerHook hook);
     void CancelAllProtocolTimers();
 
     void ArmDebugProbeTimeout(wgnx::platform::jiffies_t deadline);
     void CancelDebugProbeTimeout();
 
-private:
+  private:
     struct ProtocolTimerSlot {
         wgnx::wireguard::TimerHook hook{wgnx::wireguard::TimerHook::RetransmitHandshake};
         wgnx::platform::work_struct work{};
         wgnx::platform::timer_list timer{};
     };
 
-    static void ProtocolTimerCallback(wgnx::platform::timer_list *timer);
-    static void AuxiliaryTimerCallback(wgnx::platform::timer_list *timer);
-    static void TimerWorkCallback(wgnx::platform::work_struct *work);
+    static void ProtocolTimerCallback(wgnx::platform::timer_list* timer);
+    static void AuxiliaryTimerCallback(wgnx::platform::timer_list* timer);
+    static void TimerWorkCallback(wgnx::platform::work_struct* work);
 
-    ProtocolTimerSlot &Slot(wgnx::wireguard::TimerHook hook);
-    void QueueProtocolTimer(ProtocolTimerSlot &slot);
-    void RunTimerWork(wgnx::platform::work_struct *work);
+    ProtocolTimerSlot& Slot(wgnx::wireguard::TimerHook hook);
+    void QueueProtocolTimer(ProtocolTimerSlot& slot);
+    void RunTimerWork(wgnx::platform::work_struct* work);
 
-    static TimerScheduler *s_instance;
+    static TimerScheduler* s_instance;
 
-    HorizonDispatcher *m_dispatcher{nullptr};
+    HorizonDispatcher* m_dispatcher{nullptr};
     TimerSchedulerCallbacks m_callbacks{};
     TimerSchedule m_schedule{};
-    std::array<
-        ProtocolTimerSlot,
-        wgnx::resource_budget::ProtocolTimerSlots> m_protocol_timers{{
+    std::array<ProtocolTimerSlot, wgnx::resource_budget::ProtocolTimerSlots> m_protocol_timers{{
         {.hook = wgnx::wireguard::TimerHook::RetransmitHandshake},
         {.hook = wgnx::wireguard::TimerHook::SendKeepalive},
         {.hook = wgnx::wireguard::TimerHook::NewHandshake},
@@ -71,8 +63,6 @@ private:
     bool m_initialized{false};
 };
 
-static_assert(
-    sizeof(TimerScheduler) <=
-    wgnx::resource_budget::MaximumTimerSchedulerBytes);
+static_assert(sizeof(TimerScheduler) <= wgnx::resource_budget::MaximumTimerSchedulerBytes);
 
 } // namespace wgnx::sysmodule::runtime

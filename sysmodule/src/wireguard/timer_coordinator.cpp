@@ -6,11 +6,16 @@ namespace wgnx::wireguard {
 
 std::size_t TimerCoordinator::HookIndex(TimerHook hook) {
     switch (hook) {
-        case TimerHook::RetransmitHandshake: return 0;
-        case TimerHook::SendKeepalive: return 1;
-        case TimerHook::NewHandshake: return 2;
-        case TimerHook::ZeroKeyMaterial: return 3;
-        case TimerHook::PersistentKeepalive: return 4;
+    case TimerHook::RetransmitHandshake:
+        return 0;
+    case TimerHook::SendKeepalive:
+        return 1;
+    case TimerHook::NewHandshake:
+        return 2;
+    case TimerHook::ZeroKeyMaterial:
+        return 3;
+    case TimerHook::PersistentKeepalive:
+        return 4;
     }
     return 0;
 }
@@ -25,7 +30,7 @@ std::uint32_t TimerCoordinator::NextGeneration() {
 }
 
 TimerToken TimerCoordinator::Arm(TimerHook hook, TimerOwner owner) {
-    HookState &state = m_hooks[HookIndex(hook)];
+    HookState& state = m_hooks[HookIndex(hook)];
     state.token = {
         .hook = hook,
         .owner = owner,
@@ -36,7 +41,7 @@ TimerToken TimerCoordinator::Arm(TimerHook hook, TimerOwner owner) {
 }
 
 TimerToken TimerCoordinator::Cancel(TimerHook hook) {
-    HookState &state = m_hooks[HookIndex(hook)];
+    HookState& state = m_hooks[HookIndex(hook)];
     const TimerToken canceled = state.armed ? state.token : TimerToken{};
     state = {};
     static_cast<void>(NextGeneration());
@@ -50,11 +55,11 @@ void TimerCoordinator::CancelAll() {
     static_cast<void>(NextGeneration());
 }
 
-bool TimerCoordinator::IsCurrent(const TimerToken &token, TimerOwner current_owner) const {
+bool TimerCoordinator::IsCurrent(const TimerToken& token, TimerOwner current_owner) const {
     if (!token.IsValid() || token.owner != current_owner) {
         return false;
     }
-    const HookState &state = m_hooks[HookIndex(token.hook)];
+    const HookState& state = m_hooks[HookIndex(token.hook)];
     return state.armed && state.token == token;
 }
 

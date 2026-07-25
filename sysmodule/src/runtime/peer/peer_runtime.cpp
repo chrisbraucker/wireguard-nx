@@ -5,10 +5,8 @@
 
 namespace wgnx::sysmodule::runtime {
 
-EffectBatch PeerRuntime::Handle(const PeerEvent &event) {
-    EffectBatch effects = std::visit(
-        [this](const auto &value) { return HandleEvent(value); },
-        event);
+EffectBatch PeerRuntime::Handle(const PeerEvent& event) {
+    EffectBatch effects = std::visit([this](const auto& value) { return HandleEvent(value); }, event);
     FinalizeTimerEffects(effects);
     if (effects.Size() > GetEventEffectBudget(event)) {
         std::abort();

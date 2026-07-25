@@ -4,7 +4,7 @@
 
 namespace wgnx::platform {
 
-void get_random_bytes(void *dst, std::size_t size) {
+void get_random_bytes(void* dst, std::size_t size) {
     ams::os::GenerateRandomBytes(dst, size);
 }
 

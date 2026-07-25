@@ -7,7 +7,7 @@
 namespace wgnx::client {
 
 class ScopedService {
-public:
+  public:
     ScopedService() = default;
     ~ScopedService() {
         close();
@@ -44,7 +44,7 @@ public:
         return &m_service;
     }
 
-private:
+  private:
     Service m_service{};
     bool m_active{false};
 };
@@ -111,9 +111,8 @@ inline Result ListPeers(PeerInfo* out_peers, std::uint32_t max_peers, std::uint3
     }
 
     return serviceDispatchOut(service.get(), static_cast<std::uint32_t>(CommandId::ListPeers), *out_count,
-        .buffer_attrs = { SfBufferAttr_HipcMapAlias | SfBufferAttr_Out },
-        .buffers = { { out_peers, max_peers * sizeof(PeerInfo) } },
-    );
+                              .buffer_attrs = {SfBufferAttr_HipcMapAlias | SfBufferAttr_Out},
+                              .buffers = {{out_peers, max_peers * sizeof(PeerInfo)}}, );
 }
 
 inline Result SetActivePeer(std::int32_t peer_index) {
@@ -171,52 +170,32 @@ inline Result BumpUdpBinding() {
     return serviceDispatch(service.get(), static_cast<std::uint32_t>(CommandId::BumpUdpBinding));
 }
 
-inline Result SubmitInnerIpv4Packet(
-    ScopedService& service,
-    const void *packet,
-    std::size_t packet_size,
-    PacketSubmissionResult *out_result) {
+inline Result SubmitInnerIpv4Packet(ScopedService& service, const void* packet, std::size_t packet_size,
+                                    PacketSubmissionResult* out_result) {
     if (!service.isOpen()) {
         return MAKERESULT(Module_Libnx, LibnxError_NotInitialized);
     }
 
     const std::uint64_t pid_placeholder = 0;
 
-    return serviceDispatchInOut(
-        service.get(),
-        static_cast<std::uint32_t>(CommandId::SubmitInnerIpv4Packet),
-        pid_placeholder,
-        *out_result,
-        .buffer_attrs = { SfBufferAttr_HipcMapAlias | SfBufferAttr_In },
-        .buffers = { { packet, packet_size } },
-        .in_send_pid = true);
+    return serviceDispatchInOut(service.get(), static_cast<std::uint32_t>(CommandId::SubmitInnerIpv4Packet), pid_placeholder, *out_result,
+                                .buffer_attrs = {SfBufferAttr_HipcMapAlias | SfBufferAttr_In}, .buffers = {{packet, packet_size}},
+                                .in_send_pid = true);
 }
 
-inline Result ReceiveInnerIpv4Packet(
-    ScopedService& service,
-    void *packet,
-    std::size_t packet_capacity,
-    PacketReceiveResult *out_result) {
+inline Result ReceiveInnerIpv4Packet(ScopedService& service, void* packet, std::size_t packet_capacity, PacketReceiveResult* out_result) {
     if (!service.isOpen()) {
         return MAKERESULT(Module_Libnx, LibnxError_NotInitialized);
     }
 
     const std::uint64_t pid_placeholder = 0;
 
-    return serviceDispatchInOut(
-        service.get(),
-        static_cast<std::uint32_t>(CommandId::ReceiveInnerIpv4Packet),
-        pid_placeholder,
-        *out_result,
-        .buffer_attrs = { SfBufferAttr_HipcMapAlias | SfBufferAttr_Out },
-        .buffers = { { packet, packet_capacity } },
-        .in_send_pid = true);
+    return serviceDispatchInOut(service.get(), static_cast<std::uint32_t>(CommandId::ReceiveInnerIpv4Packet), pid_placeholder, *out_result,
+                                .buffer_attrs = {SfBufferAttr_HipcMapAlias | SfBufferAttr_Out}, .buffers = {{packet, packet_capacity}},
+                                .in_send_pid = true);
 }
 
-inline Result SubmitInnerIpv4Packet(
-    const void *packet,
-    std::size_t packet_size,
-    PacketSubmissionResult *out_result) {
+inline Result SubmitInnerIpv4Packet(const void* packet, std::size_t packet_size, PacketSubmissionResult* out_result) {
     ScopedService service;
     Result rc = service.open();
     if (R_FAILED(rc)) {
@@ -226,10 +205,7 @@ inline Result SubmitInnerIpv4Packet(
     return SubmitInnerIpv4Packet(service, packet, packet_size, out_result);
 }
 
-inline Result ReceiveInnerIpv4Packet(
-    void *packet,
-    std::size_t packet_capacity,
-    PacketReceiveResult *out_result) {
+inline Result ReceiveInnerIpv4Packet(void* packet, std::size_t packet_capacity, PacketReceiveResult* out_result) {
     ScopedService service;
     Result rc = service.open();
     if (R_FAILED(rc)) {

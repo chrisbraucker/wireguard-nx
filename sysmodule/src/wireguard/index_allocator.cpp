@@ -4,7 +4,7 @@
 
 namespace wgnx::wireguard {
 
-void wg_index_allocator_init(wg_index_allocator *allocator) {
+void wg_index_allocator_init(wg_index_allocator* allocator) {
     if (allocator == nullptr) {
         return;
     }
@@ -12,7 +12,7 @@ void wg_index_allocator_init(wg_index_allocator *allocator) {
     allocator->last_index = 0;
 }
 
-std::uint32_t wg_index_allocator_next(wg_index_allocator *allocator) {
+std::uint32_t wg_index_allocator_next(wg_index_allocator* allocator) {
     if (allocator == nullptr) {
         return 0;
     }

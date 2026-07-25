@@ -17,19 +17,15 @@ enum class OutboundSendOutcomeKind : std::uint8_t {
 };
 
 class OutboundSendOutcome {
-public:
+  public:
     static constexpr OutboundSendOutcome Sent() {
         return OutboundSendOutcome(OutboundSendOutcomeKind::Sent);
     }
 
     static constexpr OutboundSendOutcome BuildFailed(TransportDataError error) {
-        const bool key_unavailable = error == TransportDataError::InvalidKeypair ||
-                                     error == TransportDataError::KeyExpired ||
+        const bool key_unavailable = error == TransportDataError::InvalidKeypair || error == TransportDataError::KeyExpired ||
                                      error == TransportDataError::CounterExhausted;
-        return OutboundSendOutcome(
-            key_unavailable ? OutboundSendOutcomeKind::KeyUnavailable
-                            : OutboundSendOutcomeKind::BuildFatal,
-            error);
+        return OutboundSendOutcome(key_unavailable ? OutboundSendOutcomeKind::KeyUnavailable : OutboundSendOutcomeKind::BuildFatal, error);
     }
 
     static constexpr OutboundSendOutcome TransportDropped() {
@@ -40,13 +36,15 @@ public:
         return OutboundSendOutcome(OutboundSendOutcomeKind::TransportFatal);
     }
 
-    constexpr OutboundSendOutcomeKind Kind() const { return m_kind; }
-    constexpr TransportDataError BuildError() const { return m_build_error; }
+    constexpr OutboundSendOutcomeKind Kind() const {
+        return m_kind;
+    }
+    constexpr TransportDataError BuildError() const {
+        return m_build_error;
+    }
 
-private:
-    constexpr explicit OutboundSendOutcome(
-        OutboundSendOutcomeKind kind,
-        TransportDataError build_error = TransportDataError::None)
+  private:
+    constexpr explicit OutboundSendOutcome(OutboundSendOutcomeKind kind, TransportDataError build_error = TransportDataError::None)
         : m_kind(kind), m_build_error(build_error) {}
 
     OutboundSendOutcomeKind m_kind;
@@ -79,24 +77,23 @@ struct HandshakeTransition {
 };
 
 class PeerController {
-public:
-    TimerCoordinator &Timers() { return m_timers; }
-    const TimerCoordinator &Timers() const { return m_timers; }
+  public:
+    TimerCoordinator& Timers() {
+        return m_timers;
+    }
+    const TimerCoordinator& Timers() const {
+        return m_timers;
+    }
 
-    StagedPacketTransition ApplyStagedSendOutcome(
-        wg_peer &peer,
-        const OutboundSendOutcome &outcome) const;
-    HandshakeTransition StartHandshake(wg_device &device, wg_peer &peer) const;
-    HandshakeTransition HandleHandshakeRetryTimer(wg_device &device, wg_peer &peer) const;
-    bool CompleteSession(wg_device &device, wg_peer &peer) const;
-    bool DeriveResponderSession(wg_device &device, wg_peer &peer) const;
-    void ConfirmResponderSession(wg_peer &peer) const;
+    StagedPacketTransition ApplyStagedSendOutcome(wg_peer& peer, const OutboundSendOutcome& outcome) const;
+    HandshakeTransition StartHandshake(wg_device& device, wg_peer& peer) const;
+    HandshakeTransition HandleHandshakeRetryTimer(wg_device& device, wg_peer& peer) const;
+    bool CompleteSession(wg_device& device, wg_peer& peer) const;
+    bool DeriveResponderSession(wg_device& device, wg_peer& peer) const;
+    void ConfirmResponderSession(wg_peer& peer) const;
 
-private:
-    static HandshakeTransition PrepareFreshInitiation(
-        wg_device &device,
-        wg_peer &peer,
-        bool begin_sequence);
+  private:
+    static HandshakeTransition PrepareFreshInitiation(wg_device& device, wg_peer& peer, bool begin_sequence);
 
     TimerCoordinator m_timers{};
 };

@@ -14,6 +14,6 @@ struct timespec64 {
 };
 
 ktime_t ktime_get_coarse_boottime_ns();
-void ktime_get_real_ts64(timespec64 *ts);
+void ktime_get_real_ts64(timespec64* ts);
 
 } // namespace wgnx::platform

@@ -8,61 +8,30 @@
 
 namespace wgnx::sysmodule::runtime {
 
-PacketSubmissionOutcome PacketDataPlane::SubmitIpPacket(
-    std::span<const std::uint8_t> packet,
-    ProcessId consumer_id,
-    const TimerFacts &timer_facts,
-    wgnx::platform::ktime_t occurred_at,
-    EffectBatch &out_effects) {
-    return SubmitValidatedPacket(
-        packet,
-        consumer_id,
-        timer_facts,
-        occurred_at,
-        wireguard::ValidateInnerIpPacket(packet),
-        true,
-        out_effects);
+PacketSubmissionOutcome PacketDataPlane::SubmitIpPacket(std::span<const std::uint8_t> packet, ProcessId consumer_id,
+                                                        const TimerFacts& timer_facts, wgnx::platform::ktime_t occurred_at,
+                                                        EffectBatch& out_effects) {
+    return SubmitValidatedPacket(packet, consumer_id, timer_facts, occurred_at, wireguard::ValidateInnerIpPacket(packet), true,
+                                 out_effects);
 }
 
-PacketSubmissionOutcome PacketDataPlane::SubmitIpv4Packet(
-    std::span<const std::uint8_t> packet,
-    ProcessId consumer_id,
-    const TimerFacts &timer_facts,
-    wgnx::platform::ktime_t occurred_at,
-    EffectBatch &out_effects) {
-    return SubmitValidatedPacket(
-        packet,
-        consumer_id,
-        timer_facts,
-        occurred_at,
-        wireguard::ValidateInnerIpv4Packet(packet),
-        true,
-        out_effects);
+PacketSubmissionOutcome PacketDataPlane::SubmitIpv4Packet(std::span<const std::uint8_t> packet, ProcessId consumer_id,
+                                                          const TimerFacts& timer_facts, wgnx::platform::ktime_t occurred_at,
+                                                          EffectBatch& out_effects) {
+    return SubmitValidatedPacket(packet, consumer_id, timer_facts, occurred_at, wireguard::ValidateInnerIpv4Packet(packet), true,
+                                 out_effects);
 }
 
-PacketSubmissionOutcome PacketDataPlane::SubmitInternalIpPacket(
-    std::span<const std::uint8_t> packet,
-    const TimerFacts &timer_facts,
-    wgnx::platform::ktime_t occurred_at,
-    EffectBatch &out_effects) {
-    return SubmitValidatedPacket(
-        packet,
-        ProcessId{},
-        timer_facts,
-        occurred_at,
-        wireguard::ValidateInnerIpPacket(packet),
-        false,
-        out_effects);
+PacketSubmissionOutcome PacketDataPlane::SubmitInternalIpPacket(std::span<const std::uint8_t> packet, const TimerFacts& timer_facts,
+                                                                wgnx::platform::ktime_t occurred_at, EffectBatch& out_effects) {
+    return SubmitValidatedPacket(packet, ProcessId{}, timer_facts, occurred_at, wireguard::ValidateInnerIpPacket(packet), false,
+                                 out_effects);
 }
 
-PacketSubmissionOutcome PacketDataPlane::SubmitValidatedPacket(
-    std::span<const std::uint8_t> packet,
-    ProcessId consumer_id,
-    const TimerFacts &timer_facts,
-    wgnx::platform::ktime_t occurred_at,
-    wireguard::InnerIpValidationError validation,
-    bool claim_transport,
-    EffectBatch &out_effects) {
+PacketSubmissionOutcome PacketDataPlane::SubmitValidatedPacket(std::span<const std::uint8_t> packet, ProcessId consumer_id,
+                                                               const TimerFacts& timer_facts, wgnx::platform::ktime_t occurred_at,
+                                                               wireguard::InnerIpValidationError validation, bool claim_transport,
+                                                               EffectBatch& out_effects) {
     out_effects.Clear();
     PacketSubmissionOutcome outcome{
         .status = PacketSubmissionStatus::InternalError,
@@ -81,8 +50,7 @@ PacketSubmissionOutcome PacketDataPlane::SubmitValidatedPacket(
     outcome.has_peer = true;
     outcome.peer = peer.identity;
     outcome.peer_state = peer.state;
-    if (peer.state != wgnx::PeerRuntimeState::ResolvingEndpoint &&
-        peer.state != wgnx::PeerRuntimeState::Handshaking &&
+    if (peer.state != wgnx::PeerRuntimeState::ResolvingEndpoint && peer.state != wgnx::PeerRuntimeState::Handshaking &&
         peer.state != wgnx::PeerRuntimeState::Active) {
         outcome.status = PacketSubmissionStatus::TunnelUnavailable;
         return outcome;
@@ -92,8 +60,7 @@ PacketSubmissionOutcome PacketDataPlane::SubmitValidatedPacket(
         if (!peer.protocol_instantiated) {
             return outcome;
         }
-        outcome.discarded_outbound =
-            m_coordinator.ClearStagedInnerPackets(peer.identity.peer_index);
+        outcome.discarded_outbound = m_coordinator.ClearStagedInnerPackets(peer.identity.peer_index);
         outcome.discarded_inbound = m_transport.Claim(consumer_id);
         outcome.ownership_transferred = true;
         if (!m_coordinator.SnapshotPacketState(peer)) {
@@ -102,9 +69,7 @@ PacketSubmissionOutcome PacketDataPlane::SubmitValidatedPacket(
     }
 
     if (!peer.can_stage_packet) {
-        outcome.status = peer.protocol_instantiated
-            ? PacketSubmissionStatus::QueueFull
-            : PacketSubmissionStatus::InternalError;
+        outcome.status = peer.protocol_instantiated ? PacketSubmissionStatus::QueueFull : PacketSubmissionStatus::InternalError;
         return outcome;
     }
     if (!peer.protocol_instantiated) {
@@ -126,9 +91,7 @@ PacketSubmissionOutcome PacketDataPlane::SubmitValidatedPacket(
     return outcome;
 }
 
-PacketDeliveryOutcome PacketDataPlane::DeliverDecryptedPacket(
-    const PeerIdentity &peer_identity,
-    std::span<const std::uint8_t> packet) {
+PacketDeliveryOutcome PacketDataPlane::DeliverDecryptedPacket(const PeerIdentity& peer_identity, std::span<const std::uint8_t> packet) {
     PacketDeliveryOutcome outcome{.packet_size = packet.size()};
     outcome.queue_capacity = m_transport.ReceivedCapacity();
     if (!m_coordinator.IsActiveIdentity(peer_identity)) {
@@ -168,16 +131,14 @@ PacketDeliveryOutcome PacketDataPlane::DeliverDecryptedPacket(
     return outcome;
 }
 
-PacketReceiveOutcome PacketDataPlane::ReceivePacket(
-    std::span<std::uint8_t> packet,
-    ProcessId consumer_id) {
+PacketReceiveOutcome PacketDataPlane::ReceivePacket(std::span<std::uint8_t> packet, ProcessId consumer_id) {
     PacketReceiveOutcome outcome{};
     if (!m_transport.IsOwnedBy(consumer_id)) {
         outcome.status = PacketReceiveStatus::AccessDenied;
         return outcome;
     }
 
-    const auto *front = m_transport.FrontReceived();
+    const auto* front = m_transport.FrontReceived();
     if (front == nullptr) {
         return outcome;
     }
@@ -189,9 +150,7 @@ PacketReceiveOutcome PacketDataPlane::ReceivePacket(
     };
     if (!m_coordinator.IsActiveIdentity(outcome.peer)) {
         wireguard::InnerPacketRecord stale{};
-        static_cast<void>(m_transport.PopReceived(
-            std::addressof(stale),
-            wireguard::QueueDisposition::Stale));
+        static_cast<void>(m_transport.PopReceived(std::addressof(stale), wireguard::QueueDisposition::Stale));
         outcome.status = PacketReceiveStatus::StaleActivation;
         outcome.queue_depth = m_transport.ReceivedSize();
         return outcome;
@@ -204,9 +163,7 @@ PacketReceiveOutcome PacketDataPlane::ReceivePacket(
 
     std::memcpy(packet.data(), front->bytes.data(), front->size);
     wireguard::InnerPacketRecord delivered{};
-    static_cast<void>(m_transport.PopReceived(
-        std::addressof(delivered),
-        wireguard::QueueDisposition::Delivered));
+    static_cast<void>(m_transport.PopReceived(std::addressof(delivered), wireguard::QueueDisposition::Delivered));
     outcome.status = PacketReceiveStatus::Success;
     outcome.queue_depth = m_transport.ReceivedSize();
     return outcome;

@@ -41,7 +41,9 @@ LIBNAMES	:= Atmosphere-libs/libstratosphere
 HOST_CXX	?= g++
 HOST_CC		?= cc
 PYTHON		?= python3
-HOST_TEST_CXXFLAGS := -std=c++23 -Wall -Wextra -Wpedantic -Werror
+# Both GCC and Clang 16 accept the C++23 draft spelling, unlike Clang's newer c++23 alias.
+HOST_TEST_CXX_STANDARD ?= -std=c++2b
+HOST_TEST_CXXFLAGS := $(HOST_TEST_CXX_STANDARD) -Wall -Wextra -Wpedantic -Werror
 HOST_TEST_CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -Werror
 HOST_SANITIZE_CFLAGS := $(HOST_TEST_CFLAGS) -fsanitize=address,undefined -fno-omit-frame-pointer
 HOST_TSAN_CFLAGS := $(HOST_TEST_CFLAGS) -fsanitize=thread -fno-omit-frame-pointer

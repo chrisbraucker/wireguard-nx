@@ -6,51 +6,51 @@ namespace wgnx::wireguard {
 
 namespace {
 
-wg_timer_hook_state *GetHookState(wg_timers *timers, TimerHook hook) {
+wg_timer_hook_state* GetHookState(wg_timers* timers, TimerHook hook) {
     if (timers == nullptr) {
         return nullptr;
     }
 
     switch (hook) {
-        case TimerHook::RetransmitHandshake:
-            return &timers->retransmit_handshake;
-        case TimerHook::SendKeepalive:
-            return &timers->send_keepalive;
-        case TimerHook::NewHandshake:
-            return &timers->new_handshake;
-        case TimerHook::ZeroKeyMaterial:
-            return &timers->zero_key_material;
-        case TimerHook::PersistentKeepalive:
-            return &timers->persistent_keepalive;
+    case TimerHook::RetransmitHandshake:
+        return &timers->retransmit_handshake;
+    case TimerHook::SendKeepalive:
+        return &timers->send_keepalive;
+    case TimerHook::NewHandshake:
+        return &timers->new_handshake;
+    case TimerHook::ZeroKeyMaterial:
+        return &timers->zero_key_material;
+    case TimerHook::PersistentKeepalive:
+        return &timers->persistent_keepalive;
     }
 
     return nullptr;
 }
 
-const wg_timer_hook_state *GetHookState(const wg_timers *timers, TimerHook hook) {
-    return GetHookState(const_cast<wg_timers *>(timers), hook);
+const wg_timer_hook_state* GetHookState(const wg_timers* timers, TimerHook hook) {
+    return GetHookState(const_cast<wg_timers*>(timers), hook);
 }
 
 } // namespace
 
-const char *GetTimerHookName(TimerHook hook) {
+const char* GetTimerHookName(TimerHook hook) {
     switch (hook) {
-        case TimerHook::RetransmitHandshake:
-            return "retransmit_handshake";
-        case TimerHook::SendKeepalive:
-            return "send_keepalive";
-        case TimerHook::NewHandshake:
-            return "new_handshake";
-        case TimerHook::ZeroKeyMaterial:
-            return "zero_key_material";
-        case TimerHook::PersistentKeepalive:
-            return "persistent_keepalive";
+    case TimerHook::RetransmitHandshake:
+        return "retransmit_handshake";
+    case TimerHook::SendKeepalive:
+        return "send_keepalive";
+    case TimerHook::NewHandshake:
+        return "new_handshake";
+    case TimerHook::ZeroKeyMaterial:
+        return "zero_key_material";
+    case TimerHook::PersistentKeepalive:
+        return "persistent_keepalive";
     }
 
     return "unknown";
 }
 
-void wg_timers_init(wg_timers *timers) {
+void wg_timers_init(wg_timers* timers) {
     if (timers == nullptr) {
         return;
     }
@@ -58,27 +58,20 @@ void wg_timers_init(wg_timers *timers) {
     *timers = {};
 }
 
-void wg_timers_schedule(
-    wg_timers *timers,
-    TimerHook hook,
-    TimerDeadline deadline,
-    const char *peer_name) {
-    wg_timer_hook_state *state = GetHookState(timers, hook);
+void wg_timers_schedule(wg_timers* timers, TimerHook hook, TimerDeadline deadline, const char* peer_name) {
+    wg_timer_hook_state* state = GetHookState(timers, hook);
     if (state == nullptr) {
         return;
     }
 
     state->pending = true;
     state->deadline = deadline;
-    wgnx::sysmodule::logger::Log(
-        "WG timer peer='%s' schedule hook=%s deadline_ms=%llu",
-        peer_name != nullptr ? peer_name : "<unnamed>",
-        GetTimerHookName(hook),
-        static_cast<unsigned long long>(deadline.time_since_epoch().count()));
+    wgnx::sysmodule::logger::Log("WG timer peer='%s' schedule hook=%s deadline_ms=%llu", peer_name != nullptr ? peer_name : "<unnamed>",
+                                 GetTimerHookName(hook), static_cast<unsigned long long>(deadline.time_since_epoch().count()));
 }
 
-void wg_timers_cancel(wg_timers *timers, TimerHook hook, const char *peer_name) {
-    wg_timer_hook_state *state = GetHookState(timers, hook);
+void wg_timers_cancel(wg_timers* timers, TimerHook hook, const char* peer_name) {
+    wg_timer_hook_state* state = GetHookState(timers, hook);
     if (state == nullptr) {
         return;
     }
@@ -89,13 +82,11 @@ void wg_timers_cancel(wg_timers *timers, TimerHook hook, const char *peer_name) 
 
     state->pending = false;
     state->deadline = TimerDeadline{};
-    wgnx::sysmodule::logger::Log(
-        "WG timer peer='%s' cancel hook=%s",
-        peer_name != nullptr ? peer_name : "<unnamed>",
-        GetTimerHookName(hook));
+    wgnx::sysmodule::logger::Log("WG timer peer='%s' cancel hook=%s", peer_name != nullptr ? peer_name : "<unnamed>",
+                                 GetTimerHookName(hook));
 }
 
-void wg_timers_cancel_all(wg_timers *timers, const char *peer_name) {
+void wg_timers_cancel_all(wg_timers* timers, const char* peer_name) {
     if (timers == nullptr) {
         return;
     }
@@ -108,11 +99,9 @@ void wg_timers_cancel_all(wg_timers *timers, const char *peer_name) {
     timers->need_another_keepalive = false;
 }
 
-bool wg_timers_any_pending(const wg_timers &timers) {
-    return GetHookState(&timers, TimerHook::RetransmitHandshake)->pending ||
-           GetHookState(&timers, TimerHook::SendKeepalive)->pending ||
-           GetHookState(&timers, TimerHook::NewHandshake)->pending ||
-           GetHookState(&timers, TimerHook::ZeroKeyMaterial)->pending ||
+bool wg_timers_any_pending(const wg_timers& timers) {
+    return GetHookState(&timers, TimerHook::RetransmitHandshake)->pending || GetHookState(&timers, TimerHook::SendKeepalive)->pending ||
+           GetHookState(&timers, TimerHook::NewHandshake)->pending || GetHookState(&timers, TimerHook::ZeroKeyMaterial)->pending ||
            GetHookState(&timers, TimerHook::PersistentKeepalive)->pending;
 }
 

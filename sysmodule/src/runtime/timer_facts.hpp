@@ -18,8 +18,7 @@ struct TimerFacts {
 
 inline TimerFacts CaptureTimerFacts() {
     return {
-        .now = wgnx::wireguard::TimerDeadlineFromJiffies(
-            wgnx::platform::get_jiffies_64()),
+        .now = wgnx::wireguard::TimerDeadlineFromJiffies(wgnx::platform::get_jiffies_64()),
         .random_u32 = wgnx::platform::get_random_u32(),
     };
 }

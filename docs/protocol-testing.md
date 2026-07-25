@@ -30,7 +30,7 @@ make -C sysmodule verify
 ```
 
 This command checks the repository-owned formatting profile, cppcheck's warning/performance/portability analysis over first-party sysmodule, host-test, and fuzz-harness sources, the stricter host warning profile, deterministic tests, ASan/UBSan, the target build, stack-chain budget, footprint report, and both staged and unstaged `git diff --check` output.
-It intentionally excludes the vendored Atmosphere libraries and Monocypher implementation.
+It intentionally excludes the vendored Atmosphere libraries, Monocypher implementation, and pinned BLAKE2 reference implementation.
 
 `verify` requires `DEVKITPRO`, Python 3, `clang-format`, and `cppcheck` in addition to the normal target build prerequisites.
 Tool paths can be overridden with `CLANG_FORMAT=/path/to/clang-format` and `CPPCHECK=/path/to/cppcheck`.

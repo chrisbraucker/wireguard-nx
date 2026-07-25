@@ -15,6 +15,9 @@ SOURCE_ROOTS = ("src", "test/host", "test/fuzz")
 VENDORED_SOURCES = {
     pathlib.PurePosixPath("src/wireguard/crypto/monocypher.c"),
     pathlib.PurePosixPath("src/wireguard/crypto/monocypher.h"),
+    pathlib.PurePosixPath("src/wireguard/crypto/third_party/blake2/blake2-impl.h"),
+    pathlib.PurePosixPath("src/wireguard/crypto/third_party/blake2/blake2.h"),
+    pathlib.PurePosixPath("src/wireguard/crypto/third_party/blake2/blake2s-ref.c"),
 }
 
 

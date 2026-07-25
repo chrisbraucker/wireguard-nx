@@ -2,15 +2,22 @@
 
 namespace wgnx::wireguard {
 
-const char *GetQueueDispositionName(QueueDisposition disposition) {
+const char* GetQueueDispositionName(QueueDisposition disposition) {
     switch (disposition) {
-        case QueueDisposition::Delivered: return "delivered";
-        case QueueDisposition::Sent: return "sent";
-        case QueueDisposition::Stale: return "stale";
-        case QueueDisposition::Unavailable: return "unavailable";
-        case QueueDisposition::SendFailed: return "send_failed";
-        case QueueDisposition::RetryExhausted: return "retry_exhausted";
-        case QueueDisposition::Cleared: return "cleared";
+    case QueueDisposition::Delivered:
+        return "delivered";
+    case QueueDisposition::Sent:
+        return "sent";
+    case QueueDisposition::Stale:
+        return "stale";
+    case QueueDisposition::Unavailable:
+        return "unavailable";
+    case QueueDisposition::SendFailed:
+        return "send_failed";
+    case QueueDisposition::RetryExhausted:
+        return "retry_exhausted";
+    case QueueDisposition::Cleared:
+        return "cleared";
     }
     return "unknown";
 }
@@ -21,10 +28,8 @@ constexpr std::size_t MinimumIpv4HeaderSize = 20;
 constexpr std::size_t Ipv6HeaderSize = 40;
 constexpr std::size_t MaximumPaddingSize = 15;
 
-std::uint16_t LoadBigEndian16(const std::uint8_t *value) {
-    return static_cast<std::uint16_t>(
-        (static_cast<std::uint16_t>(value[0]) << 8U) |
-        static_cast<std::uint16_t>(value[1]));
+std::uint16_t LoadBigEndian16(const std::uint8_t* value) {
+    return static_cast<std::uint16_t>((static_cast<std::uint16_t>(value[0]) << 8U) | static_cast<std::uint16_t>(value[1]));
 }
 
 bool HasValidInternetChecksum(std::span<const std::uint8_t> bytes) {
@@ -66,14 +71,12 @@ std::size_t GetUnpaddedPacketSize(std::span<const std::uint8_t> payload) {
         return 0;
     }
     switch (static_cast<InnerIpVersion>(payload[0] >> 4U)) {
-        case InnerIpVersion::Ipv4:
-            return payload.size() >= 4 ? LoadBigEndian16(payload.data() + 2) : 0;
-        case InnerIpVersion::Ipv6:
-            return payload.size() >= Ipv6HeaderSize
-                ? Ipv6HeaderSize + LoadBigEndian16(payload.data() + 4)
-                : 0;
-        case InnerIpVersion::Unknown:
-            return 0;
+    case InnerIpVersion::Ipv4:
+        return payload.size() >= 4 ? LoadBigEndian16(payload.data() + 2) : 0;
+    case InnerIpVersion::Ipv6:
+        return payload.size() >= Ipv6HeaderSize ? Ipv6HeaderSize + LoadBigEndian16(payload.data() + 4) : 0;
+    case InnerIpVersion::Unknown:
+        return 0;
     }
     return 0;
 }
@@ -105,9 +108,7 @@ InnerIpv4ValidationError ValidateInnerIpv4Packet(std::span<const std::uint8_t> p
     return InnerIpv4ValidationError::None;
 }
 
-InnerIpValidationError ValidateInnerIpPacket(
-    std::span<const std::uint8_t> packet,
-    InnerIpVersion *out_version) {
+InnerIpValidationError ValidateInnerIpPacket(std::span<const std::uint8_t> packet, InnerIpVersion* out_version) {
     if (out_version != nullptr) {
         *out_version = InnerIpVersion::Unknown;
     }
@@ -118,14 +119,14 @@ InnerIpValidationError ValidateInnerIpPacket(
     const auto version = static_cast<InnerIpVersion>(packet[0] >> 4U);
     InnerIpv4ValidationError result = InnerIpv4ValidationError::InvalidVersion;
     switch (version) {
-        case InnerIpVersion::Ipv4:
-            result = ValidateInnerIpv4Packet(packet);
-            break;
-        case InnerIpVersion::Ipv6:
-            result = ValidateInnerIpv6Packet(packet);
-            break;
-        case InnerIpVersion::Unknown:
-            break;
+    case InnerIpVersion::Ipv4:
+        result = ValidateInnerIpv4Packet(packet);
+        break;
+    case InnerIpVersion::Ipv6:
+        result = ValidateInnerIpv6Packet(packet);
+        break;
+    case InnerIpVersion::Unknown:
+        break;
     }
     if (result == InnerIpv4ValidationError::None && out_version != nullptr) {
         *out_version = version;
@@ -133,11 +134,7 @@ InnerIpValidationError ValidateInnerIpPacket(
     return result;
 }
 
-InnerIpv4ValidationError ValidatePaddedInnerIpv4Packet(
-    std::span<const std::uint8_t> payload,
-    std::size_t *out_packet_size) {
-    constexpr std::size_t MinimumIpv4HeaderSize = 20;
-    constexpr std::size_t MaximumPaddingSize = 15;
+InnerIpv4ValidationError ValidatePaddedInnerIpv4Packet(std::span<const std::uint8_t> payload, std::size_t* out_packet_size) {
     if (out_packet_size == nullptr) {
         return InnerIpv4ValidationError::LengthMismatch;
     }
@@ -177,10 +174,8 @@ InnerIpv4ValidationError ValidatePaddedInnerIpv4Packet(
     return InnerIpv4ValidationError::None;
 }
 
-InnerIpValidationError ValidatePaddedInnerIpPacket(
-    std::span<const std::uint8_t> payload,
-    std::size_t *out_packet_size,
-    InnerIpVersion *out_version) {
+InnerIpValidationError ValidatePaddedInnerIpPacket(std::span<const std::uint8_t> payload, std::size_t* out_packet_size,
+                                                   InnerIpVersion* out_version) {
     if (out_packet_size == nullptr) {
         return InnerIpv4ValidationError::LengthMismatch;
     }
@@ -193,20 +188,20 @@ InnerIpValidationError ValidatePaddedInnerIpPacket(
     }
 
     switch (static_cast<InnerIpVersion>(payload[0] >> 4U)) {
-        case InnerIpVersion::Ipv4:
-            if (payload.size() < MinimumIpv4HeaderSize) {
-                return InnerIpValidationError::TooShort;
-            }
-            break;
-        case InnerIpVersion::Ipv6:
-            if (payload.size() < Ipv6HeaderSize) {
-                return InnerIpValidationError::TooShort;
-            }
-            break;
-        case InnerIpVersion::Unknown:
-            return InnerIpValidationError::InvalidVersion;
-        default:
-            return InnerIpValidationError::InvalidVersion;
+    case InnerIpVersion::Ipv4:
+        if (payload.size() < MinimumIpv4HeaderSize) {
+            return InnerIpValidationError::TooShort;
+        }
+        break;
+    case InnerIpVersion::Ipv6:
+        if (payload.size() < Ipv6HeaderSize) {
+            return InnerIpValidationError::TooShort;
+        }
+        break;
+    case InnerIpVersion::Unknown:
+        return InnerIpValidationError::InvalidVersion;
+    default:
+        return InnerIpValidationError::InvalidVersion;
     }
 
     const std::size_t packet_size = GetUnpaddedPacketSize(payload);
@@ -236,24 +231,24 @@ InnerIpValidationError ValidatePaddedInnerIpPacket(
     return InnerIpv4ValidationError::None;
 }
 
-const char *GetInnerIpValidationErrorName(InnerIpValidationError error) {
+const char* GetInnerIpValidationErrorName(InnerIpValidationError error) {
     switch (error) {
-        case InnerIpv4ValidationError::None:
-            return "none";
-        case InnerIpv4ValidationError::TooShort:
-            return "too_short";
-        case InnerIpv4ValidationError::TooLarge:
-            return "too_large";
-        case InnerIpv4ValidationError::InvalidVersion:
-            return "invalid_version";
-        case InnerIpv4ValidationError::InvalidHeaderLength:
-            return "invalid_header_length";
-        case InnerIpv4ValidationError::LengthMismatch:
-            return "length_mismatch";
-        case InnerIpv4ValidationError::InvalidHeaderChecksum:
-            return "invalid_header_checksum";
-        case InnerIpv4ValidationError::InvalidPadding:
-            return "invalid_padding";
+    case InnerIpv4ValidationError::None:
+        return "none";
+    case InnerIpv4ValidationError::TooShort:
+        return "too_short";
+    case InnerIpv4ValidationError::TooLarge:
+        return "too_large";
+    case InnerIpv4ValidationError::InvalidVersion:
+        return "invalid_version";
+    case InnerIpv4ValidationError::InvalidHeaderLength:
+        return "invalid_header_length";
+    case InnerIpv4ValidationError::LengthMismatch:
+        return "length_mismatch";
+    case InnerIpv4ValidationError::InvalidHeaderChecksum:
+        return "invalid_header_checksum";
+    case InnerIpv4ValidationError::InvalidPadding:
+        return "invalid_padding";
     }
 
     return "unknown";

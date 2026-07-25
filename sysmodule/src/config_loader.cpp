@@ -34,8 +34,8 @@ struct ConfigFileCandidate {
 };
 
 struct ConnectionParseContext {
-    wgnx::PeerConfigEntry *out;
-    ConfigParseError *error;
+    wgnx::PeerConfigEntry* out;
+    ConfigParseError* error;
     bool saw_private_key{false};
     bool saw_address{false};
     bool saw_listen_port{false};
@@ -51,7 +51,7 @@ struct ConnectionParseContext {
 constinit std::array<char, MaxConfigBytes + 1> g_config_buffer = {};
 constinit std::array<ConfigFileCandidate, MaxConfigFiles> g_candidates = {};
 
-void SetError(ConfigParseError *error, std::size_t line, const char *message) {
+void SetError(ConfigParseError* error, std::size_t line, const char* message) {
     if (error == nullptr) {
         return;
     }
@@ -60,8 +60,8 @@ void SetError(ConfigParseError *error, std::size_t line, const char *message) {
     std::snprintf(error->message, sizeof(error->message), "%s", message);
 }
 
-template<std::size_t Size>
-bool CopyField(std::array<char, Size> &dst, const char *value, ConfigParseError *error, std::size_t line, const char *field_name) {
+template <std::size_t Size>
+bool CopyField(std::array<char, Size>& dst, const char* value, ConfigParseError* error, std::size_t line, const char* field_name) {
     if (value == nullptr) {
         SetError(error, line, "value is null");
         return false;
@@ -79,7 +79,7 @@ bool CopyField(std::array<char, Size> &dst, const char *value, ConfigParseError 
     return true;
 }
 
-bool ParseUnsignedField(std::uint16_t *out, const char *value, ConfigParseError *error, std::size_t line, const char *field_name) {
+bool ParseUnsignedField(std::uint16_t* out, const char* value, ConfigParseError* error, std::size_t line, const char* field_name) {
     if (out == nullptr) {
         SetError(error, line, "numeric output pointer is null");
         return false;
@@ -89,7 +89,7 @@ bool ParseUnsignedField(std::uint16_t *out, const char *value, ConfigParseError 
         return false;
     }
 
-    char *end = nullptr;
+    char* end = nullptr;
     errno = 0;
     const unsigned long parsed = std::strtoul(value, &end, 10);
     if (errno != 0 || end == value || *end != '\0' || parsed > 0xFFFFul) {
@@ -103,8 +103,8 @@ bool ParseUnsignedField(std::uint16_t *out, const char *value, ConfigParseError 
     return true;
 }
 
-int HandleConnectionConfig(void *user_ctx, const char *section, const char *name, const char *value) {
-    auto *ctx = static_cast<ConnectionParseContext *>(user_ctx);
+int HandleConnectionConfig(void* user_ctx, const char* section, const char* name, const char* value) {
+    auto* ctx = static_cast<ConnectionParseContext*>(user_ctx);
     if (ctx == nullptr || ctx->out == nullptr) {
         return 0;
     }
@@ -268,7 +268,7 @@ int HandleConnectionConfig(void *user_ctx, const char *section, const char *name
     return 1;
 }
 
-bool ValidateSectionLayout(const char *text, ConfigParseError *error) {
+bool ValidateSectionLayout(const char* text, ConfigParseError* error) {
     if (text == nullptr) {
         SetError(error, 0, "config text is null");
         return false;
@@ -276,16 +276,13 @@ bool ValidateSectionLayout(const char *text, ConfigParseError *error) {
 
     const ConfigLayoutValidation validation = ValidateConnectionConfigLayout(text);
     if (!validation.IsValid()) {
-        SetError(
-            error,
-            validation.line,
-            GetConfigLayoutErrorMessage(validation.error));
+        SetError(error, validation.line, GetConfigLayoutErrorMessage(validation.error));
         return false;
     }
     return true;
 }
 
-bool HasConfSuffix(const char *name) {
+bool HasConfSuffix(const char* name) {
     if (name == nullptr) {
         return false;
     }
@@ -294,7 +291,7 @@ bool HasConfSuffix(const char *name) {
     return length > 5 && std::strcmp(name + length - 5, ".conf") == 0;
 }
 
-bool ExtractPeerName(char *out_name, std::size_t out_name_size, const char *file_name) {
+bool ExtractPeerName(char* out_name, std::size_t out_name_size, const char* file_name) {
     if (out_name == nullptr || out_name_size == 0 || file_name == nullptr) {
         return false;
     }
@@ -314,7 +311,7 @@ bool ExtractPeerName(char *out_name, std::size_t out_name_size, const char *file
     return true;
 }
 
-bool BuildConfigPath(char *out_path, std::size_t out_path_size, const char *file_name) {
+bool BuildConfigPath(char* out_path, std::size_t out_path_size, const char* file_name) {
     if (out_path == nullptr || out_path_size == 0 || file_name == nullptr) {
         return false;
     }
@@ -323,7 +320,7 @@ bool BuildConfigPath(char *out_path, std::size_t out_path_size, const char *file
     return written > 0 && static_cast<std::size_t>(written) < out_path_size;
 }
 
-bool LoadConnectionFile(wgnx::PeerConfigEntry *out, const ConfigFileCandidate &candidate) {
+bool LoadConnectionFile(wgnx::PeerConfigEntry* out, const ConfigFileCandidate& candidate) {
     if (out == nullptr) {
         return false;
     }
@@ -395,16 +392,13 @@ bool LoadConnectionFile(wgnx::PeerConfigEntry *out, const ConfigFileCandidate &c
     }
 
     std::snprintf(out->name.data(), out->name.size(), "%s", candidate.peer_name);
-    logger::Log(
-        "Loaded connection '%s' from '%s'",
-        out->name.data(),
-        resolved_path.data());
+    logger::Log("Loaded connection '%s' from '%s'", out->name.data(), resolved_path.data());
     return true;
 }
 
 } // namespace
 
-bool LoadPeerConfig(wgnx::PeerConfigSet *out) {
+bool LoadPeerConfig(wgnx::PeerConfigSet* out) {
     if (out == nullptr) {
         return false;
     }
@@ -434,7 +428,9 @@ bool LoadPeerConfig(wgnx::PeerConfigSet *out) {
         logger::Log("Config directory '%s' could not be opened: rc=0x%08x", config_dir_path.data(), static_cast<u32>(open_rc.GetValue()));
         return false;
     }
-    ON_SCOPE_EXIT { ams::fs::CloseDirectory(dir); };
+    ON_SCOPE_EXIT {
+        ams::fs::CloseDirectory(dir);
+    };
 
     std::size_t candidate_count = 0;
     std::size_t skipped_count = 0;
@@ -463,7 +459,7 @@ bool LoadPeerConfig(wgnx::PeerConfigSet *out) {
             continue;
         }
 
-        auto &candidate = g_candidates[candidate_count];
+        auto& candidate = g_candidates[candidate_count];
         std::snprintf(candidate.file_name, sizeof(candidate.file_name), "%s", entry.name);
         if (!ExtractPeerName(candidate.peer_name, sizeof(candidate.peer_name), candidate.file_name)) {
             ++skipped_count;
@@ -498,7 +494,7 @@ bool LoadPeerConfig(wgnx::PeerConfigSet *out) {
     return true;
 }
 
-bool LoadAutoStartPeerName(char *out_name, std::size_t out_name_size) {
+bool LoadAutoStartPeerName(char* out_name, std::size_t out_name_size) {
     if (out_name == nullptr || out_name_size == 0) {
         return false;
     }
@@ -542,7 +538,7 @@ bool LoadAutoStartPeerName(char *out_name, std::size_t out_name_size) {
     return true;
 }
 
-ams::Result StoreAutoStartPeerName(const char *name) {
+ams::Result StoreAutoStartPeerName(const char* name) {
     R_TRY(fs_runtime::EnsureDirectoryExists("/config"));
     R_TRY(fs_runtime::EnsureDirectoryExists(wgnx::ConfigPath));
 

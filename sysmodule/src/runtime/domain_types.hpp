@@ -7,21 +7,24 @@
 
 namespace wgnx::sysmodule::runtime {
 
-template<typename Tag, std::unsigned_integral Representation>
-class DomainId {
-public:
+template <typename Tag, std::unsigned_integral Representation> class DomainId {
+  public:
     using representation_type = Representation;
 
     constexpr DomainId() = default;
     explicit constexpr DomainId(Representation value) : m_value(value) {}
 
-    constexpr Representation Value() const { return m_value; }
-    constexpr bool IsZero() const { return m_value == 0; }
+    constexpr Representation Value() const {
+        return m_value;
+    }
+    constexpr bool IsZero() const {
+        return m_value == 0;
+    }
 
     friend constexpr bool operator==(DomainId, DomainId) = default;
     friend constexpr auto operator<=>(DomainId, DomainId) = default;
 
-private:
+  private:
     Representation m_value{0};
 };
 
@@ -45,30 +48,18 @@ using PacketId = DomainId<PacketIdTag, std::uint64_t>;
 using ProcessId = DomainId<ProcessIdTag, std::uint64_t>;
 using AutoStartRequestGeneration = DomainId<AutoStartRequestGenerationTag, std::uint32_t>;
 
-template<typename Id>
-concept DomainIdentity =
-    std::same_as<Id, PeerIndex> ||
-    std::same_as<Id, ActivationGeneration> ||
-    std::same_as<Id, PathRequestGeneration> ||
-    std::same_as<Id, SocketGeneration> ||
-    std::same_as<Id, DatagramGeneration> ||
-    std::same_as<Id, PacketGeneration> ||
-    std::same_as<Id, PacketId> ||
-    std::same_as<Id, ProcessId> ||
-    std::same_as<Id, AutoStartRequestGeneration>;
+template <typename Id>
+concept DomainIdentity = std::same_as<Id, PeerIndex> || std::same_as<Id, ActivationGeneration> || std::same_as<Id, PathRequestGeneration> ||
+                         std::same_as<Id, SocketGeneration> || std::same_as<Id, DatagramGeneration> || std::same_as<Id, PacketGeneration> ||
+                         std::same_as<Id, PacketId> || std::same_as<Id, ProcessId> || std::same_as<Id, AutoStartRequestGeneration>;
 
-template<typename Id>
+template <typename Id>
 concept MonotonicIdentity =
-    std::same_as<Id, ActivationGeneration> ||
-    std::same_as<Id, PathRequestGeneration> ||
-    std::same_as<Id, SocketGeneration> ||
-    std::same_as<Id, DatagramGeneration> ||
-    std::same_as<Id, PacketGeneration> ||
-    std::same_as<Id, PacketId> ||
+    std::same_as<Id, ActivationGeneration> || std::same_as<Id, PathRequestGeneration> || std::same_as<Id, SocketGeneration> ||
+    std::same_as<Id, DatagramGeneration> || std::same_as<Id, PacketGeneration> || std::same_as<Id, PacketId> ||
     std::same_as<Id, AutoStartRequestGeneration>;
 
-template<MonotonicIdentity Id>
-constexpr Id AllocateGeneration(Id &next) {
+template <MonotonicIdentity Id> constexpr Id AllocateGeneration(Id& next) {
     using Representation = typename Id::representation_type;
     const Id allocated = next;
     Representation following = static_cast<Representation>(next.Value() + 1);

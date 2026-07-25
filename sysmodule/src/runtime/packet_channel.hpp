@@ -9,11 +9,12 @@
 namespace wgnx::sysmodule::runtime {
 
 class PacketChannel final : public PacketTransport {
-public:
-    static constexpr std::size_t ReceiveCapacity =
-        wgnx::resource_budget::PacketQueueSlots;
+  public:
+    static constexpr std::size_t ReceiveCapacity = wgnx::resource_budget::PacketQueueSlots;
 
-    ProcessId ConsumerId() const override { return m_owner_process_id; }
+    ProcessId ConsumerId() const override {
+        return m_owner_process_id;
+    }
     bool AcceptsDelivery(wireguard::InnerIpVersion version) const override {
         return version == wireguard::InnerIpVersion::Ipv4;
     }
@@ -36,18 +37,15 @@ public:
         return discarded;
     }
 
-    wireguard::QueuePushResult PushReceived(
-        const wireguard::InnerPacketRecord &record) override {
+    wireguard::QueuePushResult PushReceived(const wireguard::InnerPacketRecord& record) override {
         return m_received.Push(record);
     }
 
-    const wireguard::InnerPacketRecord *FrontReceived() const override {
+    const wireguard::InnerPacketRecord* FrontReceived() const override {
         return m_received.Front();
     }
 
-    bool PopReceived(
-        wireguard::InnerPacketRecord *out,
-        wireguard::QueueDisposition disposition) override {
+    bool PopReceived(wireguard::InnerPacketRecord* out, wireguard::QueueDisposition disposition) override {
         return m_received.Pop(out, disposition);
     }
 
@@ -55,19 +53,21 @@ public:
         return m_received.Clear(wireguard::QueueDisposition::Cleared);
     }
 
-    std::size_t ReceivedSize() const override { return m_received.Size(); }
-    std::size_t ReceivedCapacity() const override { return ReceiveCapacity; }
-    const wireguard::QueueStatistics &Statistics() const override {
+    std::size_t ReceivedSize() const override {
+        return m_received.Size();
+    }
+    std::size_t ReceivedCapacity() const override {
+        return ReceiveCapacity;
+    }
+    const wireguard::QueueStatistics& Statistics() const override {
         return m_received.Statistics();
     }
 
-private:
+  private:
     wireguard::InnerPacketQueue<ReceiveCapacity> m_received{};
     ProcessId m_owner_process_id{};
 };
 
-static_assert(
-    sizeof(PacketChannel) <=
-    wgnx::resource_budget::MaximumPacketChannelBytes);
+static_assert(sizeof(PacketChannel) <= wgnx::resource_budget::MaximumPacketChannelBytes);
 
 } // namespace wgnx::sysmodule::runtime
