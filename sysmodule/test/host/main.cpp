@@ -10,18 +10,16 @@ int main() {
     using wgnx::test::TestCase;
 
     const std::array tests = {
-        TestCase{"legacy.message-boundaries", [](wgnx::test::TestContext &context) {
-            WGNX_TEST_CHECK(context, wgnx::wireguard::RunMessageSelfTest());
-        }},
-        TestCase{"legacy.crypto-smoke", [](wgnx::test::TestContext &context) {
-            WGNX_TEST_CHECK(context, wgnx::wireguard::RunPrimitiveSelfTest());
-        }},
-        TestCase{"legacy.core-smoke", [](wgnx::test::TestContext &context) {
-            WGNX_TEST_CHECK(context, wgnx::wireguard::RunCoreSelfTest());
-        }},
+        TestCase{"legacy.message-boundaries",
+                 [](wgnx::test::TestContext& context) { WGNX_TEST_CHECK(context, wgnx::wireguard::RunMessageSelfTest()); }},
+        TestCase{"legacy.crypto-smoke",
+                 [](wgnx::test::TestContext& context) { WGNX_TEST_CHECK(context, wgnx::wireguard::RunPrimitiveSelfTest()); }},
+        TestCase{"legacy.core-smoke",
+                 [](wgnx::test::TestContext& context) { WGNX_TEST_CHECK(context, wgnx::wireguard::RunCoreSelfTest()); }},
         TestCase{"platform.network-path-classification", wgnx::test::TestNetworkPathClassification},
         TestCase{"platform.udp-receive-classification", wgnx::test::TestUdpReceiveClassification},
         TestCase{"platform.workqueue-admission", wgnx::test::TestWorkqueueAdmission},
+        TestCase{"platform.resolver-serialization", wgnx::test::TestResolverSerialization},
         TestCase{"protocol.deterministic-handshake", wgnx::test::TestDeterministicHandshake},
         TestCase{"protocol.handshake-initiation-admission", wgnx::test::TestHandshakeInitiationAdmission},
         TestCase{"protocol.bidirectional-transport", wgnx::test::TestBidirectionalTransport},

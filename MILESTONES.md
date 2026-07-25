@@ -407,9 +407,37 @@ test baseline.
   `sysmodule/src/wireguard/crypto/third_party/blake2/UPSTREAM.md`.
 - The wrapper accepts only byte spans, rejects invalid state transitions and
   unsupported output/key sizes, and clears retained reference state after use.
-- This closes the local BLAKE2s provenance and API-lifecycle gap. Typed
-  handshake KDF ownership, resolver parsing, and the remaining primitive audit
-  remain Milestone 8 work.
+- The project-facing crypto façade now exposes fixed-size keys, tags, nonces,
+  and digest arrays plus spans. Raw pointer calls are confined to the backend
+  bridge in `primitives.cpp`; obsolete block/XOR/Poly1305 production wrappers
+  are internal self-test adapters only.
+- WireGuard HMAC/KDF now operates on typed 32-byte Noise values, has no
+  caller-provided copy length, and propagates failures through handshake
+  creation and consumption. Scoped sensitive buffers scrub ephemeral DH,
+  transcript, timestamp, cookie, and KDF material on every exit path. The
+  handshake initialization cache is a thread-safe function-local static.
+- Horizon resolver results now use an endian-aware wire reader/writer in
+  `platform/resolver_serialization.*`, with documented 20.5.0 ABI assumptions,
+  checked record arithmetic, declared-sockaddr-length and family minimums,
+  whole-reply validation before endpoint acceptance, deterministic malformed
+  record coverage, and a libFuzzer target. The request serializer has a fixed
+  output type and the parser writes its endpoint by reference, so neither API
+  exposes nullable output pointers or caller-managed wire lengths.
+- The primitive suite now includes authoritative keyed/unkeyed BLAKE2s,
+  truncated and block-boundary digest cases, BLAKE2s-HMAC and Noise KDF output
+  vectors, AEAD authentication rejection, and low-order X25519 rejection.
+  Authenticated decryption clears its plaintext output on failure, preventing
+  unauthenticated bytes from escaping the primitive boundary.
+  Resolver coverage includes IPv4 and IPv6 records plus malformed boundaries;
+  libFuzzer writes discoveries to `out/fuzz/`, never the checked-in seed corpus.
+  The full host suite, ASan/UBSan, target build, and short fuzz matrix pass
+  locally.
+- Monocypher remains the intentional low-level C backend. Its provenance,
+  retention rationale, and refresh procedure are recorded in
+  `sysmodule/src/wireguard/crypto/UPSTREAM.md`.
+- Local validation is complete for the hardening changes. A focused real-peer
+  device regression remains required before Milestone 8 can claim its final
+  interoperability definition of done.
 
 ### Scope
 

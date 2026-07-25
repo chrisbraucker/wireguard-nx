@@ -11,8 +11,6 @@
 #include <string_view>
 #include <sys/socket.h>
 
-#include <algorithm>
-
 #include <stratosphere.hpp>
 #include <switch/runtime/resolver.h>
 
@@ -22,29 +20,18 @@ extern "C" {
 
 #include "logger.hpp"
 #include "platform/endpoint_parser.hpp"
+#include "platform/resolver_serialization.hpp"
 #include "wgnx/resource_budget.hpp"
 
 namespace wgnx::platform {
 
 namespace {
 
-constexpr inline std::size_t ResolverAddrInfoBufferSize =
-    wgnx::resource_budget::ResolverScratchBytes;
+constexpr inline std::size_t ResolverAddrInfoBufferSize = wgnx::resource_budget::ResolverScratchBytes;
 
 constinit std::uint8_t g_resolver_addrinfo_buffer[ResolverAddrInfoBufferSize] = {};
 
-struct AddrInfoSerializedHeader {
-    std::uint32_t magic;
-    int ai_flags;
-    int ai_family;
-    int ai_socktype;
-    int ai_protocol;
-    std::uint32_t ai_addrlen;
-};
-
-constexpr inline std::uint32_t AddrInfoMagic = 0xBEEFCAFEu;
-
-bool IsNumericHost(const char *host) {
+bool IsNumericHost(const char* host) {
     if (host == nullptr || host[0] == '\0') {
         return false;
     }
@@ -58,104 +45,11 @@ bool IsNumericHost(const char *host) {
     return ::inet_pton(AF_INET6, host, std::addressof(addr6)) == 1;
 }
 
-bool StoreResolvedText(endpoint_resolution_result *out) {
+bool StoreResolvedText(endpoint_resolution_result* out) {
     return out != nullptr && endpoint_to_string(out->resolved, out->text);
 }
 
-size_t SerializeHints(const addrinfo &hints, std::uint8_t *buffer, std::size_t buffer_size) {
-    if (buffer == nullptr || buffer_size < sizeof(AddrInfoSerializedHeader) + sizeof(std::uint32_t) + 1 + sizeof(std::uint32_t)) {
-        return 0;
-    }
-
-    AddrInfoSerializedHeader header = {};
-    header.magic = htonl(AddrInfoMagic);
-    header.ai_flags = htonl(hints.ai_flags);
-    header.ai_family = htonl(hints.ai_family);
-    header.ai_socktype = htonl(hints.ai_socktype);
-    header.ai_protocol = htonl(hints.ai_protocol);
-    header.ai_addrlen = 0;
-
-    std::uint8_t *out = buffer;
-    std::memcpy(out, std::addressof(header), sizeof(header));
-    out += sizeof(header);
-
-    *reinterpret_cast<std::uint32_t *>(out) = 0;
-    out += sizeof(std::uint32_t);
-    *out++ = '\0';
-    *reinterpret_cast<std::uint32_t *>(out) = 0;
-    out += sizeof(std::uint32_t);
-
-    return static_cast<std::size_t>(out - buffer);
-}
-
-bool ParseSerializedResult(endpoint_resolution_result *out, const void *buffer, std::size_t buffer_size) {
-    if (out == nullptr || buffer == nullptr || buffer_size < sizeof(AddrInfoSerializedHeader)) {
-        return false;
-    }
-
-    const auto *cursor = static_cast<const std::uint8_t *>(buffer);
-    const auto *end = cursor + buffer_size;
-
-    while (cursor + sizeof(AddrInfoSerializedHeader) <= end) {
-        const auto *header = reinterpret_cast<const AddrInfoSerializedHeader *>(cursor);
-        if (ntohl(header->magic) != AddrInfoMagic) {
-            break;
-        }
-
-        const int family = ntohl(header->ai_family);
-        std::size_t addr_length = ntohl(header->ai_addrlen);
-        if (addr_length == 0) {
-            addr_length = sizeof(std::uint32_t);
-        }
-
-        const char *canon_name = reinterpret_cast<const char *>(cursor + sizeof(AddrInfoSerializedHeader) + addr_length);
-        if (cursor + sizeof(AddrInfoSerializedHeader) + addr_length > end || canon_name >= reinterpret_cast<const char *>(end)) {
-            break;
-        }
-
-        const std::size_t canon_length = static_cast<std::size_t>(ams::util::Strnlen(
-            canon_name,
-            static_cast<int>(reinterpret_cast<const char *>(end) - canon_name))) + 1;
-        const std::size_t total_length = sizeof(AddrInfoSerializedHeader) + addr_length + canon_length;
-        if (cursor + total_length > end) {
-            break;
-        }
-
-        if (family == AF_INET) {
-            sockaddr_in addr = {};
-            std::memcpy(std::addressof(addr), cursor + sizeof(AddrInfoSerializedHeader), std::min(addr_length, sizeof(addr)));
-            addr.sin_len = sizeof(addr);
-            addr.sin_port = ntohs(addr.sin_port);
-            addr.sin_addr.s_addr = ntohl(addr.sin_addr.s_addr);
-            out->resolved = {};
-            if (wgnx::sysmodule::platform::horizon::internal::EncodeEndpointFromSockaddr(
-                    std::addressof(out->resolved), reinterpret_cast<const sockaddr *>(std::addressof(addr)))) {
-                return StoreResolvedText(out);
-            }
-            return false;
-        }
-
-        if (family == AF_INET6) {
-            sockaddr_in6 addr = {};
-            std::memcpy(std::addressof(addr), cursor + sizeof(AddrInfoSerializedHeader), std::min(addr_length, sizeof(addr)));
-            addr.sin6_port = ntohs(addr.sin6_port);
-            addr.sin6_flowinfo = ntohl(addr.sin6_flowinfo);
-            addr.sin6_scope_id = ntohl(addr.sin6_scope_id);
-            out->resolved = {};
-            if (wgnx::sysmodule::platform::horizon::internal::EncodeEndpointFromSockaddr(
-                    std::addressof(out->resolved), reinterpret_cast<const sockaddr *>(std::addressof(addr)))) {
-                return StoreResolvedText(out);
-            }
-            return false;
-        }
-
-        cursor += total_length;
-    }
-
-    return false;
-}
-
-bool ResolveNumericEndpoint(const EndpointTextParts &parts, endpoint_resolution_result *out) {
+bool ResolveNumericEndpoint(const EndpointTextParts& parts, endpoint_resolution_result* out) {
     if (out == nullptr) {
         return false;
     }
@@ -187,8 +81,7 @@ endpoint_resolution_result resolve_endpoint(std::string_view configured_endpoint
     endpoint_resolution_result result{};
 
     EndpointTextParts parts = {};
-    if (!ParseEndpointText(configured_endpoint, std::addressof(parts)) ||
-        !ParseEndpointPort(parts.service.data())) {
+    if (!ParseEndpointText(configured_endpoint, std::addressof(parts)) || !ParseEndpointPort(parts.service.data())) {
         result.error_stage = wgnx::PeerErrorStage::ResolveEndpoint;
         result.error_code = wgnx::PeerErrorCode::EndpointMalformed;
         return result;
@@ -219,9 +112,9 @@ endpoint_resolution_result resolve_endpoint(std::string_view configured_endpoint
     hints.ai_protocol = IPPROTO_UDP;
     hints.ai_flags = AI_NUMERICSERV;
 
-    std::uint8_t hints_buffer[64] = {};
-    const size_t hints_size = SerializeHints(hints, hints_buffer, sizeof(hints_buffer));
-    if (hints_size == 0) {
+    resolver_serialization::HorizonAddrInfoHints hints_buffer{};
+    if (!resolver_serialization::serialize_horizon_addrinfo_hints(hints_buffer, hints.ai_flags, hints.ai_family, hints.ai_socktype,
+                                                                  hints.ai_protocol)) {
         result.error_stage = wgnx::PeerErrorStage::ResolveEndpoint;
         result.error_code = wgnx::PeerErrorCode::EndpointResolutionFailed;
         return result;
@@ -230,43 +123,39 @@ endpoint_resolution_result resolve_endpoint(std::string_view configured_endpoint
     std::uint32_t remote_errno = 0;
     std::uint32_t serialized_size = 0;
     s32 remote_ret = 0;
-    const Result resolver_rc = sfdnsresGetAddrInfoRequest(
-        resolverGetCancelHandle(),
-        resolverGetEnableServiceDiscovery(),
-        parts.host.data(),
-        parts.service.data(),
-        hints_buffer,
-        hints_size,
-        g_resolver_addrinfo_buffer,
-        sizeof(g_resolver_addrinfo_buffer),
-        std::addressof(remote_errno),
-        std::addressof(remote_ret),
-        std::addressof(serialized_size));
+    const Result resolver_rc =
+        sfdnsresGetAddrInfoRequest(resolverGetCancelHandle(), resolverGetEnableServiceDiscovery(), parts.host.data(), parts.service.data(),
+                                   hints_buffer.data(), hints_buffer.size(), g_resolver_addrinfo_buffer, sizeof(g_resolver_addrinfo_buffer),
+                                   std::addressof(remote_errno), std::addressof(remote_ret), std::addressof(serialized_size));
 
     if (R_FAILED(resolver_rc) || remote_ret != 0) {
         wgnx::sysmodule::logger::Log("sfdnsresGetAddrInfoRequest failed for '%s:%s': resolver_rc=0x%08x ret=%d errno=%u serialized_size=%u",
-            parts.host.data(), parts.service.data(), static_cast<u32>(resolver_rc), remote_ret, remote_errno, serialized_size);
+                                     parts.host.data(), parts.service.data(), static_cast<u32>(resolver_rc), remote_ret, remote_errno,
+                                     serialized_size);
         result.error_stage = wgnx::PeerErrorStage::ResolveEndpoint;
         result.error_code = wgnx::PeerErrorCode::EndpointResolutionFailed;
         return result;
     }
 
     if (serialized_size == 0 || serialized_size > sizeof(g_resolver_addrinfo_buffer)) {
-        wgnx::sysmodule::logger::Log("resolver returned invalid serialized size for '%s:%s': size=%u capacity=%zu",
-            parts.host.data(), parts.service.data(), serialized_size, sizeof(g_resolver_addrinfo_buffer));
+        wgnx::sysmodule::logger::Log("resolver returned invalid serialized size for '%s:%s': size=%u capacity=%zu", parts.host.data(),
+                                     parts.service.data(), serialized_size, sizeof(g_resolver_addrinfo_buffer));
         result.error_stage = wgnx::PeerErrorStage::ResolveEndpoint;
         result.error_code = wgnx::PeerErrorCode::EndpointResolutionFailed;
         return result;
     }
 
-    if (ParseSerializedResult(std::addressof(result), g_resolver_addrinfo_buffer, serialized_size)) {
+    if (resolver_serialization::parse_horizon_addrinfo_result(std::span{g_resolver_addrinfo_buffer}.first(serialized_size),
+                                                              result.resolved) &&
+        StoreResolvedText(std::addressof(result))) {
         result.success = true;
         result.error_stage = wgnx::PeerErrorStage::None;
         result.error_code = wgnx::PeerErrorCode::None;
     }
 
     if (!result.success) {
-        wgnx::sysmodule::logger::Log("resolver returned no usable AF_INET/AF_INET6 result for '%s:%s'", parts.host.data(), parts.service.data());
+        wgnx::sysmodule::logger::Log("resolver returned no usable AF_INET/AF_INET6 result for '%s:%s'", parts.host.data(),
+                                     parts.service.data());
         result.error_stage = wgnx::PeerErrorStage::ResolveEndpoint;
         result.error_code = wgnx::PeerErrorCode::EndpointResolutionFailed;
     }

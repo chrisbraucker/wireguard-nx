@@ -18,102 +18,133 @@ constexpr inline std::size_t Poly1305KeySize = 32;
 constexpr inline std::size_t Poly1305TagSize = 16;
 constexpr inline std::size_t X25519KeySize = 32;
 
-void secure_clear(void *mem, std::size_t size);
-bool secure_equal(const void *lhs, const void *rhs, std::size_t size);
-
 using ByteSpan = std::span<const std::uint8_t>;
 using MutableByteSpan = std::span<std::uint8_t>;
+using Blake2sDigest = std::array<std::uint8_t, Blake2sHashSize>;
+using Blake2sKey = std::array<std::uint8_t, Blake2sKeySize>;
+using ChaCha20Key = std::array<std::uint8_t, ChaCha20KeySize>;
+using ChaCha20Nonce = std::array<std::uint8_t, ChaCha20NonceSize>;
+using XChaCha20Nonce = std::array<std::uint8_t, XChaCha20NonceSize>;
+using Poly1305Tag = std::array<std::uint8_t, Poly1305TagSize>;
+using X25519Key = std::array<std::uint8_t, X25519KeySize>;
+
+void secure_clear(MutableByteSpan bytes);
+void secure_clear(std::span<char> bytes);
+bool secure_equal(ByteSpan lhs, ByteSpan rhs);
+
+template <std::size_t Size> void secure_clear(std::array<std::uint8_t, Size>& bytes) {
+    secure_clear(MutableByteSpan{bytes});
+}
+
+template <std::size_t Size> void secure_clear(std::uint8_t (&bytes)[Size]) {
+    secure_clear(MutableByteSpan{bytes, Size});
+}
+
+template <std::size_t Size> void secure_clear(std::array<char, Size>& bytes) {
+    secure_clear(std::span<char>{bytes});
+}
+
+template <std::size_t Size> bool secure_equal(const std::array<std::uint8_t, Size>& lhs, const std::array<std::uint8_t, Size>& rhs) {
+    return secure_equal(ByteSpan{lhs}, ByteSpan{rhs});
+}
+
+template <std::size_t Size> bool secure_equal(const std::uint8_t (&lhs)[Size], const std::uint8_t (&rhs)[Size]) {
+    return secure_equal(ByteSpan{lhs, Size}, ByteSpan{rhs, Size});
+}
+
+/*
+ * Owns sensitive stack-local material and clears it on every exit path. Long-
+ * lived protocol keys use their dedicated move-only session types instead.
+ */
+template <std::size_t Size> class SensitiveBuffer final {
+  public:
+    SensitiveBuffer() = default;
+    ~SensitiveBuffer() {
+        secure_clear(bytes_);
+    }
+
+    SensitiveBuffer(const SensitiveBuffer&) = delete;
+    SensitiveBuffer& operator=(const SensitiveBuffer&) = delete;
+    SensitiveBuffer(SensitiveBuffer&&) = delete;
+    SensitiveBuffer& operator=(SensitiveBuffer&&) = delete;
+
+    std::array<std::uint8_t, Size>& bytes() {
+        return bytes_;
+    }
+    const std::array<std::uint8_t, Size>& bytes() const {
+        return bytes_;
+    }
+    MutableByteSpan mutable_span() {
+        return bytes_;
+    }
+    ByteSpan span() const {
+        return bytes_;
+    }
+
+  private:
+    std::array<std::uint8_t, Size> bytes_{};
+};
 
 class Blake2sHasher final {
-public:
+  public:
     Blake2sHasher() = default;
     ~Blake2sHasher();
 
-    Blake2sHasher(const Blake2sHasher &) = delete;
-    Blake2sHasher &operator=(const Blake2sHasher &) = delete;
-    Blake2sHasher(Blake2sHasher &&) = delete;
-    Blake2sHasher &operator=(Blake2sHasher &&) = delete;
+    Blake2sHasher(const Blake2sHasher&) = delete;
+    Blake2sHasher& operator=(const Blake2sHasher&) = delete;
+    Blake2sHasher(Blake2sHasher&&) = delete;
+    Blake2sHasher& operator=(Blake2sHasher&&) = delete;
 
-    bool Initialize(std::size_t digest_size, ByteSpan key = {});
+    template <std::size_t DigestSize> bool Initialize(ByteSpan key = {}) {
+        static_assert(DigestSize > 0 && DigestSize <= Blake2sHashSize);
+        return InitializeDigest(DigestSize, key);
+    }
     bool Update(ByteSpan data);
-    bool Final(MutableByteSpan output);
 
-private:
+    template <std::size_t DigestSize> bool Final(std::array<std::uint8_t, DigestSize>& output) {
+        static_assert(DigestSize > 0 && DigestSize <= Blake2sHashSize);
+        const bool ok = FinalDigest(MutableByteSpan{output});
+        if (!ok)
+            secure_clear(output);
+        return ok;
+    }
+
+  private:
     void Reset();
+    bool InitializeDigest(std::size_t digest_size, ByteSpan key);
+    bool FinalDigest(MutableByteSpan output);
 
     static constexpr std::size_t BackendStorageSize = 160;
 
     alignas(std::max_align_t) std::array<std::byte, BackendStorageSize> backend_storage_{};
     std::size_t digest_size_{0};
+    bool backend_constructed_{false};
     bool initialized_{false};
     bool finalized_{false};
 };
 
-bool Blake2sHash(MutableByteSpan output, ByteSpan data, ByteSpan key = {});
+template <std::size_t DigestSize> bool Blake2sHash(std::array<std::uint8_t, DigestSize>& output, ByteSpan data, ByteSpan key = {}) {
+    static_assert(DigestSize > 0 && DigestSize <= Blake2sHashSize);
+    Blake2sHasher hasher{};
+    const bool ok = hasher.Initialize<DigestSize>(key) && hasher.Update(data) && hasher.Final(output);
+    if (!ok)
+        secure_clear(output);
+    return ok;
+}
 
-void chacha20_block(
-    std::uint8_t out[ChaCha20BlockSize],
-    const std::uint8_t key[ChaCha20KeySize],
-    std::uint32_t counter,
-    const std::uint8_t nonce[ChaCha20NonceSize]);
-void chacha20_xor(
-    std::uint8_t *dst,
-    const std::uint8_t *src,
-    std::size_t size,
-    const std::uint8_t key[ChaCha20KeySize],
-    std::uint32_t counter,
-    const std::uint8_t nonce[ChaCha20NonceSize]);
+bool Blake2sHmac(Blake2sDigest& output, ByteSpan key, ByteSpan data);
 
-void poly1305_auth(
-    std::uint8_t tag[Poly1305TagSize],
-    const std::uint8_t *message,
-    std::size_t message_size,
-    const std::uint8_t key[Poly1305KeySize]);
+bool chacha20poly1305_encrypt(MutableByteSpan ciphertext, Poly1305Tag& tag, ByteSpan plaintext, ByteSpan aad, const ChaCha20Key& key,
+                              const ChaCha20Nonce& nonce);
+bool chacha20poly1305_decrypt(MutableByteSpan plaintext, ByteSpan ciphertext, const Poly1305Tag& tag, ByteSpan aad, const ChaCha20Key& key,
+                              const ChaCha20Nonce& nonce);
+bool xchacha20poly1305_encrypt(MutableByteSpan ciphertext, Poly1305Tag& tag, ByteSpan plaintext, ByteSpan aad, const ChaCha20Key& key,
+                               const XChaCha20Nonce& nonce);
+bool xchacha20poly1305_decrypt(MutableByteSpan plaintext, ByteSpan ciphertext, const Poly1305Tag& tag, ByteSpan aad, const ChaCha20Key& key,
+                               const XChaCha20Nonce& nonce);
 
-bool chacha20poly1305_encrypt(
-    std::uint8_t *ciphertext,
-    std::uint8_t tag[Poly1305TagSize],
-    const std::uint8_t *plaintext,
-    std::size_t plaintext_size,
-    const std::uint8_t *aad,
-    std::size_t aad_size,
-    const std::uint8_t key[ChaCha20KeySize],
-    const std::uint8_t nonce[ChaCha20NonceSize]);
-bool chacha20poly1305_decrypt(
-    std::uint8_t *plaintext,
-    const std::uint8_t *ciphertext,
-    std::size_t ciphertext_size,
-    const std::uint8_t tag[Poly1305TagSize],
-    const std::uint8_t *aad,
-    std::size_t aad_size,
-    const std::uint8_t key[ChaCha20KeySize],
-    const std::uint8_t nonce[ChaCha20NonceSize]);
-bool xchacha20poly1305_encrypt(
-    std::uint8_t *ciphertext,
-    std::uint8_t tag[Poly1305TagSize],
-    const std::uint8_t *plaintext,
-    std::size_t plaintext_size,
-    const std::uint8_t *aad,
-    std::size_t aad_size,
-    const std::uint8_t key[ChaCha20KeySize],
-    const std::uint8_t nonce[XChaCha20NonceSize]);
-bool xchacha20poly1305_decrypt(
-    std::uint8_t *plaintext,
-    const std::uint8_t *ciphertext,
-    std::size_t ciphertext_size,
-    const std::uint8_t tag[Poly1305TagSize],
-    const std::uint8_t *aad,
-    std::size_t aad_size,
-    const std::uint8_t key[ChaCha20KeySize],
-    const std::uint8_t nonce[XChaCha20NonceSize]);
-
-bool x25519(
-    std::uint8_t out[X25519KeySize],
-    const std::uint8_t scalar[X25519KeySize],
-    const std::uint8_t point[X25519KeySize]);
-bool x25519_public_key(
-    std::uint8_t out[X25519KeySize],
-    const std::uint8_t private_key[X25519KeySize]);
+bool x25519(X25519Key& out, const X25519Key& scalar, const X25519Key& point);
+bool x25519_public_key(X25519Key& out, const X25519Key& private_key);
 
 bool RunPrimitiveSelfTest();
 

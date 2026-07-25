@@ -57,14 +57,16 @@ HOST_WARNING_TARGET := $(HOST_WARNING_DIR)/wireguard-host-test
 FUZZ_CXX	?= clang++
 FUZZ_DIR	:= $(OUTDIR)/fuzz
 FUZZ_SECONDS	?= 30
-FUZZ_COMMON_FLAGS := -std=c++23 -Wall -Wextra -Wpedantic -Werror -g -O1 \
+FUZZ_COMMON_FLAGS := -std=c++2b -Wall -Wextra -Wpedantic -Werror -g -O1 \
 	-fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer
 FUZZ_CONFIG_ENDPOINT_TARGET := $(FUZZ_DIR)/config_endpoint_fuzz
 FUZZ_MESSAGE_ADMISSION_TARGET := $(FUZZ_DIR)/message_admission_fuzz
 FUZZ_INNER_IP_TARGET := $(FUZZ_DIR)/inner_ip_fuzz
-FUZZ_TARGETS := $(FUZZ_CONFIG_ENDPOINT_TARGET) $(FUZZ_MESSAGE_ADMISSION_TARGET) $(FUZZ_INNER_IP_TARGET)
+FUZZ_RESOLVER_RESULT_TARGET := $(FUZZ_DIR)/resolver_result_fuzz
+FUZZ_TARGETS := $(FUZZ_CONFIG_ENDPOINT_TARGET) $(FUZZ_MESSAGE_ADMISSION_TARGET) $(FUZZ_INNER_IP_TARGET) $(FUZZ_RESOLVER_RESULT_TARGET)
 FUZZ_CORPUS_DIR := $(TOPDIR)/test/fuzz/corpus
 FUZZ_GENERATED_CORPUS_DIR := $(FUZZ_DIR)/corpus
+FUZZ_GENERATED_CONFIG_CORPUS_DIR := $(FUZZ_GENERATED_CORPUS_DIR)/config_endpoint
 FUZZ_SEED_WRITER := $(FUZZ_DIR)/fuzz_seed_writer
 CLANG_FORMAT ?= clang-format
 CPPCHECK ?= cppcheck
@@ -84,6 +86,7 @@ HOST_TEST_CPP_SOURCES := \
 	src/runtime/udp_binding.cpp \
 	src/config_text_validation.cpp \
 	src/platform/endpoint_parser.cpp \
+	src/platform/resolver_serialization.cpp \
 	src/wireguard/messages.cpp \
 	src/wireguard/dispatch.cpp \
 	src/wireguard/index_allocator.cpp \
@@ -140,6 +143,9 @@ FUZZ_MESSAGE_ADMISSION_SOURCES := \
 FUZZ_INNER_IP_SOURCES := \
 	src/wireguard/inner_packet.cpp \
 	test/fuzz/inner_ip_fuzz.cpp
+FUZZ_RESOLVER_RESULT_SOURCES := \
+	src/platform/resolver_serialization.cpp \
+	test/fuzz/resolver_result_fuzz.cpp
 FUZZ_HEADERS := $(shell find $(TOPDIR)/src $(TOPDIR)/../common/include -type f -name '*.hpp')
 
 #---------------------------------------------------------------------------------
@@ -246,12 +252,14 @@ test-warnings: $(HOST_WARNING_TARGET)
 fuzz: $(FUZZ_TARGETS)
 
 fuzz-run: fuzz fuzz-seeds
-	@$(FUZZ_CONFIG_ENDPOINT_TARGET) $(FUZZ_CORPUS_DIR)/config_endpoint -max_total_time=$(FUZZ_SECONDS) -max_len=16384
+	@$(FUZZ_CONFIG_ENDPOINT_TARGET) $(FUZZ_GENERATED_CONFIG_CORPUS_DIR) $(FUZZ_CORPUS_DIR)/config_endpoint -max_total_time=$(FUZZ_SECONDS) -max_len=16384
 	@$(FUZZ_MESSAGE_ADMISSION_TARGET) $(FUZZ_GENERATED_CORPUS_DIR)/message_admission -max_total_time=$(FUZZ_SECONDS) -max_len=66000
 	@$(FUZZ_INNER_IP_TARGET) $(FUZZ_GENERATED_CORPUS_DIR)/inner_ip -max_total_time=$(FUZZ_SECONDS) -max_len=66000
+	@$(FUZZ_RESOLVER_RESULT_TARGET) $(FUZZ_GENERATED_CORPUS_DIR)/resolver_result -max_total_time=$(FUZZ_SECONDS) -max_len=16384
 
 fuzz-seeds: $(FUZZ_SEED_WRITER)
 	@[ -d $(FUZZ_GENERATED_CORPUS_DIR) ] || mkdir -p $(FUZZ_GENERATED_CORPUS_DIR)
+	@[ -d $(FUZZ_GENERATED_CONFIG_CORPUS_DIR) ] || mkdir -p $(FUZZ_GENERATED_CONFIG_CORPUS_DIR)
 	@$(FUZZ_SEED_WRITER) $(FUZZ_GENERATED_CORPUS_DIR)
 
 format-check:
@@ -321,6 +329,11 @@ $(FUZZ_INNER_IP_TARGET): Makefile $(FUZZ_INNER_IP_SOURCES) $(FUZZ_HEADERS)
 	@[ -d $(FUZZ_DIR) ] || mkdir -p $(FUZZ_DIR)
 	@command -v $(FUZZ_CXX) >/dev/null || { echo "missing FUZZ_CXX=$(FUZZ_CXX); install Clang with libFuzzer support or set FUZZ_CXX" >&2; exit 1; }
 	@$(FUZZ_CXX) $(FUZZ_COMMON_FLAGS) $(HOST_TEST_INCLUDES) $(addprefix $(CURDIR)/,$(FUZZ_INNER_IP_SOURCES)) -o $(FUZZ_INNER_IP_TARGET)
+
+$(FUZZ_RESOLVER_RESULT_TARGET): Makefile $(FUZZ_RESOLVER_RESULT_SOURCES) $(FUZZ_HEADERS)
+	@[ -d $(FUZZ_DIR) ] || mkdir -p $(FUZZ_DIR)
+	@command -v $(FUZZ_CXX) >/dev/null || { echo "missing FUZZ_CXX=$(FUZZ_CXX); install Clang with libFuzzer support or set FUZZ_CXX" >&2; exit 1; }
+	@$(FUZZ_CXX) $(FUZZ_COMMON_FLAGS) $(HOST_TEST_INCLUDES) $(addprefix $(CURDIR)/,$(FUZZ_RESOLVER_RESULT_SOURCES)) -o $(FUZZ_RESOLVER_RESULT_TARGET)
 
 libs	:
 	@$(foreach lib,$(LIBNAMES),$(MAKE) --no-print-directory -C $(TOPDIR)/lib/$(lib) && ) true

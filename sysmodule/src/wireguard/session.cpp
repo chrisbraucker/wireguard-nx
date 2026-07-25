@@ -44,15 +44,13 @@ bool IsAllZero(std::span<const std::uint8_t> bytes) {
     return value == 0;
 }
 
-void ClampX25519PrivateKey(std::array<std::uint8_t, NoisePublicKeySize> &bytes) {
+void ClampX25519PrivateKey(std::array<std::uint8_t, NoisePublicKeySize>& bytes) {
     bytes[0] &= 248U;
     bytes[31] &= 127U;
     bytes[31] |= 64U;
 }
 
-bool DecodeWireGuardKey(
-    std::array<std::uint8_t, NoisePublicKeySize> &out,
-    std::string_view text) {
+bool DecodeWireGuardKey(std::array<std::uint8_t, NoisePublicKeySize>& out, std::string_view text) {
     if (text.size() != WireGuardEncodedKeySize || text.back() != '=') {
         return false;
     }
@@ -78,11 +76,8 @@ bool DecodeWireGuardKey(
             return false;
         }
 
-        const std::uint32_t value =
-            (static_cast<std::uint32_t>(a) << 18) |
-            (static_cast<std::uint32_t>(b) << 12) |
-            (static_cast<std::uint32_t>(c < 0 ? 0 : c) << 6) |
-            static_cast<std::uint32_t>(d < 0 ? 0 : d);
+        const std::uint32_t value = (static_cast<std::uint32_t>(a) << 18) | (static_cast<std::uint32_t>(b) << 12) |
+                                    (static_cast<std::uint32_t>(c < 0 ? 0 : c) << 6) | static_cast<std::uint32_t>(d < 0 ? 0 : d);
 
         if (out_index >= NoisePublicKeySize) {
             return false;
@@ -105,9 +100,7 @@ bool DecodeWireGuardKey(
     return out_index == NoisePublicKeySize;
 }
 
-bool EncodeWireGuardKey(
-    std::span<char> out_text,
-    const std::array<std::uint8_t, NoisePublicKeySize> &bytes) {
+bool EncodeWireGuardKey(std::span<char> out_text, const std::array<std::uint8_t, NoisePublicKeySize>& bytes) {
     if (out_text.size() < (WireGuardEncodedKeySize + 1)) {
         return false;
     }
@@ -115,10 +108,9 @@ bool EncodeWireGuardKey(
     std::size_t out_index = 0;
     for (std::size_t i = 0; i < NoisePublicKeySize; i += 3) {
         const int remaining = static_cast<int>(NoisePublicKeySize - i);
-        const std::uint32_t value =
-            (static_cast<std::uint32_t>(bytes[i]) << 16) |
-            (static_cast<std::uint32_t>(remaining > 1 ? bytes[i + 1] : 0) << 8) |
-            static_cast<std::uint32_t>(remaining > 2 ? bytes[i + 2] : 0);
+        const std::uint32_t value = (static_cast<std::uint32_t>(bytes[i]) << 16) |
+                                    (static_cast<std::uint32_t>(remaining > 1 ? bytes[i + 1] : 0) << 8) |
+                                    static_cast<std::uint32_t>(remaining > 2 ? bytes[i + 2] : 0);
 
         out_text[out_index++] = Base64Alphabet[(value >> 18) & 0x3fU];
         out_text[out_index++] = Base64Alphabet[(value >> 12) & 0x3fU];
@@ -134,8 +126,7 @@ bool EncodeWireGuardKey(
 
 namespace {
 
-template <typename Secret>
-void MoveSecret(Secret &destination, Secret &source) {
+template <typename Secret> void MoveSecret(Secret& destination, Secret& source) {
     destination.Clear();
     destination.bytes = source.bytes;
     destination.valid = source.valid;
@@ -148,11 +139,11 @@ noise_private_key::~noise_private_key() {
     Clear();
 }
 
-noise_private_key::noise_private_key(noise_private_key &&other) noexcept {
+noise_private_key::noise_private_key(noise_private_key&& other) noexcept {
     MoveSecret(*this, other);
 }
 
-noise_private_key &noise_private_key::operator=(noise_private_key &&other) noexcept {
+noise_private_key& noise_private_key::operator=(noise_private_key&& other) noexcept {
     if (this != std::addressof(other)) {
         MoveSecret(*this, other);
     }
@@ -160,7 +151,7 @@ noise_private_key &noise_private_key::operator=(noise_private_key &&other) noexc
 }
 
 void noise_private_key::Clear() {
-    crypto::secure_clear(bytes.data(), bytes.size());
+    crypto::secure_clear(bytes);
     valid = false;
 }
 
@@ -168,11 +159,11 @@ noise_symmetric_key::~noise_symmetric_key() {
     Clear();
 }
 
-noise_symmetric_key::noise_symmetric_key(noise_symmetric_key &&other) noexcept {
+noise_symmetric_key::noise_symmetric_key(noise_symmetric_key&& other) noexcept {
     MoveSecret(*this, other);
 }
 
-noise_symmetric_key &noise_symmetric_key::operator=(noise_symmetric_key &&other) noexcept {
+noise_symmetric_key& noise_symmetric_key::operator=(noise_symmetric_key&& other) noexcept {
     if (this != std::addressof(other)) {
         MoveSecret(*this, other);
     }
@@ -180,7 +171,7 @@ noise_symmetric_key &noise_symmetric_key::operator=(noise_symmetric_key &&other)
 }
 
 void noise_symmetric_key::Clear() {
-    crypto::secure_clear(bytes.data(), bytes.size());
+    crypto::secure_clear(bytes);
     valid = false;
 }
 
@@ -188,11 +179,11 @@ noise_secret32::~noise_secret32() {
     Clear();
 }
 
-noise_secret32::noise_secret32(noise_secret32 &&other) noexcept {
+noise_secret32::noise_secret32(noise_secret32&& other) noexcept {
     MoveSecret(*this, other);
 }
 
-noise_secret32 &noise_secret32::operator=(noise_secret32 &&other) noexcept {
+noise_secret32& noise_secret32::operator=(noise_secret32&& other) noexcept {
     if (this != std::addressof(other)) {
         MoveSecret(*this, other);
     }
@@ -200,7 +191,7 @@ noise_secret32 &noise_secret32::operator=(noise_secret32 &&other) noexcept {
 }
 
 void noise_secret32::Clear() {
-    crypto::secure_clear(bytes.data(), bytes.size());
+    crypto::secure_clear(bytes);
     valid = false;
 }
 
@@ -208,11 +199,11 @@ noise_cookie::~noise_cookie() {
     Clear();
 }
 
-noise_cookie::noise_cookie(noise_cookie &&other) noexcept {
+noise_cookie::noise_cookie(noise_cookie&& other) noexcept {
     *this = std::move(other);
 }
 
-noise_cookie &noise_cookie::operator=(noise_cookie &&other) noexcept {
+noise_cookie& noise_cookie::operator=(noise_cookie&& other) noexcept {
     if (this != std::addressof(other)) {
         Clear();
         value = other.value;
@@ -226,19 +217,18 @@ noise_cookie &noise_cookie::operator=(noise_cookie &&other) noexcept {
 }
 
 void noise_cookie::Clear() {
-    crypto::secure_clear(value.data(), value.size());
-    crypto::secure_clear(last_mac1.data(), last_mac1.size());
+    crypto::secure_clear(value);
+    crypto::secure_clear(last_mac1);
     birth_time = {};
     valid = false;
     has_last_mac1 = false;
 }
 
 MonotonicTimePoint GetMonotonicTime() {
-    return MonotonicTimePoint{
-        MonotonicDuration{wgnx::platform::ktime_get_coarse_boottime_ns()}};
+    return MonotonicTimePoint{MonotonicDuration{wgnx::platform::ktime_get_coarse_boottime_ns()}};
 }
 
-void noise_cookie_reset(noise_cookie *cookie) {
+void noise_cookie_reset(noise_cookie* cookie) {
     if (cookie == nullptr) {
         return;
     }
@@ -246,7 +236,7 @@ void noise_cookie_reset(noise_cookie *cookie) {
     cookie->Clear();
 }
 
-void noise_cookie_record_last_mac1(noise_cookie *cookie, const std::uint8_t mac1[NoiseMacSize]) {
+void noise_cookie_record_last_mac1(noise_cookie* cookie, const std::uint8_t mac1[NoiseMacSize]) {
     if (cookie == nullptr || mac1 == nullptr) {
         return;
     }
@@ -255,39 +245,38 @@ void noise_cookie_record_last_mac1(noise_cookie *cookie, const std::uint8_t mac1
     cookie->has_last_mac1 = true;
 }
 
-bool noise_cookie_is_valid(const noise_cookie *cookie) {
+bool noise_cookie_is_valid(const noise_cookie* cookie) {
     if (cookie == nullptr || !cookie->valid) {
         return false;
     }
 
     constexpr MonotonicDuration CookieLifetime = std::chrono::seconds{120};
     const MonotonicTimePoint now = GetMonotonicTime();
-    return cookie->birth_time > MonotonicTimePoint{} && now >= cookie->birth_time &&
-           (now - cookie->birth_time) <= CookieLifetime;
+    return cookie->birth_time > MonotonicTimePoint{} && now >= cookie->birth_time && (now - cookie->birth_time) <= CookieLifetime;
 }
 
-void noise_static_identity_reset(noise_static_identity *identity) {
+void noise_static_identity_reset(noise_static_identity* identity) {
     if (identity == nullptr) {
         return;
     }
 
     identity->static_private.Clear();
-    crypto::secure_clear(identity->static_public.bytes.data(), identity->static_public.bytes.size());
+    crypto::secure_clear(identity->static_public.bytes);
     identity->static_public.valid = false;
-    crypto::secure_clear(identity->remote_static.bytes.data(), identity->remote_static.bytes.size());
+    crypto::secure_clear(identity->remote_static.bytes);
     identity->remote_static.valid = false;
     identity->preshared_key.Clear();
 }
 
-void noise_handshake_material_reset(noise_handshake_material *material) {
+void noise_handshake_material_reset(noise_handshake_material* material) {
     if (material == nullptr) {
         return;
     }
 
     material->ephemeral_private.Clear();
-    crypto::secure_clear(material->ephemeral_public.bytes.data(), material->ephemeral_public.bytes.size());
+    crypto::secure_clear(material->ephemeral_public.bytes);
     material->ephemeral_public.valid = false;
-    crypto::secure_clear(material->remote_ephemeral.bytes.data(), material->remote_ephemeral.bytes.size());
+    crypto::secure_clear(material->remote_ephemeral.bytes);
     material->remote_ephemeral.valid = false;
     material->precomputed_static_static.Clear();
     material->chaining_key.Clear();
@@ -325,18 +314,11 @@ void ReplayWindow::Reset() {
     m_initialized = false;
 }
 
-void noise_keypair::Establish(
-    std::uint32_t local_index,
-    std::uint32_t remote_index,
-    MonotonicTimePoint birth_time,
-    const noise_symmetric_key &sending_key,
-    const noise_symmetric_key &receiving_key,
-    std::uint64_t send_counter,
-    bool is_initiator) {
+void noise_keypair::Establish(std::uint32_t local_index, std::uint32_t remote_index, MonotonicTimePoint birth_time,
+                              const noise_symmetric_key& sending_key, const noise_symmetric_key& receiving_key, std::uint64_t send_counter,
+                              bool is_initiator) {
     Reset();
-    if (local_index == 0 || remote_index == 0 ||
-        birth_time < MonotonicTimePoint{} ||
-        !sending_key.valid || !receiving_key.valid) {
+    if (local_index == 0 || remote_index == 0 || birth_time < MonotonicTimePoint{} || !sending_key.valid || !receiving_key.valid) {
         return;
     }
 
@@ -368,11 +350,11 @@ noise_keypair::~noise_keypair() {
     Reset();
 }
 
-noise_keypair::noise_keypair(noise_keypair &&other) noexcept {
+noise_keypair::noise_keypair(noise_keypair&& other) noexcept {
     *this = std::move(other);
 }
 
-noise_keypair &noise_keypair::operator=(noise_keypair &&other) noexcept {
+noise_keypair& noise_keypair::operator=(noise_keypair&& other) noexcept {
     if (this != std::addressof(other)) {
         Reset();
         m_state = other.m_state;
@@ -396,9 +378,8 @@ noise_keypair &noise_keypair::operator=(noise_keypair &&other) noexcept {
 }
 
 bool noise_keypair::IsValid() const {
-    return m_state == KeypairState::Established &&
-           m_local_index != 0 && m_remote_index != 0 &&
-           m_sending_key.valid && m_receiving_key.valid;
+    return m_state == KeypairState::Established && m_local_index != 0 && m_remote_index != 0 && m_sending_key.valid &&
+           m_receiving_key.valid;
 }
 
 bool noise_keypair::CanSendAt(MonotonicTimePoint now) const {
@@ -427,29 +408,25 @@ KeypairSendState noise_keypair::SendStateAt(MonotonicTimePoint now) const {
 
 bool noise_keypair::NeedsRekeyAt(MonotonicTimePoint now) const {
     const KeypairAgeResult age = AgeAt(now);
-    return age.valid &&
-           (m_send_counter > RekeyAfterMessages ||
-               (m_is_initiator && age.age > RekeyAfterTime));
+    return age.valid && (m_send_counter > RekeyAfterMessages || (m_is_initiator && age.age > RekeyAfterTime));
 }
 
-const char *GetKeypairSendStateName(KeypairSendState state) {
+const char* GetKeypairSendStateName(KeypairSendState state) {
     switch (state) {
-        case KeypairSendState::Ready:
-            return "ready";
-        case KeypairSendState::Invalid:
-            return "invalid";
-        case KeypairSendState::Expired:
-            return "expired";
-        case KeypairSendState::CounterExhausted:
-            return "counter_exhausted";
+    case KeypairSendState::Ready:
+        return "ready";
+    case KeypairSendState::Invalid:
+        return "invalid";
+    case KeypairSendState::Expired:
+        return "expired";
+    case KeypairSendState::CounterExhausted:
+        return "counter_exhausted";
     }
 
     return "unknown";
 }
 
-KeypairSendState noise_keypair::ReserveSendCounterAt(
-    MonotonicTimePoint now,
-    std::uint64_t &out_counter) {
+KeypairSendState noise_keypair::ReserveSendCounterAt(MonotonicTimePoint now, std::uint64_t& out_counter) {
     const KeypairSendState state = SendStateAt(now);
     if (state != KeypairSendState::Ready) {
         return state;
@@ -474,11 +451,11 @@ bool noise_is_valid_encoded_key(std::string_view text, bool allow_empty) {
 
     std::array<std::uint8_t, NoisePublicKeySize> decoded{};
     const bool ok = DecodeWireGuardKey(decoded, text);
-    crypto::secure_clear(decoded.data(), decoded.size());
+    crypto::secure_clear(decoded);
     return ok;
 }
 
-bool noise_parse_private_key(noise_private_key *out_key, std::string_view text) {
+bool noise_parse_private_key(noise_private_key* out_key, std::string_view text) {
     if (out_key == nullptr) {
         return false;
     }
@@ -499,7 +476,7 @@ bool noise_parse_private_key(noise_private_key *out_key, std::string_view text) 
     return true;
 }
 
-bool noise_parse_public_key(noise_public_key *out_key, std::string_view text) {
+bool noise_parse_public_key(noise_public_key* out_key, std::string_view text) {
     if (out_key == nullptr) {
         return false;
     }
@@ -514,7 +491,7 @@ bool noise_parse_public_key(noise_public_key *out_key, std::string_view text) {
     return true;
 }
 
-bool noise_parse_preshared_key(noise_symmetric_key *out_key, std::string_view text) {
+bool noise_parse_preshared_key(noise_symmetric_key* out_key, std::string_view text) {
     if (out_key == nullptr || text.empty()) {
         return false;
     }
@@ -529,7 +506,7 @@ bool noise_parse_preshared_key(noise_symmetric_key *out_key, std::string_view te
     return true;
 }
 
-bool noise_public_key_to_text(std::span<char> out_text, const noise_public_key *key) {
+bool noise_public_key_to_text(std::span<char> out_text, const noise_public_key* key) {
     if (key == nullptr || !key->valid) {
         return false;
     }
@@ -537,13 +514,13 @@ bool noise_public_key_to_text(std::span<char> out_text, const noise_public_key *
     return EncodeWireGuardKey(out_text, key->bytes);
 }
 
-bool noise_derive_public_key(noise_public_key *out_key, const noise_private_key *private_key) {
+bool noise_derive_public_key(noise_public_key* out_key, const noise_private_key* private_key) {
     if (out_key == nullptr || private_key == nullptr || !private_key->valid) {
         return false;
     }
 
     noise_public_key public_key{};
-    if (!crypto::x25519_public_key(public_key.bytes.data(), private_key->bytes.data())) {
+    if (!crypto::x25519_public_key(public_key.bytes, private_key->bytes)) {
         return false;
     }
     public_key.valid = true;
@@ -551,15 +528,13 @@ bool noise_derive_public_key(noise_public_key *out_key, const noise_private_key 
     return true;
 }
 
-bool noise_derive_public_key_text(
-    std::span<char> out_text,
-    const noise_private_key *private_key) {
+bool noise_derive_public_key_text(std::span<char> out_text, const noise_private_key* private_key) {
     noise_public_key public_key{};
     if (!noise_derive_public_key(&public_key, private_key)) {
         return false;
     }
     const bool ok = noise_public_key_to_text(out_text, &public_key);
-    crypto::secure_clear(public_key.bytes.data(), public_key.bytes.size());
+    crypto::secure_clear(public_key.bytes);
     public_key.valid = false;
     return ok;
 }
@@ -575,11 +550,8 @@ bool noise_derive_public_key_text(std::span<char> out_text, std::string_view pri
     return ok;
 }
 
-bool noise_static_identity_init_from_keys(
-    noise_static_identity *identity,
-    const noise_private_key *private_key,
-    std::string_view peer_public_key_text,
-    const noise_symmetric_key *preshared_key) {
+bool noise_static_identity_init_from_keys(noise_static_identity* identity, const noise_private_key* private_key,
+                                          std::string_view peer_public_key_text, const noise_symmetric_key* preshared_key) {
     if (identity == nullptr || private_key == nullptr || !private_key->valid) {
         return false;
     }
@@ -599,11 +571,8 @@ bool noise_static_identity_init_from_keys(
     return true;
 }
 
-bool noise_static_identity_init(
-    noise_static_identity *identity,
-    std::string_view private_key_text,
-    std::string_view peer_public_key_text,
-    std::string_view preshared_key_text) {
+bool noise_static_identity_init(noise_static_identity* identity, std::string_view private_key_text, std::string_view peer_public_key_text,
+                                std::string_view preshared_key_text) {
     if (identity == nullptr) {
         return false;
     }
@@ -613,9 +582,7 @@ bool noise_static_identity_init(
         noise_static_identity_reset(identity);
         return false;
     }
-    if (!crypto::x25519_public_key(
-            identity->static_public.bytes.data(),
-            identity->static_private.bytes.data())) {
+    if (!crypto::x25519_public_key(identity->static_public.bytes, identity->static_private.bytes)) {
         noise_static_identity_reset(identity);
         return false;
     }
@@ -624,8 +591,7 @@ bool noise_static_identity_init(
         noise_static_identity_reset(identity);
         return false;
     }
-    if (!preshared_key_text.empty() &&
-        !noise_parse_preshared_key(&identity->preshared_key, preshared_key_text)) {
+    if (!preshared_key_text.empty() && !noise_parse_preshared_key(&identity->preshared_key, preshared_key_text)) {
         noise_static_identity_reset(identity);
         return false;
     }
@@ -633,20 +599,13 @@ bool noise_static_identity_init(
     return true;
 }
 
-bool noise_precompute_static_static(
-    noise_handshake_material *material,
-    const noise_static_identity *identity) {
-    if (material == nullptr || identity == nullptr ||
-        !identity->static_private.valid || !identity->remote_static.valid) {
+bool noise_precompute_static_static(noise_handshake_material* material, const noise_static_identity* identity) {
+    if (material == nullptr || identity == nullptr || !identity->static_private.valid || !identity->remote_static.valid) {
         return false;
     }
 
     noise_secret32 precomputed{};
-    if (!crypto::x25519(
-            precomputed.bytes.data(),
-            identity->static_private.bytes.data(),
-            identity->remote_static.bytes.data()) ||
-        IsAllZero(precomputed.bytes)) {
+    if (!crypto::x25519(precomputed.bytes, identity->static_private.bytes, identity->remote_static.bytes) || IsAllZero(precomputed.bytes)) {
         precomputed.Clear();
         return false;
     }
