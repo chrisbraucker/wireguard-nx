@@ -448,7 +448,7 @@ Their admission policy has deterministic host coverage.
 All remaining manual runtime and work/timer backend lock pairs use scoped lock ownership.
 The lock hierarchy, lock-required methods, and worker contexts are specified in `docs/runtime-resource-budgets.md`.
 Compiler stack-usage output is retained and `tools/check_stack_usage.py` checks every target frame plus four known cumulative callback chains. `tools/report_footprint.py` reports target image deltas against the named corrected Chunk 13 baseline and enforces absolute static-image, NSO, and NSP ceilings.
-Both checks are available through `make -C sysmodule resource-report`.
+Both checks are available through `make -C wg-sysmodule resource-report`.
 
 **Definition of done:** every bounded queue exposes capacity pressure and a drop disposition; lock release cannot be skipped by an early return; known worker chains fit their assigned stacks with documented margin; static and binary footprint regressions are reported automatically; path-transition and long-lived real-peer regressions pass.
 

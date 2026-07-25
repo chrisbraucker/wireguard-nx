@@ -303,7 +303,7 @@ Modernize and audit the remaining legacy cryptographic, packet-parsing, serializ
 ### Current Progress
 
 - BLAKE2s now uses the pinned portable reference C implementation from the upstream BLAKE2 project behind a typed, lifecycle-enforcing C++ wrapper.
-  Provenance, license selection, integrity digests, and the vendor refresh process are recorded in `sysmodule/src/wireguard/crypto/third_party/blake2/UPSTREAM.md`.
+  Provenance, license selection, integrity digests, and the vendor refresh process are recorded in `wg-sysmodule/src/wireguard/crypto/third_party/blake2/UPSTREAM.md`.
 - The wrapper accepts only byte spans, rejects invalid state transitions and unsupported output/key sizes, and clears retained reference state after use.
 - The project-facing crypto façade now exposes fixed-size keys, tags, nonces, and digest arrays plus spans.
   Raw pointer calls are confined to the backend bridge in `primitives.cpp`
@@ -319,7 +319,7 @@ Modernize and audit the remaining legacy cryptographic, packet-parsing, serializ
   libFuzzer writes discoveries to `out/fuzz/`, never the checked-in seed corpus.
   The full host suite, ASan/UBSan, target build, and short fuzz matrix pass locally.
 - Monocypher remains the intentional low-level C backend.
-  Its provenance, retention rationale, and refresh procedure are recorded in `sysmodule/src/wireguard/crypto/UPSTREAM.md`.
+  Its provenance, retention rationale, and refresh procedure are recorded in `wg-sysmodule/src/wireguard/crypto/UPSTREAM.md`.
 - The full primitive façade, production call-site, and intentional low-level boundary audit is recorded in `docs/crypto-boundaries.md`.
   Vector fixtures and direct backend conformance calls are host-test-only.
   Target `primitives.cpp` now contains only the runtime façade.
@@ -337,7 +337,7 @@ Modernize and audit the remaining legacy cryptographic, packet-parsing, serializ
 - remove obsolete compatibility code and duplicated helpers
 - validate behavior against protocol test vectors and interoperability tests
 - prefer typed wrappers around proven cryptographic primitives rather than rewriting the primitives themselves
-- audit the entirety of `sysmodule/src/wireguard/crypto/primitives.cpp`, not only the routines changed by the lifecycle refactor, including primitive implementations, state transitions, parameter validation, return-value handling, and sensitive-memory behavior
+- audit the entirety of `wg-sysmodule/src/wireguard/crypto/primitives.cpp`, not only the routines changed by the lifecycle refactor, including primitive implementations, state transitions, parameter validation, return-value handling, and sensitive-memory behavior
 - establish and document the provenance, version, license compatibility, and expected algorithm variant for every primitive implementation.
   In particular, reconcile the local BLAKE2s implementation with a traceable, established upstream implementation rather than treating project-local code as implicitly trusted
 - independently verify primitive behavior with authoritative vectors and differential tests covering keyed and unkeyed operation, supported digest sizes, incremental updates, block boundaries, malformed parameters, and WireGuard-specific hash, MAC, and KDF constructions
