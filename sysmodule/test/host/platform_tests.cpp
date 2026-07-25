@@ -107,24 +107,38 @@ void TestResolverSerialization(TestContext& context) {
     using namespace resolver_serialization;
 
     HorizonAddrInfoHints hints{};
-    const bool hints_ok = serialize_horizon_addrinfo_hints(hints, 0x1, 0, 2, 17) && hints.size() == HorizonAddrInfoHintsWireSize &&
-                          hints[0] == 0xbe && hints[1] == 0xef && hints[2] == 0xca && hints[3] == 0xfe;
+    constexpr std::array<std::uint8_t, 33> expected_hints{
+        0xbe, 0xef, 0xca, 0xfe, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 17, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    };
+    const bool hints_ok = serialize_horizon_addrinfo_hints(hints, 0x1, 0, 2, 17) && hints.size() == expected_hints.size() &&
+                          std::equal(hints.begin(), hints.end(), expected_hints.begin());
 
-    // One AF_INET record with BSD sockaddr_in (len, family, port, address).
+    // One AF_INET record with a resolver-serialized BSD sockaddr_in.
+    // The header is big-endian, while the embedded sockaddr has libnx's
+    // documented recursive conversion: port is little-endian and IPv4 address
+    // bytes are reversed from their canonical presentation order.
     constexpr std::array<std::uint8_t, 41> ipv4_record{
-        0xbe, 0xef, 0xca, 0xfe, 0, 0,    0,    0,   0, 0,   0, 2, 0, 0, 0, 2, 0, 0, 0, 17, 0,
-        0,    0,    16,   16,   2, 0xca, 0x6c, 203, 0, 113, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0xbe, 0xef, 0xca, 0xfe, 0, 0,    0,    0, 0,   0, 0,   2, 0, 0, 0, 2, 0, 0, 0, 17, 0,
+        0,    0,    16,   16,   2, 0x6c, 0xca, 7, 113, 0, 203, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     };
     endpoint parsed{};
     const bool ipv4_ok = parse_horizon_addrinfo_result(ipv4_record, parsed) && parsed.family == address_family::inet &&
                          parsed.port == 51820 && parsed.address[0] == 203 && parsed.address[1] == 0 && parsed.address[2] == 113 &&
                          parsed.address[3] == 7;
 
+    // The Horizon resolver can leave BSD sin_len at zero. libnx accepts this
+    // shape and reconstructs the native sockaddr length from ai_addrlen.
+    auto zero_length_ipv4_record = ipv4_record;
+    zero_length_ipv4_record[24] = 0;
+    const bool zero_length_ipv4_ok = parse_horizon_addrinfo_result(zero_length_ipv4_record, parsed) &&
+                                     parsed.family == address_family::inet && parsed.port == 51820 && parsed.address[0] == 203 &&
+                                     parsed.address[1] == 0 && parsed.address[2] == 113 && parsed.address[3] == 7;
+
     // One AF_INET6 record with BSD sockaddr_in6 (len, family, port, flow,
     // address, scope). This exercises the family-specific minimum length.
     constexpr std::array<std::uint8_t, 53> ipv6_record{
-        0xbe, 0xef, 0xca, 0xfe, 0, 0,    0,    0,    0,    0, 0, 28, 0, 0, 0, 2, 0, 0, 0, 17, 0, 0, 0, 28, 28, 28, 0xca,
-        0x6c, 0,    0,    0,    0, 0x20, 0x01, 0x0d, 0xb8, 0, 0, 0,  0, 0, 0, 0, 0, 0, 0, 0,  1, 0, 0, 0,  0,  0,
+        0xbe, 0xef, 0xca, 0xfe, 0, 0,    0,    0,    0,    0, 0, 28, 0, 0, 0, 2, 0, 0, 0, 17, 0, 0, 0, 28, 28, 28, 0x6c,
+        0xca, 0,    0,    0,    0, 0x20, 0x01, 0x0d, 0xb8, 0, 0, 0,  0, 0, 0, 0, 0, 0, 0, 0,  1, 0, 0, 0,  0,  0,
     };
     const bool ipv6_ok = parse_horizon_addrinfo_result(ipv6_record, parsed) && parsed.family == address_family::inet6 &&
                          parsed.port == 51820 && parsed.address[0] == 0x20 && parsed.address[1] == 0x01 && parsed.address[2] == 0x0d &&
@@ -136,24 +150,27 @@ void TestResolverSerialization(TestContext& context) {
     const bool multiple_records_ok = parse_horizon_addrinfo_result(multi_record, parsed) && parsed.family == address_family::inet &&
                                      parsed.port == 51820 && parsed.address[0] == 203 && parsed.address[3] == 7;
 
+    std::array<std::uint8_t, ipv4_record.size() + AddrInfoListTerminatorWireSize> terminated_record{};
+    std::copy(ipv4_record.begin(), ipv4_record.end(), terminated_record.begin());
+    const bool terminator_ok = parse_horizon_addrinfo_result(terminated_record, parsed) && parsed.family == address_family::inet &&
+                               parsed.port == 51820 && parsed.address[0] == 203 && parsed.address[3] == 7;
+
     auto malformed_length = ipv4_record;
     malformed_length[23] = 17;
     auto missing_terminator = ipv4_record;
     missing_terminator.back() = 1;
     auto malformed_family = ipv4_record;
     malformed_family[25] = 28;
-    auto invalid_sockaddr_size = ipv4_record;
-    invalid_sockaddr_size[24] = 32;
     std::array<std::uint8_t, ipv4_record.size() + 1> malformed_trailing_record{};
     std::copy(ipv4_record.begin(), ipv4_record.end(), malformed_trailing_record.begin());
     malformed_trailing_record.back() = 0xff;
     const bool malformed_rejected =
         !parse_horizon_addrinfo_result(malformed_length, parsed) && !parse_horizon_addrinfo_result(missing_terminator, parsed) &&
-        !parse_horizon_addrinfo_result(malformed_family, parsed) && !parse_horizon_addrinfo_result(invalid_sockaddr_size, parsed) &&
-        !parse_horizon_addrinfo_result(malformed_trailing_record, parsed) &&
+        !parse_horizon_addrinfo_result(malformed_family, parsed) && !parse_horizon_addrinfo_result(malformed_trailing_record, parsed) &&
         !parse_horizon_addrinfo_result(std::span<const std::uint8_t>{ipv4_record}.first(12), parsed);
 
-    WGNX_TEST_REQUIRE(context, hints_ok && ipv4_ok && ipv6_ok && multiple_records_ok && malformed_rejected,
+    WGNX_TEST_REQUIRE(context,
+                      hints_ok && ipv4_ok && zero_length_ipv4_ok && ipv6_ok && multiple_records_ok && terminator_ok && malformed_rejected,
                       "resolver serialization did not preserve the documented Horizon ABI or reject malformed records");
 }
 

@@ -102,6 +102,7 @@ HOST_TEST_CPP_SOURCES := \
 	src/wireguard/debug_probe.cpp \
 	src/wireguard/crypto/primitives.cpp \
 	test/host/host_stubs.cpp \
+	test/host/crypto_primitive_tests.cpp \
 	test/host/legacy_self_tests.cpp \
 	test/host/platform_tests.cpp \
 	test/host/scripted_platform.cpp \

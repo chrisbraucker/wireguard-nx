@@ -1024,18 +1024,6 @@ bool RunMessageSelfTest() {
     return ok;
 }
 
-bool RunPrimitiveSelfTest() {
-    const bool ok = crypto::RunPrimitiveSelfTest();
-
-    if (ok) {
-        wgnx::sysmodule::logger::Log("WireGuard primitive self-test passed");
-    } else {
-        wgnx::sysmodule::logger::Log("WireGuard primitive self-test failed");
-    }
-
-    return ok;
-}
-
 bool RunCoreSelfTest() {
     const bool ok = TestDeviceAndPeerSkeleton() && TestStaticIdentityParsing() && RunHandshakeCryptoSelfTest() &&
                     TestHandshakeInitiationCreation() && TestHandshakeResponseAndSessionDerivation() && TestDebugProbeStatusTransitions() &&

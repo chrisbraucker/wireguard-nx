@@ -15,17 +15,27 @@ namespace wgnx::platform::resolver_serialization {
  *   addrinfo header (24 bytes, six big-endian u32 fields)
  *   sockaddr bytes (ai_addrlen, or four bytes when zero)
  *   NUL-terminated canonical name
+ *   zero u32 terminator after the final record
  *
- * Records may be concatenated. Sockaddr fields follow Horizon's BSD layout:
- * length:u8, family:u8, port:be16, then address bytes. The parser does not
- * reinterpret the buffer as either addrinfo or sockaddr, so alignment and
- * host-native layout cannot influence its bounds checks.
+ * The terminator is part of the serialized addrinfo-list ABI even when the
+ * list contains only hints. Records may be concatenated before it. Sockaddr
+ * fields follow Horizon's BSD layout. The header is big-endian, while the
+ * embedded sockaddr is a copied little-endian Horizon native structure after
+ * the resolver's recursive byte-order conversion. Its IPv4 port is therefore
+ * little-endian, its IPv4 address bytes are reversed, and its IPv6 address
+ * bytes remain in network order. Resolver responses may set the embedded
+ * length byte to zero, so the parser validates the enclosing ai_addrlen
+ * instead. The parser does not reinterpret the buffer as either addrinfo or
+ * sockaddr, so alignment and host-native layout cannot influence its bounds
+ * checks.
  */
 constexpr inline std::size_t AddrInfoWireHeaderSize = 24;
 constexpr inline std::uint32_t AddrInfoWireMagic = 0xBEEFCAFEu;
 constexpr inline std::size_t SockaddrInetWireSize = 16;
 constexpr inline std::size_t SockaddrInet6WireSize = 28;
-constexpr inline std::size_t HorizonAddrInfoHintsWireSize = AddrInfoWireHeaderSize + sizeof(std::uint32_t) + 1;
+constexpr inline std::size_t AddrInfoListTerminatorWireSize = sizeof(std::uint32_t);
+constexpr inline std::size_t HorizonAddrInfoHintsWireSize =
+    AddrInfoWireHeaderSize + sizeof(std::uint32_t) + 1 + AddrInfoListTerminatorWireSize;
 
 using HorizonAddrInfoHints = std::array<std::uint8_t, HorizonAddrInfoHintsWireSize>;
 

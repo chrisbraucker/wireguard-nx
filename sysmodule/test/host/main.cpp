@@ -1,5 +1,6 @@
 #include "legacy_self_tests.hpp"
 
+#include "crypto_primitive_tests.hpp"
 #include "platform_tests.hpp"
 #include "protocol_tests.hpp"
 #include "test_framework.hpp"
@@ -12,8 +13,7 @@ int main() {
     const std::array tests = {
         TestCase{"legacy.message-boundaries",
                  [](wgnx::test::TestContext& context) { WGNX_TEST_CHECK(context, wgnx::wireguard::RunMessageSelfTest()); }},
-        TestCase{"legacy.crypto-smoke",
-                 [](wgnx::test::TestContext& context) { WGNX_TEST_CHECK(context, wgnx::wireguard::RunPrimitiveSelfTest()); }},
+        TestCase{"crypto.primitives", wgnx::test::TestCryptoPrimitives},
         TestCase{"legacy.core-smoke",
                  [](wgnx::test::TestContext& context) { WGNX_TEST_CHECK(context, wgnx::wireguard::RunCoreSelfTest()); }},
         TestCase{"platform.network-path-classification", wgnx::test::TestNetworkPathClassification},

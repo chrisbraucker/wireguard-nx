@@ -146,6 +146,4 @@ bool xchacha20poly1305_decrypt(MutableByteSpan plaintext, ByteSpan ciphertext, c
 bool x25519(X25519Key& out, const X25519Key& scalar, const X25519Key& point);
 bool x25519_public_key(X25519Key& out, const X25519Key& private_key);
 
-bool RunPrimitiveSelfTest();
-
 } // namespace wgnx::wireguard::crypto
