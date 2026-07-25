@@ -13,6 +13,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 REPORTS_DIR = REPO_ROOT / "reports"
 SYSMODULE_META = REPO_ROOT / "wg-sysmodule" / "res" / "module.json"
 SYSMODULE_NSP = REPO_ROOT / "wg-sysmodule" / "out" / "wireguard-nx.nsp"
+MITM_SYSMODULE_META = REPO_ROOT / "mitm-sysmodule" / "res" / "module.json"
+MITM_SYSMODULE_NSP = REPO_ROOT / "mitm-sysmodule" / "out" / "wgnx-mitm.nsp"
 OVERLAY_OVL = REPO_ROOT / "overlay" / "out" / "wireguard-nx.ovl"
 MANAGER_NRO = REPO_ROOT / "manager" / "out" / "wireguard-nx.nro"
 
@@ -24,8 +26,10 @@ def load_title_id(meta_path: Path) -> str:
 
 
 SYSMODULE_TITLE_ID = load_title_id(SYSMODULE_META)
+MITM_SYSMODULE_TITLE_ID = load_title_id(MITM_SYSMODULE_META)
 
 REMOTE_SYSMODULE = PurePosixPath(f"sdmc:/atmosphere/contents/{SYSMODULE_TITLE_ID}/exefs.nsp")
+REMOTE_MITM_SYSMODULE = PurePosixPath(f"sdmc:/atmosphere/contents/{MITM_SYSMODULE_TITLE_ID}/exefs.nsp")
 REMOTE_OVERLAY = PurePosixPath("sdmc:/switch/.overlays/wireguard-nx.ovl")
 REMOTE_MANAGER = PurePosixPath("sdmc:/switch/wireguard-nx.nro")
 
@@ -49,6 +53,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout", type=float, default=10.0, help="FTP timeout in seconds")
 
     parser.add_argument("-s", "--push-sysmodule", action="store_true", help="Upload sysmodule NSP to Atmosphere contents")
+    parser.add_argument("-i", "--push-mitm-sysmodule", action="store_true", help="Upload MITM sysmodule NSP to Atmosphere contents")
     parser.add_argument("-o", "--push-overlay", action="store_true", help="Upload overlay OVL to /switch/.overlays/")
     parser.add_argument("-m", "--push-manager", action="store_true", help="Upload manager NRO to /switch/")
     parser.add_argument("-F", "--pull-fatal-errors", action="store_true", help="Download all files from /atmosphere/fatal_errors/")
@@ -72,6 +77,7 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if args.all:
         args.push_sysmodule = True
+        args.push_mitm_sysmodule = True
         args.push_overlay = True
         args.push_manager = True
         args.pull_fatal_errors = True
@@ -82,6 +88,7 @@ def parse_args() -> argparse.Namespace:
 
     if not any((
         args.push_sysmodule,
+        args.push_mitm_sysmodule,
         args.push_overlay,
         args.push_manager,
         args.pull_fatal_errors,
@@ -252,6 +259,8 @@ def main() -> int:
 
         if args.push_sysmodule:
             upload_file(ftp, SYSMODULE_NSP, REMOTE_SYSMODULE)
+        if args.push_mitm_sysmodule:
+            upload_file(ftp, MITM_SYSMODULE_NSP, REMOTE_MITM_SYSMODULE)
         if args.push_overlay:
             upload_file(ftp, OVERLAY_OVL, REMOTE_OVERLAY)
         if args.push_manager:

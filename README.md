@@ -16,6 +16,7 @@ The repo is split into four main source configurations:
 - `/manager` for the manager applet started via nx-hbmenu or similar
 - `/overlay` a tesla-based config menu for quick settings
 - `/wg-sysmodule` for the sysmodule that does the actual tunnel work
+- `/mitm-sysmodule` for the separate Horizon interception process
 - `/tools` has convenience scripts for debugging and quickly installing binaries and pulling logs
 
 Manager and overlay should communicate with the sysmodule via IPC.
@@ -41,6 +42,10 @@ Build the target and report cumulative stack and image-footprint budgets with:
 
 ```bash
 make -C wg-sysmodule resource-report
+
+# Build and package the inert MITM sysmodule.
+make -C mitm-sysmodule
+make -C mitm-sysmodule dist
 ```
 
 See [Protocol Testing](docs/protocol-testing.md) for the deterministic boundary, covered state transitions, and the final on-device interoperability gate.
