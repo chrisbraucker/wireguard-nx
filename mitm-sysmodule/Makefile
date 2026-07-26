@@ -3,6 +3,8 @@
 #---------------------------------------------------------------------------------
 
 TOPDIR ?= $(CURDIR)
+ATMOSPHERE_LIBS_DIR := $(abspath $(TOPDIR)/../common/lib/Atmosphere-libs)
+ATMOSPHERE_LIBS_INCLUDE_DIR := ../common/lib/Atmosphere-libs
 HOST_ONLY_GOALS := test test-sanitize format-check diff-check
 HOST_ONLY_BUILD := $(strip $(filter $(HOST_ONLY_GOALS),$(MAKECMDGOALS)))
 
@@ -12,19 +14,20 @@ $(error "Please set DEVKITPRO in your environment. export DEVKITPRO=<path to>/de
 endif
 
 include $(DEVKITPRO)/libnx/switch_rules
-include $(TOPDIR)/../wg-sysmodule/lib/Atmosphere-libs/config/templates/stratosphere.mk
+include $(ATMOSPHERE_LIBS_DIR)/config/templates/stratosphere.mk
 endif
 
-TARGET := wgnx-mitm
-BUILD := build
-OUTDIR := out
-TITLE_ID := 010000000000EAD3
-DISTDIR := $(OUTDIR)/atmosphere/contents/$(TITLE_ID)
-SOURCES := src
-INCLUDES := ../common/include src \
-	$(TOPDIR)/../wg-sysmodule/lib/Atmosphere-libs/libstratosphere/include \
-	$(TOPDIR)/../wg-sysmodule/lib/Atmosphere-libs/libvapours/include
-LIBNAMES := ../wg-sysmodule/lib/Atmosphere-libs/libstratosphere
+TARGET		:= wgnx-mitm
+BUILD		:= build
+OUTDIR		:= out
+TITLE_ID	:= 010000000000EAD3
+DISTDIR 	:= $(OUTDIR)/atmosphere/contents/$(TITLE_ID)
+SOURCES 	:= src
+INCLUDES 	:= \
+				../common/include src \
+				$(ATMOSPHERE_LIBS_INCLUDE_DIR)/libstratosphere/include \
+				$(ATMOSPHERE_LIBS_INCLUDE_DIR)/libvapours/include
+LIBNAMES	:= $(ATMOSPHERE_LIBS_DIR)/libstratosphere
 
 APP_VERSION := 0.0.1-dev
 BUILD_ID := $(shell git -C $(TOPDIR)/.. describe --always --dirty 2>/dev/null || echo "unknown")
@@ -47,7 +50,7 @@ DEFINES += -DDISABLE_IPC -D__SWITCH__ \
 
 CFLAGS += $(INCLUDE) -Wno-unused-result -fstack-usage
 CXXFLAGS += $(CFLAGS) -std=c++23 -Werror=frame-larger-than=8192
-LIBDIRS += $(foreach lib,$(LIBNAMES),$(TOPDIR)/$(lib))
+LIBDIRS += $(LIBNAMES)
 
 ifneq ($(BUILD),$(notdir $(CURDIR)))
 
@@ -108,7 +111,7 @@ $(HOST_SANITIZE_TARGET): Makefile $(HOST_TEST_SOURCES) src/mitm_policy.hpp
 	@$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -fsanitize=address,undefined -fno-omit-frame-pointer $(HOST_TEST_INCLUDES) $(addprefix $(CURDIR)/,$(HOST_TEST_SOURCES)) -o $(HOST_SANITIZE_TARGET)
 
 libs:
-	@$(foreach lib,$(LIBNAMES),$(MAKE) --no-print-directory -C $(TOPDIR)/$(lib) && ) true
+	@$(foreach lib,$(LIBNAMES),$(MAKE) --no-print-directory -C $(lib) && ) true
 
 $(BUILD): libs
 	@[ -d $@ ] || mkdir -p $@
@@ -116,7 +119,7 @@ $(BUILD): libs
 	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
 
 clean-libs:
-	@$(foreach lib,$(LIBNAMES),$(MAKE) -C $(TOPDIR)/$(lib) clean && ) true
+	@$(foreach lib,$(LIBNAMES),$(MAKE) -C $(lib) clean && ) true
 
 clean-build:
 	@rm -rf $(BUILD) $(OUTDIR)

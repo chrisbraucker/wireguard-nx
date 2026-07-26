@@ -9,9 +9,10 @@
       "${workspaceFolder}/overlay/lib/libultrahand/common/**"
     ],
     "sysmoduleIncludePath": [
-      "${workspaceFolder}/sysmodule/lib/Atmosphere-libs/libstratosphere/include/**",
-      "${workspaceFolder}/sysmodule/lib/Atmosphere-libs/libvapours/include/**",
-      "${workspaceFolder}/sysmodule/src/**"
+      "${workspaceFolder}/common/lib/Atmosphere-libs/libstratosphere/include/**",
+      "${workspaceFolder}/common/lib/Atmosphere-libs/libvapours/include/**",
+      "${workspaceFolder}/wg-sysmodule/src/**",
+      "${workspaceFolder}/mitm-sysmodule/src/**"
     ],
     "defaultDefines": [
       "APP_TITLE=\"\"",

@@ -13,7 +13,7 @@ constexpr std::size_t KiB(std::size_t value) {
 // Fixed runtime cardinalities.
 constexpr inline std::size_t PeerSlots = wgnx::MaxPeers;
 constexpr inline std::size_t ActivePeerSlots = 1;
-constexpr inline std::size_t IpcServerPorts = 1;
+constexpr inline std::size_t IpcServerPorts = 2;
 constexpr inline std::size_t IpcSessions = 8;
 constexpr inline std::size_t PacketQueueSlots = 8;
 constexpr inline std::size_t EffectBatchSlots = 8;
@@ -39,6 +39,9 @@ constexpr inline std::size_t SocketAllocatorBytes = KiB(128);
 constexpr inline std::size_t SocketArenaBytes = KiB(304);
 constexpr inline std::size_t WorkqueuePoolBytes = KiB(120);
 constexpr inline std::size_t TimerManagerBytes = KiB(24);
+// CMIF child service objects are served from a dedicated bounded heap rather
+// than the optional global SF allocator.
+constexpr inline std::size_t TunnelClientServiceAllocatorBytes = KiB(4);
 
 // Every runtime-owned execution context currently has a 16 KiB stack.
 constexpr inline std::size_t MainThreadStackBytes = KiB(16);
@@ -54,15 +57,18 @@ constexpr inline std::size_t MaximumEffectBatchBytes = 2304;
 constexpr inline std::size_t MaximumPeerRuntimeBytes = KiB(24);
 constexpr inline std::size_t MaximumPeerRegistryBytes = KiB(192);
 constexpr inline std::size_t MaximumTimerSchedulerBytes = 1600;
-constexpr inline std::size_t MaximumDaemonRuntimeBytes = KiB(216);
+// The direct-flow plane owns bounded IPv4/UDP and completion slabs.
+constexpr inline std::size_t MaximumDaemonRuntimeBytes = KiB(272);
 constexpr inline std::size_t MaximumEndpointResolverBytes = 512;
 constexpr inline std::size_t MaximumUdpRebindQueueBytes = 96;
 constexpr inline std::size_t MaximumHorizonDispatcherBytes = 512;
 constexpr inline std::size_t MaximumEncryptedReceivePumpBytes = KiB(8);
+constexpr inline std::size_t MaximumTunnelFlowPlaneBytes = KiB(80);
 
 static_assert(PeerSlots > 0);
 static_assert(ActivePeerSlots == 1);
-static_assert(IpcServerPorts == 1);
+static_assert(IpcServerPorts == 2);
+static_assert(TunnelClientServiceAllocatorBytes >= KiB(4));
 static_assert(PacketQueueSlots > 0);
 static_assert(EffectBatchSlots > 0);
 static_assert(OrderedWorkqueueSlots == 5);

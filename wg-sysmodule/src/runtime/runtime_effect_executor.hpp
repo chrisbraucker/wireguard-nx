@@ -19,6 +19,7 @@ class EncryptedReceivePump;
 class EndpointResolver;
 class HorizonDispatcher;
 class PacketDataPlane;
+class TunnelFlowPlane;
 class RuntimeCoordinator;
 class TimerScheduler;
 
@@ -26,11 +27,11 @@ class RuntimeEffectExecutor {
   public:
     RuntimeEffectExecutor(ams::os::Mutex& state_mutex, RuntimeCoordinator& coordinator, EndpointResolver& endpoint_resolver,
                           HorizonDispatcher& dispatcher, TimerScheduler& timer_scheduler, PacketDataPlane& packet_data_plane,
-                          DebugProbeRunner& debug_probe_runner,
+                          TunnelFlowPlane& tunnel_flow_plane, DebugProbeRunner& debug_probe_runner,
                           wgnx::sysmodule::platform::horizon::NetworkPathService& network_path_service, EncryptedReceivePump& receive_pump)
         : m_state_mutex(state_mutex), m_coordinator(coordinator), m_endpoint_resolver(endpoint_resolver), m_dispatcher(dispatcher),
-          m_timer_scheduler(timer_scheduler), m_packet_data_plane(packet_data_plane), m_debug_probe_runner(debug_probe_runner),
-          m_network_path_service(network_path_service), m_receive_pump(receive_pump) {}
+          m_timer_scheduler(timer_scheduler), m_packet_data_plane(packet_data_plane), m_tunnel_flow_plane(tunnel_flow_plane),
+          m_debug_probe_runner(debug_probe_runner), m_network_path_service(network_path_service), m_receive_pump(receive_pump) {}
 
     void Execute(const EffectBatch& effects);
     void RunEndpointResolver();
@@ -57,6 +58,7 @@ class RuntimeEffectExecutor {
     HorizonDispatcher& m_dispatcher;
     TimerScheduler& m_timer_scheduler;
     PacketDataPlane& m_packet_data_plane;
+    TunnelFlowPlane& m_tunnel_flow_plane;
     DebugProbeRunner& m_debug_probe_runner;
     wgnx::sysmodule::platform::horizon::NetworkPathService& m_network_path_service;
     EncryptedReceivePump& m_receive_pump;

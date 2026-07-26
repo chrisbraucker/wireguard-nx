@@ -70,7 +70,8 @@ void TestTunnelProtocolContract(TestContext& context) {
                       sizeof(FlowHandle) == 8 && sizeof(Ipv4Endpoint) == 8 && sizeof(Capabilities) == 64 &&
                           sizeof(OpenConnectedUdpFlowRequest) == 16 && sizeof(OpenConnectedUdpFlowResult) == 24 &&
                           sizeof(DatagramDescriptor) == 24 && sizeof(DatagramDisposition) == 16 && sizeof(CompletionRecord) == 48 &&
-                          sizeof(FlowStateResult) == 40 && sizeof(RoutingPolicySnapshot) == 8 && sizeof(RouteRecord) == 32,
+                          sizeof(CompletionDrainResult) == 8 && sizeof(FlowStateResult) == 40 && sizeof(RoutingPolicySnapshot) == 8 &&
+                          sizeof(RouteRecord) == 32,
                       "tunnel binary record layout changed");
 }
 

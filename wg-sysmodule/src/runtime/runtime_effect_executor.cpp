@@ -7,6 +7,7 @@
 #include "runtime/endpoint_resolver.hpp"
 #include "runtime/horizon_dispatcher.hpp"
 #include "runtime/packet_data_plane.hpp"
+#include "runtime/tunnel_flow_plane.hpp"
 #include "runtime/runtime_coordinator.hpp"
 #include "runtime/timer_scheduler.hpp"
 
@@ -343,6 +344,31 @@ bool RuntimeEffectExecutor::PublishDecryptedPacketLocked(const PeerIdentity& pee
         logger::Log("Rejected debug ICMP reply metadata for peer %u validation=%s payload=%zu", peer.peer_index.Value(),
                     wgnx::wireguard::GetDebugProbeReplyValidationName(probe.validation), inner_packet.size());
         return true;
+    }
+
+    const auto tunnel_delivery = m_tunnel_flow_plane.DeliverDecryptedIpv4Packet(peer, inner_packet, GetRuntimeNowNs());
+    switch (tunnel_delivery.disposition) {
+    case TunnelInboundDisposition::Delivered:
+        logger::Log("Queued tunnel UDP delivery flow=%llu peer=%u activation=%u bytes=%zu",
+                    static_cast<unsigned long long>(tunnel_delivery.flow.value), peer.peer_index.Value(),
+                    peer.activation_generation.Value(), tunnel_delivery.payload_size);
+        return true;
+    case TunnelInboundDisposition::DroppedMalformed:
+        logger::Log("Dropped tunnel UDP delivery peer=%u activation=%u reason=malformed", peer.peer_index.Value(),
+                    peer.activation_generation.Value());
+        return true;
+    case TunnelInboundDisposition::DroppedStale:
+        logger::Log("Dropped tunnel UDP delivery peer=%u activation=%u reason=reverse_tuple_quarantine", peer.peer_index.Value(),
+                    peer.activation_generation.Value());
+        return true;
+    case TunnelInboundDisposition::DroppedQueueFull:
+        logger::Log("Dropped tunnel UDP delivery flow=%llu peer=%u activation=%u reason=queue_full",
+                    static_cast<unsigned long long>(tunnel_delivery.flow.value), peer.peer_index.Value(),
+                    peer.activation_generation.Value());
+        return true;
+    case TunnelInboundDisposition::NotClaimed:
+    case TunnelInboundDisposition::DroppedUnknown:
+        break;
     }
 
     const auto delivery = m_packet_data_plane.DeliverDecryptedPacket(peer, inner_packet);

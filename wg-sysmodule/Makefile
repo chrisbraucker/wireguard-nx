@@ -3,6 +3,8 @@
 #---------------------------------------------------------------------------------
 
 TOPDIR ?= $(CURDIR)
+ATMOSPHERE_LIBS_DIR := $(abspath $(TOPDIR)/../common/lib/Atmosphere-libs)
+ATMOSPHERE_LIBS_INCLUDE_DIR := ../common/lib/Atmosphere-libs
 HOST_ONLY_GOALS := test test-sanitize test-tsan test-warnings format-check static-check diff-check fuzz fuzz-run fuzz-seeds
 HOST_ONLY_BUILD := $(strip $(filter $(HOST_ONLY_GOALS),$(MAKECMDGOALS)))
 
@@ -12,7 +14,7 @@ $(error "Please set DEVKITPRO in your environment. export DEVKITPRO=<path to>/de
 endif
 
 include $(DEVKITPRO)/libnx/switch_rules
-include $(TOPDIR)/lib/Atmosphere-libs/config/templates/stratosphere.mk
+include $(ATMOSPHERE_LIBS_DIR)/config/templates/stratosphere.mk
 endif
 
 #---------------------------------------------------------------------------------
@@ -31,12 +33,13 @@ DISTDIR		:=	$(OUTDIR)/atmosphere/contents/$(TITLE_ID)
 DATA		:=	data
 RESOURCES	:=	res
 SOURCES		+=	src src/runtime src/runtime/peer src/platform src/platform/horizon src/wireguard src/wireguard/crypto src/wireguard/crypto/third_party/blake2
-INCLUDES	+=	../common/include \
-			src \
-			src/platform/horizon \
-			$(TOPDIR)/lib/Atmosphere-libs/libstratosphere/include \
-			$(TOPDIR)/lib/Atmosphere-libs/libvapours/include
-LIBNAMES	:= Atmosphere-libs/libstratosphere
+INCLUDES	+=	\
+				../common/include \
+				src \
+				src/platform/horizon \
+			$(ATMOSPHERE_LIBS_INCLUDE_DIR)/libstratosphere/include \
+			$(ATMOSPHERE_LIBS_INCLUDE_DIR)/libvapours/include
+LIBNAMES	:= $(ATMOSPHERE_LIBS_DIR)/libstratosphere
 
 HOST_CXX	?= g++
 HOST_CC		?= cc
@@ -77,6 +80,7 @@ HOST_TEST_CPP_SOURCES := \
 	src/runtime/debug_probe_runner.cpp \
 	src/runtime/endpoint_resolver.cpp \
 	src/runtime/packet_data_plane.cpp \
+	src/runtime/tunnel_flow_plane.cpp \
 	src/runtime/peer/peer_runtime.cpp \
 	src/runtime/peer/activation.cpp \
 	src/runtime/peer/inbound.cpp \
@@ -113,6 +117,7 @@ HOST_TEST_CPP_SOURCES := \
 	test/host/runtime_lifecycle_tests.cpp \
 	test/host/timer_tests.cpp \
 	test/host/tunnel_protocol_tests.cpp \
+	test/host/tunnel_flow_plane_tests.cpp \
 	test/host/failure_composition_tests.cpp \
 	test/host/main.cpp
 HOST_TEST_C_SOURCES := \
@@ -174,7 +179,7 @@ CXXFLAGS	+= $(CFLAGS) -std=c++23 -Werror=frame-larger-than=8192
 # list of directories containing libraries, this must be the top level containing
 # include and lib
 #---------------------------------------------------------------------------------
-LIBDIRS	+= $(foreach lib,$(LIBNAMES),$(TOPDIR)/lib/$(lib))
+LIBDIRS	+= $(LIBNAMES)
 
 #---------------------------------------------------------------------------------
 # no real need to edit anything past this point unless you need to add additional
@@ -340,7 +345,7 @@ $(FUZZ_RESOLVER_RESULT_TARGET): Makefile $(FUZZ_RESOLVER_RESULT_SOURCES) $(FUZZ_
 	@$(FUZZ_CXX) $(FUZZ_COMMON_FLAGS) $(HOST_TEST_INCLUDES) $(addprefix $(CURDIR)/,$(FUZZ_RESOLVER_RESULT_SOURCES)) -o $(FUZZ_RESOLVER_RESULT_TARGET)
 
 libs	:
-	@$(foreach lib,$(LIBNAMES),$(MAKE) --no-print-directory -C $(TOPDIR)/lib/$(lib) && ) true
+	@$(foreach lib,$(LIBNAMES),$(MAKE) --no-print-directory -C $(lib) && ) true
 
 prepare-build-id:
 	@[ -d $(dir $(BUILD_ID_HEADER)) ] || mkdir -p $(dir $(BUILD_ID_HEADER))
@@ -362,7 +367,7 @@ $(BUILD)	: libs prepare-build-id
 #---------------------------------------------------------------------------------
 clean-libs	:
 	@echo clean libs $(LIBNAMES) ...
-	@$(foreach lib,$(LIBNAMES),$(MAKE) -C $(TOPDIR)/lib/$(lib) clean && ) true
+	@$(foreach lib,$(LIBNAMES),$(MAKE) -C $(lib) clean && ) true
 
 clean-build	:
 	@echo clean build ...

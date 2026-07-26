@@ -22,7 +22,7 @@ void TestRuntimeResourceBudgets(TestContext& context) {
 
     WGNX_TEST_REQUIRE(context,
                       wgnx::resource_budget::PeerSlots == wgnx::MaxPeers && wgnx::resource_budget::ActivePeerSlots == 1 &&
-                          wgnx::resource_budget::IpcSessions == 8 &&
+                          wgnx::resource_budget::IpcServerPorts == 2 && wgnx::resource_budget::IpcSessions == 8 &&
                           wgnx::resource_budget::PacketQueueSlots == wgnx::wireguard::PeerStagedPacketCapacity &&
                           wgnx::resource_budget::EffectBatchSlots == EffectBatch::Capacity &&
                           wgnx::resource_budget::MainThreadStackBytes == 16 * 1024 && pressured.depth == 1 &&

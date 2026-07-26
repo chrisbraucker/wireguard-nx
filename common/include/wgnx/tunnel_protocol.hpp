@@ -166,6 +166,11 @@ struct CompletionRecord {
     FlowTerminalReason terminal_reason;
 };
 
+struct CompletionDrainResult {
+    std::uint32_t count;
+    ProtocolStatus status;
+};
+
 struct FlowStateResult {
     ProtocolStatus status;
     FlowState state;
@@ -197,6 +202,7 @@ static_assert(std::is_trivially_copyable_v<OpenConnectedUdpFlowResult>);
 static_assert(std::is_trivially_copyable_v<DatagramDescriptor>);
 static_assert(std::is_trivially_copyable_v<DatagramDisposition>);
 static_assert(std::is_trivially_copyable_v<CompletionRecord>);
+static_assert(std::is_trivially_copyable_v<CompletionDrainResult>);
 static_assert(std::is_trivially_copyable_v<FlowStateResult>);
 static_assert(std::is_trivially_copyable_v<RoutingPolicySnapshot>);
 static_assert(std::is_trivially_copyable_v<RouteRecord>);
@@ -208,6 +214,7 @@ static_assert(sizeof(OpenConnectedUdpFlowResult) == 24);
 static_assert(sizeof(DatagramDescriptor) == 24);
 static_assert(sizeof(DatagramDisposition) == 16);
 static_assert(sizeof(CompletionRecord) == 48);
+static_assert(sizeof(CompletionDrainResult) == 8);
 static_assert(sizeof(FlowStateResult) == 40);
 static_assert(sizeof(RoutingPolicySnapshot) == 8);
 static_assert(sizeof(RouteRecord) == 32);

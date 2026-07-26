@@ -2,6 +2,6 @@
 	path = overlay/lib/libultrahand
 	url = https://github.com/ppkantorski/libultrahand.git
 
-[submodule "wg-sysmodule/lib/Atmosphere-libs"]
-	path = wg-sysmodule/lib/Atmosphere-libs
+[submodule "common/lib/Atmosphere-libs"]
+	path = common/lib/Atmosphere-libs
 	url = git@github.com:chrisbraucker/Atmosphere-libs.git

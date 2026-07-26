@@ -3,6 +3,7 @@
 #include "build_id.hpp"
 #include "logger.hpp"
 #include "runtime/daemon_runtime.hpp"
+#include "tunnel_service.hpp"
 #include "wgnx/resource_budget.hpp"
 
 #include <algorithm>
@@ -82,6 +83,9 @@ void RunIpcServer() {
     R_ABORT_UNLESS(g_server_manager->RegisterObjectForServer(
         g_control_service_object.GetShared(), ams::sm::ServiceName::Encode(wgnx::ServiceName), wgnx::resource_budget::IpcSessions));
     logger::Log("Registered service '%s'", wgnx::ServiceName);
+    R_ABORT_UNLESS(g_server_manager->RegisterObjectForServer(
+        GetTunnelRootServiceObject(), ams::sm::ServiceName::Encode(wgnx::tunnel::ServiceName), wgnx::resource_budget::IpcSessions));
+    logger::Log("Registered service '%s'", wgnx::tunnel::ServiceName);
     logger::Log("Entering server loop");
     g_server_manager->LoopProcess();
 }

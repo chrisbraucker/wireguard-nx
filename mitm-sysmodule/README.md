@@ -7,7 +7,7 @@ It registers only `wgm:ctl` and does not register an Atmosphere MITM server or o
 The module writes independent diagnostics to `sdmc:/wgnx/wgnx-mitm-sysmodule.log`.
 It uses program ID `0x010000000000EAD3`.
 The WireGuard sysmodule remains `0x010000000000EAD0`.
-Both sysmodules statically build against the checked-out third-party Atmosphere-libs tree at `wg-sysmodule/lib/Atmosphere-libs`.
+Both sysmodules statically build against the checked-out third-party Atmosphere-libs tree at `common/lib/Atmosphere-libs`.
 They do not share a project-owned runtime library, mutable process state, or an implementation boundary other than the future private IPC contract.
 
 `mitm_policy.hpp` owns the future `bsd:s` interception admission policy.
