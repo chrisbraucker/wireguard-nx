@@ -11,7 +11,7 @@
 namespace wgnx::wireguard {
 
 constexpr inline std::size_t PeerNameCapacity = 32;
-constexpr inline std::size_t PeerStagedPacketCapacity = wgnx::resource_budget::PacketQueueSlots;
+constexpr inline std::size_t PeerStagedPacketCapacity = wgnx::resource_budget::PeerOutboundStagingSlots;
 
 enum class OutboundStagingAction : std::uint8_t {
     Idle = 0,

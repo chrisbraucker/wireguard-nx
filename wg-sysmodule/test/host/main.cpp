@@ -44,6 +44,7 @@ int main() {
         TestCase{"runtime.coordinator-dispatch", wgnx::test::TestRuntimeCoordinatorDispatch},
         TestCase{"runtime.peer-activation", wgnx::test::TestRuntimePeerActivation},
         TestCase{"runtime.outbound-lifecycle", wgnx::test::TestRuntimeOutboundLifecycle},
+        TestCase{"runtime.initiator-session-keepalive", wgnx::test::TestRuntimeInitiatorSessionKeepalive},
         TestCase{"protocol.replay-window-parity", wgnx::test::TestReplayWindowParity},
         TestCase{"runtime.timer-coordinator", wgnx::test::TestTimerCoordinator},
         TestCase{"runtime.timer-schedule", wgnx::test::TestTimerSchedule},

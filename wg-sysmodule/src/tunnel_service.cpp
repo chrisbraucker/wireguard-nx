@@ -4,6 +4,7 @@
 #include <span>
 
 #include "wgnx/resource_budget.hpp"
+#include "wgnx/tunnel_batch.hpp"
 
 namespace wgnx::sysmodule {
 
@@ -85,19 +86,11 @@ ams::Result TunnelClientService::SendUdpDatagramBatch(const ams::sf::InMapAliasA
         R_THROW(ams::fs::ResultInvalidArgument());
     }
     const auto* bytes = static_cast<const std::uint8_t*>(payload.GetPointer());
-    for (std::size_t index = 0; index < descriptors.GetSize(); ++index) {
-        const auto& descriptor = descriptors[index];
-        auto& disposition = dispositions[index];
-        disposition = {
-            .client_tag = descriptor.client_tag,
-            .status = wgnx::tunnel::ProtocolStatus::MalformedInput,
-            .reserved = 0,
-        };
-        if (IsPayloadRangeValid(descriptor, payload)) {
-            disposition.status = runtime::SendTunnelUdpDatagram(
-                m_client, descriptor, std::span<const std::uint8_t>(bytes + descriptor.payload_offset, descriptor.payload_size));
-        }
-    }
+    wgnx::tunnel::DispatchUdpDatagramBatch(
+        {descriptors.GetPointer(), descriptors.GetSize()}, {bytes, payload.GetSize()}, {dispositions.GetPointer(), dispositions.GetSize()},
+        [this](const wgnx::tunnel::DatagramDescriptor& descriptor, std::span<const std::uint8_t> datagram) {
+            return runtime::SendTunnelUdpDatagram(m_client, descriptor, datagram);
+        });
     R_SUCCEED();
 }
 

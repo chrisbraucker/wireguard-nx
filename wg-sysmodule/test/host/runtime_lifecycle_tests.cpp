@@ -9,7 +9,7 @@ void TestRuntimeResourceBudgets(TestContext& context) {
     static_assert(sizeof(PeerRuntime) <= wgnx::resource_budget::MaximumPeerRuntimeBytes);
     static_assert(sizeof(PeerRegistry) <= wgnx::resource_budget::MaximumPeerRegistryBytes);
     static_assert(sizeof(EffectBatch) <= wgnx::resource_budget::MaximumEffectBatchBytes);
-    static_assert(sizeof(PacketChannel) <= wgnx::resource_budget::MaximumPacketChannelBytes);
+    static_assert(sizeof(PacketChannel) <= wgnx::resource_budget::MaximumLegacyPacketChannelBytes);
 
     PendingSlotAccounting accounting{};
     accounting.RecordAdmission(false);
@@ -23,7 +23,8 @@ void TestRuntimeResourceBudgets(TestContext& context) {
     WGNX_TEST_REQUIRE(context,
                       wgnx::resource_budget::PeerSlots == wgnx::MaxPeers && wgnx::resource_budget::ActivePeerSlots == 1 &&
                           wgnx::resource_budget::IpcServerPorts == 2 && wgnx::resource_budget::IpcSessions == 8 &&
-                          wgnx::resource_budget::PacketQueueSlots == wgnx::wireguard::PeerStagedPacketCapacity &&
+                          wgnx::resource_budget::PeerOutboundStagingSlots == wgnx::wireguard::PeerStagedPacketCapacity &&
+                          wgnx::resource_budget::LegacyPacketChannelReceiveSlots == PacketChannel::ReceiveCapacity &&
                           wgnx::resource_budget::EffectBatchSlots == EffectBatch::Capacity &&
                           wgnx::resource_budget::MainThreadStackBytes == 16 * 1024 && pressured.depth == 1 &&
                           pressured.high_watermark == 1 && pressured.admitted == 2 && pressured.replaced == 1 && pressured.coalesced == 0 &&
@@ -879,25 +880,28 @@ void TestRuntimeOutboundLifecycle(TestContext& context) {
             },
         .occurred_at = SessionBirthTime,
     });
-    send = nullptr;
-    for (const auto& effect : effects) {
-        if (auto* candidate = std::get_if<SendPendingDatagramEffect>(&effect)) {
-            send = candidate;
-        }
-    }
-    WGNX_TEST_REQUIRE(context, effects.Size() == 6 && send != nullptr && coordinator.Lifecycle(0)->state == wgnx::PeerRuntimeState::Active,
+    const bool response_emitted_send =
+        std::ranges::any_of(effects, [](const RuntimeEffect& effect) { return std::holds_alternative<SendPendingDatagramEffect>(effect); });
+    WGNX_TEST_REQUIRE(context, effects.Size() == 5 && coordinator.Lifecycle(0)->state == wgnx::PeerRuntimeState::Active,
                       "session establishment did not arm timers and release outbound work");
     WGNX_TEST_REQUIRE(context,
                       std::get_if<ArmProtocolTimerEffect>(effects.begin()) != nullptr &&
                           std::get_if<CancelProtocolTimerEffect>(effects.begin() + 1) != nullptr &&
                           std::get_if<ArmProtocolTimerEffect>(effects.begin() + 2) != nullptr &&
                           std::get_if<CancelProtocolTimerEffect>(effects.begin() + 3) != nullptr &&
-                          std::get_if<SendPendingDatagramEffect>(effects.begin() + 4) != nullptr &&
-                          std::get_if<QueueInnerPacketSubmissionEffect>(effects.begin() + 5) != nullptr,
-                      "session derivation did not produce authenticated-activity timer transitions");
+                          std::get_if<QueueInnerPacketSubmissionEffect>(effects.begin() + 4) != nullptr && !response_emitted_send,
+                      "session derivation did not release staged data before queuing a confirmation keepalive");
 
-    WGNX_TEST_REQUIRE(context, coordinator.SnapshotPendingDatagram(identity, send->datagram_generation, snapshot),
-                      "session confirmation keepalive was not staged");
+    effects = coordinator.Dispatch(ProcessOutboundQueueEvent{
+        .peer = identity,
+        .timer_facts = timer_facts,
+        .occurred_at = SessionBirthTime + 1,
+    });
+    send = effects.Size() == 1 ? std::get_if<SendPendingDatagramEffect>(effects.begin()) : nullptr;
+    WGNX_TEST_REQUIRE(context,
+                      send != nullptr && coordinator.SnapshotPendingDatagram(identity, send->datagram_generation, snapshot) &&
+                          snapshot.kind == PendingDatagramKind::TransportData && snapshot.size > TransportDataHeaderSize,
+                      "staged plaintext was not converted to encrypted transport data immediately after session derivation");
     std::array<std::uint8_t, GetPaddedTransportPayloadSize(wgnx::wireguard::MaxInnerIpv4PacketSize)> responder_plaintext{};
     IncomingTransportDataResult responder_confirmation{};
     WGNX_TEST_REQUIRE(context,
@@ -905,49 +909,25 @@ void TestRuntimeOutboundLifecycle(TestContext& context) {
                                                                    responder.responder_device, *responder.responder, responder_plaintext,
                                                                    responder_confirmation) == TransportDataError::None &&
                           responder_confirmation.promoted_next_keypair && responder.responder->current_keypair.IsValid(),
-                      "responder did not confirm the initial runtime session");
+                      "responder did not confirm the initial runtime session from staged data");
     effects = coordinator.Dispatch(PendingDatagramSentEvent{
         .peer = identity,
         .datagram_generation = send->datagram_generation,
         .bytes_sent = snapshot.size,
         .error = wgnx::platform::socket_error::none,
-        .occurred_at = SessionBirthTime + 1,
-    });
-    WGNX_TEST_REQUIRE(context,
-                      effects.Size() == 2 && std::get_if<ArmProtocolTimerEffect>(effects.begin()) != nullptr &&
-                          std::get_if<CancelProtocolTimerEffect>(effects.begin() + 1) != nullptr &&
-                          std::get<ArmProtocolTimerEffect>(effects.begin()[0]).hook == TimerHook::PersistentKeepalive &&
-                          std::get<CancelProtocolTimerEffect>(effects.begin()[1]).hook == TimerHook::SendKeepalive,
-                      "keepalive completion did not record authenticated traversal");
-
-    effects = coordinator.Dispatch(ProcessOutboundQueueEvent{
-        .peer = identity,
-        .timer_facts = timer_facts,
         .occurred_at = SessionBirthTime + 2,
     });
-    send = effects.Size() == 1 ? std::get_if<SendPendingDatagramEffect>(effects.begin()) : nullptr;
-    WGNX_TEST_REQUIRE(context,
-                      send != nullptr && coordinator.SnapshotPendingDatagram(identity, send->datagram_generation, snapshot) &&
-                          snapshot.size > TransportDataHeaderSize,
-                      "recovered plaintext was not converted to encrypted transport data");
-    effects = coordinator.Dispatch(PendingDatagramSentEvent{
-        .peer = identity,
-        .datagram_generation = send->datagram_generation,
-        .bytes_sent = snapshot.size,
-        .error = wgnx::platform::socket_error::none,
-        .occurred_at = SessionBirthTime + 3,
-    });
-    static_cast<void>(coordinator.SnapshotPacketState(packet_state));
     WGNX_TEST_REQUIRE(context,
                       effects.Size() == 4 && std::get_if<ArmProtocolTimerEffect>(effects.begin()) != nullptr &&
                           std::get_if<CancelProtocolTimerEffect>(effects.begin() + 1) != nullptr &&
                           std::get_if<ArmProtocolTimerEffect>(effects.begin() + 2) != nullptr &&
+                          std::get_if<QueueInnerPacketSubmissionEffect>(effects.begin() + 3) != nullptr &&
                           std::get<ArmProtocolTimerEffect>(effects.begin()[0]).hook == TimerHook::PersistentKeepalive &&
                           std::get<CancelProtocolTimerEffect>(effects.begin()[1]).hook == TimerHook::SendKeepalive &&
-                          std::get<ArmProtocolTimerEffect>(effects.begin()[2]).hook == TimerHook::NewHandshake &&
-                          std::get_if<QueueInnerPacketSubmissionEffect>(effects.begin() + 3) != nullptr &&
-                          packet_state.staged_packet_count == 0,
-                      "successful transport completion did not retire and continue the queue");
+                          std::get<ArmProtocolTimerEffect>(effects.begin()[2]).hook == TimerHook::NewHandshake,
+                      "transport completion did not retire staged data before continuing the queue");
+    static_cast<void>(coordinator.SnapshotPacketState(packet_state));
+    WGNX_TEST_REQUIRE(context, packet_state.staged_packet_count == 0, "successful transport completion did not retire staged plaintext");
 
     const std::uint32_t previous_runtime_index = coordinator.ProtocolSnapshot(0).current_keypair_index;
     runtime::SetMonotonicTime(SessionBirthTime + wgnx::platform::NSEC_PER_SEC);
@@ -1308,9 +1288,10 @@ void TestRuntimeOutboundLifecycle(TestContext& context) {
     PendingDatagramSnapshot raced_snapshot{};
     const bool raced_snapshot_available =
         raced_send != nullptr && coordinator.SnapshotPendingDatagram(identity, raced_send_effect.datagram_generation, raced_snapshot);
+    static_cast<void>(coordinator.SnapshotPacketState(packet_state));
     WGNX_TEST_REQUIRE(context,
                       has_raced_send && coordinator.HasPendingDatagram(identity, raced_send_effect.datagram_generation) &&
-                          !raced_snapshot_available,
+                          !raced_snapshot_available && packet_state.staged_packet_count == 1,
                       "path suspension did not preserve a pending transmit for deterministic completion");
     static_cast<void>(coordinator.Dispatch(PendingDatagramSentEvent{
         .peer = identity,
@@ -1322,8 +1303,75 @@ void TestRuntimeOutboundLifecycle(TestContext& context) {
     static_cast<void>(coordinator.SnapshotPacketState(packet_state));
     WGNX_TEST_REQUIRE(context,
                       !coordinator.HasPendingDatagram(identity, raced_send_effect.datagram_generation) &&
-                          packet_state.staged_packet_count == 0 && coordinator.Lifecycle(0)->state == wgnx::PeerRuntimeState::Active,
-                      "suspended transmit failure left a pending datagram that blocks recovery");
+                          packet_state.staged_packet_count == 0 && packet_state.can_stage_packet &&
+                          coordinator.Lifecycle(0)->state == wgnx::PeerRuntimeState::Active,
+                      "suspended transmit failure did not free staged admission capacity for a later writer");
+}
+
+void TestRuntimeInitiatorSessionKeepalive(TestContext& context) {
+    using namespace wgnx::sysmodule::runtime;
+    using namespace wgnx::wireguard;
+
+    runtime::Reset(InitialRuntimeState);
+    std::array<wgnx::PeerConfigEntry, 1> configured{};
+    FillConfig(&configured[0], "runtime-empty-stage", "10.66.66.2/32", InitiatorPrivateKey, ResponderPublicKey);
+    PeerRegistry registry{};
+    RuntimeCoordinator coordinator{registry};
+    WGNX_TEST_REQUIRE(context, ConfigureTestPeers(coordinator, configured, 0), "empty-stage registry initialization failed");
+
+    auto effects = ActivateTestPeer(coordinator, 0, 92);
+    const PeerIdentity identity{.peer_index = PeerIndex{0}, .activation_generation = ActivationGeneration{1}};
+    const auto* initial_send = effects.Size() == 1 ? std::get_if<SendPendingDatagramEffect>(effects.begin()) : nullptr;
+    PendingDatagramSnapshot snapshot{};
+    WGNX_TEST_REQUIRE(context,
+                      initial_send != nullptr &&
+                          coordinator.SnapshotPendingDatagram(identity, initial_send->datagram_generation, snapshot) &&
+                          snapshot.kind == PendingDatagramKind::HandshakeInitiation,
+                      "empty-stage activation did not produce an initiation");
+
+    ProtocolPair responder{};
+    WGNX_TEST_REQUIRE(context,
+                      responder.Initialize() &&
+                          responder.initiator_to_responder.Send(std::span<const std::uint8_t>(snapshot.bytes).first(snapshot.size)) &&
+                          responder.ReceiveInitiationAndSendResponse(),
+                      "empty-stage responder did not produce a handshake response");
+    std::span<const std::uint8_t> response{};
+    WGNX_TEST_REQUIRE(context, responder.responder_to_initiator.Receive(response), "empty-stage response was unavailable");
+
+    effects = coordinator.Dispatch(PendingDatagramSentEvent{
+        .peer = identity,
+        .datagram_generation = initial_send->datagram_generation,
+        .bytes_sent = snapshot.size,
+        .error = wgnx::platform::socket_error::none,
+        .timer_facts = {.now = TimerDeadlineFromJiffies(500)},
+        .occurred_at = 2'000,
+    });
+    runtime::SetMonotonicTime(SessionBirthTime);
+    WGNX_TEST_REQUIRE(context, noise_handshake_begin_session(&responder.responder_device, responder.responder),
+                      "empty-stage responder session derivation failed");
+
+    effects = coordinator.Dispatch(EncryptedDatagramReceivedEvent{
+        .peer = identity,
+        .packet = response,
+        .source =
+            {
+                .family = wgnx::platform::address_family::inet,
+                .port = 51820,
+                .address = {192, 0, 2, 1},
+            },
+        .source_text = {"192.0.2.1:51820"},
+        .timer_facts = {.now = TimerDeadlineFromJiffies(600)},
+        .occurred_at = SessionBirthTime,
+    });
+    const auto* keepalive_send = effects.Size() == 5 ? std::get_if<SendPendingDatagramEffect>(effects.begin() + 4) : nullptr;
+    WGNX_TEST_REQUIRE(context,
+                      effects.Size() == 5 && std::get_if<ArmProtocolTimerEffect>(effects.begin()) != nullptr &&
+                          std::get_if<CancelProtocolTimerEffect>(effects.begin() + 1) != nullptr &&
+                          std::get_if<ArmProtocolTimerEffect>(effects.begin() + 2) != nullptr &&
+                          std::get_if<CancelProtocolTimerEffect>(effects.begin() + 3) != nullptr && keepalive_send != nullptr &&
+                          coordinator.SnapshotPendingDatagram(identity, keepalive_send->datagram_generation, snapshot) &&
+                          snapshot.kind == PendingDatagramKind::Keepalive && snapshot.size == TransportDataHeaderSize + NoiseTagSize,
+                      "empty staged queue did not produce exactly one initiator confirmation keepalive");
 }
 
 void TestAutoStartPersistenceGeneration(TestContext& context) {

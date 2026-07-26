@@ -1,8 +1,10 @@
 #include "runtime/tunnel_flow_plane.hpp"
 
+#include "logger.hpp"
 #include "wireguard/inner_packet.hpp"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <limits>
 
@@ -59,6 +61,14 @@ bool EndpointEqual(const wgnx::tunnel::Ipv4Endpoint& lhs, const wgnx::tunnel::Ip
 bool IsZeroEndpoint(const wgnx::tunnel::Ipv4Endpoint& endpoint) {
     return endpoint.port == 0 &&
            std::all_of(std::begin(endpoint.address), std::end(endpoint.address), [](std::uint8_t value) { return value == 0; });
+}
+
+void FormatIpv4Text(const std::array<std::uint8_t, 4>& address, char* out, std::size_t out_size) {
+    if (out == nullptr || out_size == 0) {
+        return;
+    }
+    std::snprintf(out, out_size, "%u.%u.%u.%u", static_cast<unsigned int>(address[0]), static_cast<unsigned int>(address[1]),
+                  static_cast<unsigned int>(address[2]), static_cast<unsigned int>(address[3]));
 }
 
 } // namespace
@@ -241,11 +251,22 @@ wgnx::tunnel::OpenConnectedUdpFlowResult TunnelFlowPlane::OpenConnectedUdpFlow(T
     result.status = wgnx::tunnel::ProtocolStatus::Success;
     result.flow = MakeFlowHandle(slot, flow);
     result.peer_activation_generation = flow.peer.activation_generation.Value();
+    char remote_text[16] = {};
+    char tunnel_source_text[16] = {};
+    FormatIpv4Text({flow.remote.address[0], flow.remote.address[1], flow.remote.address[2], flow.remote.address[3]}, remote_text,
+                   sizeof(remote_text));
+    FormatIpv4Text(flow.tunnel_source, tunnel_source_text, sizeof(tunnel_source_text));
+    logger::Log("Opened tunnel UDP flow=%llu slot=%zu client=%u/%u peer=%u activation=%u policy=%u remote=%s:%u "
+                "tunnel_source=%s virtual_source_port=%u tag=%llu",
+                static_cast<unsigned long long>(result.flow.value), slot, static_cast<unsigned int>(flow.client_slot),
+                flow.client_generation, flow.peer.peer_index.Value(), flow.peer.activation_generation.Value(), flow.policy_generation,
+                remote_text, static_cast<unsigned int>(flow.remote.port), tunnel_source_text,
+                static_cast<unsigned int>(flow.virtual_source_port), static_cast<unsigned long long>(flow.diagnostic_tag));
     return result;
 }
 
 PreparedTunnelDatagram TunnelFlowPlane::PrepareSend(TunnelClientId client, const wgnx::tunnel::DatagramDescriptor& descriptor,
-                                                    std::span<const std::uint8_t> payload, bool transport_available,
+                                                    std::span<const std::uint8_t> payload, TunnelTransportAvailability availability,
                                                     wgnx::platform::ktime_t now) {
     PreparedTunnelDatagram outcome{.flow = descriptor.flow};
     if (descriptor.payload_size != payload.size()) {
@@ -269,8 +290,13 @@ PreparedTunnelDatagram TunnelFlowPlane::PrepareSend(TunnelClientId client, const
         outcome.status = wgnx::tunnel::ProtocolStatus::PeerUnavailable;
         return outcome;
     }
-    if (!transport_available) {
+    if (!availability.protocol_available) {
         outcome.status = wgnx::tunnel::ProtocolStatus::TransportUnavailable;
+        return outcome;
+    }
+    if (!availability.staging_available) {
+        flow->writable_waiter = true;
+        outcome.status = wgnx::tunnel::ProtocolStatus::QueueFull;
         return outcome;
     }
 
@@ -306,14 +332,8 @@ void TunnelFlowPlane::CompleteSend(const PreparedTunnelDatagram& datagram, wgnx:
         }
         if (completion_status == wgnx::tunnel::ProtocolStatus::QueueFull) {
             flow.writable_waiter = true;
-        } else if (completion_status == wgnx::tunnel::ProtocolStatus::Success && flow.writable_waiter) {
+        } else if (completion_status == wgnx::tunnel::ProtocolStatus::Success) {
             flow.writable_waiter = false;
-            const TunnelClientId client{.slot = flow.client_slot, .generation = flow.client_generation};
-            wgnx::tunnel::CompletionRecord completion{};
-            completion.type = wgnx::tunnel::CompletionType::Writable;
-            completion.status = wgnx::tunnel::ProtocolStatus::Success;
-            completion.flow = datagram.flow;
-            EnqueueControlCompletion(client, completion);
         }
         return;
     }
@@ -322,6 +342,25 @@ void TunnelFlowPlane::CompleteSend(const PreparedTunnelDatagram& datagram, wgnx:
 void TunnelFlowPlane::ReleasePreparedDatagram(const PreparedTunnelDatagram& datagram) {
     if (datagram.slab_slot < m_outbound_slabs.size()) {
         m_outbound_slabs[datagram.slab_slot].allocated = false;
+    }
+}
+
+void TunnelFlowPlane::NotifyOutboundCapacityAvailable(const PeerIdentity& peer) {
+    for (std::size_t index = 0; index < m_flows.size(); ++index) {
+        FlowSlot& flow = m_flows[index];
+        if (!flow.allocated || flow.closed || flow.peer != peer || !flow.writable_waiter) {
+            continue;
+        }
+
+        flow.writable_waiter = false;
+        wgnx::tunnel::CompletionRecord completion{};
+        completion.type = wgnx::tunnel::CompletionType::Writable;
+        completion.status = wgnx::tunnel::ProtocolStatus::Success;
+        completion.flow = MakeFlowHandle(index, flow);
+        completion.peer_activation_generation = flow.peer.activation_generation.Value();
+        completion.routing_policy_generation = flow.policy_generation;
+        completion.flow_state = wgnx::tunnel::FlowState::Open;
+        EnqueueControlCompletion({.slot = flow.client_slot, .generation = flow.client_generation}, completion);
     }
 }
 
@@ -433,10 +472,37 @@ TunnelInboundOutcome TunnelFlowPlane::DeliverDecryptedIpv4Packet(const PeerIdent
         return outcome;
     }
 
+    const FlowSlot* closest_flow = nullptr;
+    std::size_t closest_slot = 0;
+    std::size_t live_flow_count = 0;
+    std::size_t peer_matches = 0;
+    std::size_t tunnel_address_matches = 0;
+    std::size_t tunnel_port_matches = 0;
+    std::size_t remote_matches = 0;
+    std::size_t closest_match_count = 0;
     for (std::size_t index = 0; index < m_flows.size(); ++index) {
         FlowSlot& flow = m_flows[index];
-        if (!flow.allocated || flow.closed || flow.peer != peer || flow.virtual_source_port != tunnel_destination_port ||
-            flow.tunnel_source != tunnel_destination || !EndpointEqual(flow.remote, remote)) {
+        if (!flow.allocated || flow.closed) {
+            continue;
+        }
+        ++live_flow_count;
+        const bool peer_matches_flow = flow.peer == peer;
+        const bool tunnel_address_matches_flow = flow.tunnel_source == tunnel_destination;
+        const bool tunnel_port_matches_flow = flow.virtual_source_port == tunnel_destination_port;
+        const bool remote_matches_flow = EndpointEqual(flow.remote, remote);
+        peer_matches += peer_matches_flow ? 1U : 0U;
+        tunnel_address_matches += tunnel_address_matches_flow ? 1U : 0U;
+        tunnel_port_matches += tunnel_port_matches_flow ? 1U : 0U;
+        remote_matches += remote_matches_flow ? 1U : 0U;
+        const std::size_t match_count = static_cast<std::size_t>(peer_matches_flow) +
+                                        static_cast<std::size_t>(tunnel_address_matches_flow) +
+                                        static_cast<std::size_t>(tunnel_port_matches_flow) + static_cast<std::size_t>(remote_matches_flow);
+        if (closest_flow == nullptr || match_count > closest_match_count) {
+            closest_flow = std::addressof(flow);
+            closest_slot = index;
+            closest_match_count = match_count;
+        }
+        if (!peer_matches_flow || !tunnel_port_matches_flow || !tunnel_address_matches_flow || !remote_matches_flow) {
             continue;
         }
         outcome.client = {.slot = flow.client_slot, .generation = flow.client_generation};
@@ -463,7 +529,37 @@ TunnelInboundOutcome TunnelFlowPlane::DeliverDecryptedIpv4Packet(const PeerIdent
 
     if (IsTombstoned(tunnel_destination, tunnel_destination_port, remote, now)) {
         outcome.disposition = TunnelInboundDisposition::DroppedStale;
+        return outcome;
     }
+
+    char remote_text[16] = {};
+    char tunnel_destination_text[16] = {};
+    FormatIpv4Text({remote.address[0], remote.address[1], remote.address[2], remote.address[3]}, remote_text, sizeof(remote_text));
+    FormatIpv4Text(tunnel_destination, tunnel_destination_text, sizeof(tunnel_destination_text));
+    if (closest_flow == nullptr) {
+        logger::Log("Tunnel UDP reverse lookup miss peer=%u activation=%u remote=%s:%u tunnel_destination=%s:%u live_flows=0",
+                    peer.peer_index.Value(), peer.activation_generation.Value(), remote_text, static_cast<unsigned int>(remote.port),
+                    tunnel_destination_text, static_cast<unsigned int>(tunnel_destination_port));
+        return outcome;
+    }
+
+    char expected_remote_text[16] = {};
+    char expected_tunnel_source_text[16] = {};
+    FormatIpv4Text({closest_flow->remote.address[0], closest_flow->remote.address[1], closest_flow->remote.address[2],
+                    closest_flow->remote.address[3]},
+                   expected_remote_text, sizeof(expected_remote_text));
+    FormatIpv4Text(closest_flow->tunnel_source, expected_tunnel_source_text, sizeof(expected_tunnel_source_text));
+    logger::Log("Tunnel UDP reverse lookup miss peer=%u activation=%u remote=%s:%u tunnel_destination=%s:%u live_flows=%zu "
+                "matches(peer=%zu,address=%zu,port=%zu,remote=%zu) closest(slot=%zu flow=%llu client=%u/%u peer=%u/%u "
+                "remote=%s:%u tunnel_source=%s:%u matched_fields=%zu)",
+                peer.peer_index.Value(), peer.activation_generation.Value(), remote_text, static_cast<unsigned int>(remote.port),
+                tunnel_destination_text, static_cast<unsigned int>(tunnel_destination_port), live_flow_count, peer_matches,
+                tunnel_address_matches, tunnel_port_matches, remote_matches, closest_slot,
+                static_cast<unsigned long long>(MakeFlowHandle(closest_slot, *closest_flow).value),
+                static_cast<unsigned int>(closest_flow->client_slot), closest_flow->client_generation,
+                closest_flow->peer.peer_index.Value(), closest_flow->peer.activation_generation.Value(), expected_remote_text,
+                static_cast<unsigned int>(closest_flow->remote.port), expected_tunnel_source_text,
+                static_cast<unsigned int>(closest_flow->virtual_source_port), closest_match_count);
     return outcome;
 }
 
@@ -680,6 +776,17 @@ void TunnelFlowPlane::CloseFlowSlot(std::size_t flow_slot, wgnx::tunnel::FlowTer
     flow.terminal_reason = reason;
     flow.inbound_occupancy = 0;
     flow.last_activity_at = now;
+    char remote_text[16] = {};
+    char tunnel_source_text[16] = {};
+    FormatIpv4Text({flow.remote.address[0], flow.remote.address[1], flow.remote.address[2], flow.remote.address[3]}, remote_text,
+                   sizeof(remote_text));
+    FormatIpv4Text(flow.tunnel_source, tunnel_source_text, sizeof(tunnel_source_text));
+    logger::Log("Closed tunnel UDP flow=%llu slot=%zu client=%u/%u peer=%u activation=%u policy=%u reason=%u remote=%s:%u "
+                "tunnel_source=%s virtual_source_port=%u",
+                static_cast<unsigned long long>(MakeFlowHandle(flow_slot, flow).value), flow_slot,
+                static_cast<unsigned int>(flow.client_slot), flow.client_generation, flow.peer.peer_index.Value(),
+                flow.peer.activation_generation.Value(), flow.policy_generation, static_cast<unsigned int>(reason), remote_text,
+                static_cast<unsigned int>(flow.remote.port), tunnel_source_text, static_cast<unsigned int>(flow.virtual_source_port));
     if (notify) {
         wgnx::tunnel::CompletionRecord completion{};
         completion.type = wgnx::tunnel::CompletionType::FlowStateChanged;

@@ -57,19 +57,25 @@ void PeerRuntime::CompleteInitiatorSession(const EncryptedDatagramReceivedEvent&
         m_lifecycle.established = true;
     }
 
+    OnSessionDerived(event.peer, event.timer_facts, effects);
+    OnHandshakeComplete(event.peer, effects);
+    if (StagedInnerPacketCount() != 0) {
+        // Match the upstream send path: an initiator session releases staged
+        // inner traffic first and only emits a confirmation keepalive when no
+        // traffic is waiting to confirm the new keypair.
+        effects.Add(QueueInnerPacketSubmissionEffect{.peer = event.peer});
+        return;
+    }
+
     wgnx::wireguard::TransportDataError build_error{};
     if (!PrepareTransportDatagram({}, PendingDatagramKind::Keepalive, PacketId{}, build_error)) {
         EnterActivationError(wgnx::PeerErrorStage::Internal, wgnx::PeerErrorCode::InternalFailure, event.occurred_at, &effects);
         return;
     }
-
-    OnSessionDerived(event.peer, event.timer_facts, effects);
-    OnHandshakeComplete(event.peer, effects);
     effects.Add(SendPendingDatagramEffect{
         .peer = event.peer,
         .datagram_generation = m_pending_datagram.generation,
     });
-    effects.Add(QueueInnerPacketSubmissionEffect{.peer = event.peer});
 }
 
 void PeerRuntime::HandleTransportData(const EncryptedDatagramReceivedEvent& event, EffectBatch& effects) {

@@ -92,25 +92,23 @@ void TunnelDiscoveryService::ThreadMain(void* argument) {
 
 void TunnelDiscoveryService::Run() {
     // The worker is intentionally process-lifetime because the sysmodule is resident.
-    // It is the only owner of the root and child CMIF sessions.
+    // It is the only owner of the root CMIF session.
+    // A child tunnel-client context is acquired only by future active interception.
     wgnx::tunnel::client::ScopedRootService root;
-    wgnx::tunnel::client::ScopedClient client;
 
     for (;;) {
         m_wake_event.Wait();
         m_wake_event.Clear();
 
         if (m_client_invalidation_requested.exchange(false, std::memory_order_acq_rel)) {
-            client.Close();
             root.Close();
-            logger::Log("tunnel client invalidated state=bypass");
+            logger::Log("tunnel root invalidated state=bypass");
         }
 
         if (!m_attempt_requested.exchange(false, std::memory_order_acq_rel)) {
             continue;
         }
 
-        client.Close();
         root.Close();
 
         if (!wgnx::tunnel::client::IsServiceRunning()) {
@@ -132,27 +130,12 @@ void TunnelDiscoveryService::Run() {
             continue;
         }
 
-        const Result client_result = wgnx::tunnel::client::OpenTunnelClient(root, std::addressof(client));
-        if (R_FAILED(client_result)) {
-            root.Close();
-            CompleteDiscoveryFailure();
-            continue;
-        }
-
-        const Result client_capabilities_result = wgnx::tunnel::client::GetCapabilities(client, std::addressof(capabilities));
-        if (R_FAILED(client_capabilities_result) || !HasRequiredCapabilities(capabilities)) {
-            client.Close();
-            root.Close();
-            CompleteDiscoveryFailure();
-            continue;
-        }
-
         {
             std::scoped_lock lock(m_mutex);
             m_backoff.CompleteSuccess();
             PublishStateLocked();
         }
-        logger::Log("tunnel client ready api=%u capabilities=0x%08X", capabilities.api_version, capabilities.capability_mask);
+        logger::Log("tunnel root ready api=%u capabilities=0x%08X", capabilities.api_version, capabilities.capability_mask);
     }
 }
 

@@ -1,6 +1,10 @@
 #include "tunnel_protocol_tests.hpp"
 
 #include "wgnx/tunnel_protocol.hpp"
+#include "wgnx/tunnel_batch.hpp"
+
+#include <array>
+#include <span>
 
 namespace wgnx::test {
 
@@ -73,6 +77,40 @@ void TestTunnelProtocolContract(TestContext& context) {
                           sizeof(CompletionDrainResult) == 8 && sizeof(FlowStateResult) == 40 && sizeof(RoutingPolicySnapshot) == 8 &&
                           sizeof(RouteRecord) == 32,
                       "tunnel binary record layout changed");
+
+    std::array<std::uint8_t, MaximumUdpPayloadBytes + 1> payload{};
+    const std::array<DatagramDescriptor, 5> descriptors = {
+        DatagramDescriptor{.flow = {.value = 1}, .payload_offset = 0, .payload_size = 8, .client_tag = 1},
+        DatagramDescriptor{
+            .flow = {.value = 1}, .payload_offset = static_cast<std::uint32_t>(payload.size()), .payload_size = 1, .client_tag = 2},
+        DatagramDescriptor{
+            .flow = {.value = 1}, .payload_offset = 0, .payload_size = static_cast<std::uint32_t>(payload.size()), .client_tag = 3},
+        DatagramDescriptor{.flow = {.value = 2}, .payload_offset = 0, .payload_size = 8, .client_tag = 4},
+        DatagramDescriptor{.flow = {.value = 3}, .payload_offset = 0, .payload_size = 8, .client_tag = 5},
+    };
+    std::array<DatagramDisposition, descriptors.size()> dispositions{};
+    std::uint32_t send_count = 0;
+    DispatchUdpDatagramBatch(
+        descriptors, payload, dispositions, [&send_count](const DatagramDescriptor& descriptor, std::span<const std::uint8_t>) {
+            ++send_count;
+            switch (descriptor.flow.value) {
+            case 1:
+                return descriptor.payload_size > MaximumUdpPayloadBytes ? ProtocolStatus::DatagramTooLarge : ProtocolStatus::Success;
+            case 2:
+                return ProtocolStatus::StaleHandle;
+            case 3:
+                return ProtocolStatus::QueueFull;
+            default:
+                return ProtocolStatus::MalformedInput;
+            }
+        });
+    WGNX_TEST_REQUIRE(context,
+                      dispositions[0].client_tag == 1 && dispositions[0].status == ProtocolStatus::Success &&
+                          dispositions[1].client_tag == 2 && dispositions[1].status == ProtocolStatus::MalformedInput &&
+                          dispositions[2].client_tag == 3 && dispositions[2].status == ProtocolStatus::DatagramTooLarge &&
+                          dispositions[3].client_tag == 4 && dispositions[3].status == ProtocolStatus::StaleHandle &&
+                          dispositions[4].client_tag == 5 && dispositions[4].status == ProtocolStatus::QueueFull && send_count == 4,
+                      "batch dispatch did not preserve ordered partial dispositions");
 }
 
 } // namespace wgnx::test

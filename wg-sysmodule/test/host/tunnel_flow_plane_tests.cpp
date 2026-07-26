@@ -102,6 +102,16 @@ void TestTunnelFlowPlane(TestContext& context) {
     using namespace wgnx::sysmodule::runtime;
     using namespace wgnx::tunnel;
 
+    constexpr TunnelTransportAvailability TransportUnavailable{};
+    constexpr TunnelTransportAvailability StagingFull{
+        .protocol_available = true,
+        .staging_available = false,
+    };
+    constexpr TunnelTransportAvailability TransportReady{
+        .protocol_available = true,
+        .staging_available = true,
+    };
+
     wgnx::PeerConfigEntry config{};
     FillConfig(&config, "flow-plane", "10.13.13.8/24", InitiatorPrivateKey, ResponderPublicKey);
     std::snprintf(config.allowed_ips.data(), config.allowed_ips.size(), "%s", "10.0.0.0/8, 10.251.0.0/16");
@@ -141,8 +151,8 @@ void TestTunnelFlowPlane(TestContext& context) {
         .payload_size = static_cast<std::uint32_t>(Payload.size()),
         .client_tag = 99,
     };
-    const auto not_ready = plane.PrepareSend(client, descriptor, Payload, false, 130);
-    const auto sent = plane.PrepareSend(client, descriptor, Payload, true, 140);
+    const auto not_ready = plane.PrepareSend(client, descriptor, Payload, TransportUnavailable, 130);
+    const auto sent = plane.PrepareSend(client, descriptor, Payload, TransportReady, 140);
     WGNX_TEST_REQUIRE(context,
                       not_ready.status == ProtocolStatus::TransportUnavailable && sent.status == ProtocolStatus::Success &&
                           sent.HasPacket() && sent.packet.size() == Ipv4HeaderSize + UdpHeaderSize + Payload.size() &&
@@ -172,7 +182,7 @@ void TestTunnelFlowPlane(TestContext& context) {
                           std::equal(Payload.begin(), Payload.end(), received_payload.begin()),
                       "flow receive did not retain the policy edge and matching UDP reply in completion order");
 
-    const auto second_send = plane.PrepareSend(client, descriptor, Payload, true, 160);
+    const auto second_send = plane.PrepareSend(client, descriptor, Payload, TransportReady, 160);
     const std::size_t second_reply_size = BuildReply(reply, second_send.packet, Payload);
     plane.ReleasePreparedDatagram(second_send);
     static_cast<void>(plane.DeliverDecryptedIpv4Packet(first_peer, std::span<const std::uint8_t>(reply.data(), second_reply_size), 170));
@@ -183,6 +193,20 @@ void TestTunnelFlowPlane(TestContext& context) {
                       insufficient.status == ProtocolStatus::OutputBufferTooSmall && after_insufficient.status == ProtocolStatus::Success &&
                           after_insufficient.count == 1 && completions[0].type == CompletionType::InboundDatagram,
                       "completion draining emitted a partial datagram or lost it after an undersized buffer");
+
+    const auto staging_full = plane.PrepareSend(client, descriptor, Payload, StagingFull, 175);
+    plane.NotifyOutboundCapacityAvailable(first_peer);
+    plane.NotifyOutboundCapacityAvailable(first_peer);
+    const auto writable = plane.ReceiveCompletions(client, completions, received_payload);
+    const auto retried_send = plane.PrepareSend(client, descriptor, Payload, TransportReady, 176);
+    plane.CompleteSend(retried_send, ProtocolStatus::Success);
+    plane.ReleasePreparedDatagram(retried_send);
+    WGNX_TEST_REQUIRE(context,
+                      staging_full.status == ProtocolStatus::QueueFull && writable.status == ProtocolStatus::Success &&
+                          writable.count == 1 && completions[0].type == CompletionType::Writable &&
+                          completions[0].flow.value == opened.flow.value && retried_send.status == ProtocolStatus::Success &&
+                          notifications.count == 3,
+                      "staging pressure did not report one coalesced writable transition and a successful retry without packet loss");
 
     const auto close_status = plane.CloseFlow(client, opened.flow, 180);
     const auto delayed = plane.DeliverDecryptedIpv4Packet(first_peer, std::span<const std::uint8_t>(reply.data(), second_reply_size), 181);
@@ -200,6 +224,49 @@ void TestTunnelFlowPlane(TestContext& context) {
     WGNX_TEST_REQUIRE(
         context, stale_state.status == ProtocolStatus::FlowClosed && stale_state.terminal_reason == FlowTerminalReason::PolicyInvalidated,
         "peer activation transition did not close the old flow with a terminal state");
+
+    TunnelFlowPlane client_reuse_plane{};
+    const TunnelClientId first_reuse_client = client_reuse_plane.CreateClient(nullptr, nullptr);
+    const TunnelClientId second_reuse_client = client_reuse_plane.CreateClient(nullptr, nullptr);
+    client_reuse_plane.RefreshPolicy({.configuration = &config, .peer = first_peer, .selected = true}, 200);
+    static_cast<void>(client_reuse_plane.ReceiveCompletions(first_reuse_client, completions, received_payload));
+    static_cast<void>(client_reuse_plane.ReceiveCompletions(second_reuse_client, completions, received_payload));
+    const auto first_reuse_flow = client_reuse_plane.OpenConnectedUdpFlow(first_reuse_client, open, 201);
+    const DatagramDescriptor first_reuse_descriptor{
+        .flow = first_reuse_flow.flow,
+        .payload_offset = 0,
+        .payload_size = static_cast<std::uint32_t>(Payload.size()),
+        .client_tag = 200,
+    };
+    const auto first_reuse_send = client_reuse_plane.PrepareSend(first_reuse_client, first_reuse_descriptor, Payload, TransportReady, 202);
+    const std::uint16_t first_reuse_port = LoadBigEndian16(first_reuse_send.packet.data() + Ipv4HeaderSize);
+    client_reuse_plane.ReleasePreparedDatagram(first_reuse_send);
+    const auto first_reuse_close = client_reuse_plane.CloseFlow(first_reuse_client, first_reuse_flow.flow, 203);
+    const auto second_reuse_flow = client_reuse_plane.OpenConnectedUdpFlow(second_reuse_client, open, 204);
+    const DatagramDescriptor second_reuse_descriptor{
+        .flow = second_reuse_flow.flow,
+        .payload_offset = 0,
+        .payload_size = static_cast<std::uint32_t>(Payload.size()),
+        .client_tag = 201,
+    };
+    const auto second_reuse_send =
+        client_reuse_plane.PrepareSend(second_reuse_client, second_reuse_descriptor, Payload, TransportReady, 205);
+    const std::uint16_t second_reuse_port = LoadBigEndian16(second_reuse_send.packet.data() + Ipv4HeaderSize);
+    const std::size_t second_reuse_reply_size = BuildReply(reply, second_reuse_send.packet, Payload);
+    client_reuse_plane.ReleasePreparedDatagram(second_reuse_send);
+    const auto second_reuse_delivery = client_reuse_plane.DeliverDecryptedIpv4Packet(
+        first_peer, std::span<const std::uint8_t>(reply.data(), second_reuse_reply_size), 206);
+    const auto second_reuse_received = client_reuse_plane.ReceiveCompletions(second_reuse_client, completions, received_payload);
+    WGNX_TEST_REQUIRE(context,
+                      first_reuse_flow.status == ProtocolStatus::Success && first_reuse_send.status == ProtocolStatus::Success &&
+                          first_reuse_close == ProtocolStatus::Success && second_reuse_flow.status == ProtocolStatus::Success &&
+                          second_reuse_send.status == ProtocolStatus::Success && first_reuse_port != second_reuse_port &&
+                          second_reuse_delivery.disposition == TunnelInboundDisposition::Delivered &&
+                          second_reuse_received.status == ProtocolStatus::Success && second_reuse_received.count == 1 &&
+                          completions[0].type == CompletionType::InboundDatagram &&
+                          completions[0].flow.value == second_reuse_flow.flow.value &&
+                          std::equal(Payload.begin(), Payload.end(), received_payload.begin()),
+                      "a fresh client flow did not receive its reply after a prior client closed the same remote tuple");
 
     std::array<TunnelClientId, MaximumClientContexts - 1> extra_clients{};
     bool all_extra_created = true;
@@ -246,7 +313,7 @@ void TestTunnelFlowPlane(TestContext& context) {
             .payload_size = static_cast<std::uint32_t>(Payload.size()),
             .client_tag = sequence,
         };
-        const auto outbound = bounded_plane.PrepareSend(bounded_client, bounded_descriptor, Payload, true, 210 + sequence);
+        const auto outbound = bounded_plane.PrepareSend(bounded_client, bounded_descriptor, Payload, TransportReady, 210 + sequence);
         const std::size_t bounded_reply_size = BuildReply(reply, outbound.packet, Payload);
         bounded_plane.ReleasePreparedDatagram(outbound);
         const auto inbound = bounded_plane.DeliverDecryptedIpv4Packet(

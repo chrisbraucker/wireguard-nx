@@ -661,9 +661,14 @@ wgnx::tunnel::ProtocolStatus DaemonRuntime::SendTunnelUdpDatagram(runtime::Tunne
         std::scoped_lock lock(m_state_mutex);
         RefreshTunnelPolicyLocked();
         runtime::PeerPacketStateSnapshot peer{};
-        const bool transport_available =
-            m_runtime_coordinator.SnapshotPacketState(peer) && peer.protocol_instantiated && peer.can_stage_packet;
-        prepared = m_tunnel_flow_plane.PrepareSend(client, descriptor, payload, transport_available, GetRuntimeNowNs());
+        const bool packet_state_available = m_runtime_coordinator.SnapshotPacketState(peer);
+        prepared = m_tunnel_flow_plane.PrepareSend(
+            client, descriptor, payload,
+            {
+                .protocol_available = packet_state_available && peer.protocol_instantiated,
+                .staging_available = packet_state_available && peer.protocol_instantiated && peer.can_stage_packet,
+            },
+            GetRuntimeNowNs());
         status = prepared.status;
         if (prepared.HasPacket()) {
             const auto submission =

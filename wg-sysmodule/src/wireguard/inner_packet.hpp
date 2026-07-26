@@ -184,6 +184,7 @@ template <std::size_t Capacity> class InnerPacketQueue {
     QueueStatistics m_statistics{};
 };
 
-static_assert(sizeof(InnerPacketQueue<wgnx::resource_budget::PacketQueueSlots>) <= wgnx::resource_budget::MaximumPacketQueueBytes);
+static_assert(sizeof(InnerPacketQueue<wgnx::resource_budget::PeerOutboundStagingSlots>) <=
+              wgnx::resource_budget::MaximumPeerOutboundStagingBytes);
 
 } // namespace wgnx::wireguard

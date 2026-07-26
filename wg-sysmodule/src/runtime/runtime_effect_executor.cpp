@@ -110,6 +110,9 @@ NOINLINE void RuntimeEffectExecutor::ExecutePendingDatagramSend(const SendPendin
 
     {
         std::scoped_lock lock(m_state_mutex);
+        PeerPacketStateSnapshot before_completion{};
+        const bool had_staged_packet = snapshot.kind == PendingDatagramKind::TransportData &&
+                                       m_coordinator.SnapshotPacketState(before_completion) && before_completion.staged_packet_count != 0;
         completion = m_coordinator.Dispatch(PendingDatagramSentEvent{
             .peer = effect.peer,
             .datagram_generation = effect.datagram_generation,
@@ -118,6 +121,18 @@ NOINLINE void RuntimeEffectExecutor::ExecutePendingDatagramSend(const SendPendin
             .timer_facts = CaptureTimerFacts(),
             .occurred_at = GetRuntimeNowNs(),
         });
+        PeerPacketStateSnapshot after_completion{};
+        const bool retired_staged_packet = had_staged_packet && m_coordinator.SnapshotPacketState(after_completion) &&
+                                           after_completion.staged_packet_count < before_completion.staged_packet_count;
+        if (retired_staged_packet && m_coordinator.IsActiveIdentity(effect.peer)) {
+            // A staged packet can retire after either a successful UDP send
+            // or a nonterminal transport drop.  Both transitions free the
+            // same bounded admission capacity, so both must wake waiting
+            // direct-flow writers.
+            // Keep this outside PeerRuntime's fixed effect batch because a
+            // transport completion may also begin a replacement handshake.
+            m_tunnel_flow_plane.NotifyOutboundCapacityAvailable(effect.peer);
+        }
     }
     generated.Append(completion);
 }

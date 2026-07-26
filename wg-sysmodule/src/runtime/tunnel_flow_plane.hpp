@@ -30,6 +30,11 @@ struct TunnelPolicyInput {
     bool selected{false};
 };
 
+struct TunnelTransportAvailability {
+    bool protocol_available{false};
+    bool staging_available{false};
+};
+
 enum class TunnelInboundDisposition : std::uint8_t {
     NotClaimed = 0,
     Delivered,
@@ -79,10 +84,11 @@ class TunnelFlowPlane {
     [[nodiscard]] wgnx::tunnel::OpenConnectedUdpFlowResult
     OpenConnectedUdpFlow(TunnelClientId client, const wgnx::tunnel::OpenConnectedUdpFlowRequest& request, wgnx::platform::ktime_t now);
     [[nodiscard]] PreparedTunnelDatagram PrepareSend(TunnelClientId client, const wgnx::tunnel::DatagramDescriptor& descriptor,
-                                                     std::span<const std::uint8_t> payload, bool transport_available,
+                                                     std::span<const std::uint8_t> payload, TunnelTransportAvailability availability,
                                                      wgnx::platform::ktime_t now);
     void CompleteSend(const PreparedTunnelDatagram& datagram, wgnx::tunnel::ProtocolStatus completion_status);
     void ReleasePreparedDatagram(const PreparedTunnelDatagram& datagram);
+    void NotifyOutboundCapacityAvailable(const PeerIdentity& peer);
 
     [[nodiscard]] TunnelCompletionDrainOutcome ReceiveCompletions(TunnelClientId client, std::span<wgnx::tunnel::CompletionRecord> records,
                                                                   std::span<std::uint8_t> payload);

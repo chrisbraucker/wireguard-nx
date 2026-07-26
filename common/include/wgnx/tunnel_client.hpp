@@ -107,6 +107,7 @@ class ScopedClient {
     }
 
   private:
+    friend Result CloneTunnelClient(ScopedClient& client, ScopedClient* out_client);
     friend Result OpenTunnelClient(ScopedRootService& root, ScopedClient* out_client);
 
     void Adopt(Service service) {
@@ -146,6 +147,18 @@ class ScopedClient {
                                       .out_objects = &child);
     if (R_SUCCEEDED(rc)) {
         out_client->Adopt(child);
+    }
+    return rc;
+}
+
+[[nodiscard]] inline Result CloneTunnelClient(ScopedClient& client, ScopedClient* out_client) {
+    if (!client.IsOpen() || out_client == nullptr) {
+        return MAKERESULT(Module_Libnx, LibnxError_NotInitialized);
+    }
+    Service clone{};
+    const Result rc = serviceClone(client.Get(), &clone);
+    if (R_SUCCEEDED(rc)) {
+        out_client->Adopt(clone);
     }
     return rc;
 }

@@ -15,7 +15,10 @@ constexpr inline std::size_t PeerSlots = wgnx::MaxPeers;
 constexpr inline std::size_t ActivePeerSlots = 1;
 constexpr inline std::size_t IpcServerPorts = 2;
 constexpr inline std::size_t IpcSessions = 8;
-constexpr inline std::size_t PacketQueueSlots = 8;
+// These queues have independent producers, consumers, and pressure policy.
+// Keep their capacities separate so one does not accidentally tune the other.
+constexpr inline std::size_t PeerOutboundStagingSlots = 8;
+constexpr inline std::size_t LegacyPacketChannelReceiveSlots = 8;
 constexpr inline std::size_t EffectBatchSlots = 8;
 // WireGuard owns independent retransmit, delayed-keepalive, liveness,
 // stale-key cleanup, and persistent-keepalive deadlines.
@@ -51,8 +54,8 @@ constexpr inline std::size_t NifmPathThreadStackBytes = KiB(16);
 
 // Layout ceilings turn otherwise silent fixed-footprint growth into a review gate.
 constexpr inline std::size_t MaximumInnerPacketRecordBytes = 1536;
-constexpr inline std::size_t MaximumPacketQueueBytes = KiB(13);
-constexpr inline std::size_t MaximumPacketChannelBytes = MaximumPacketQueueBytes + 128;
+constexpr inline std::size_t MaximumPeerOutboundStagingBytes = KiB(13);
+constexpr inline std::size_t MaximumLegacyPacketChannelBytes = MaximumPeerOutboundStagingBytes + 128;
 constexpr inline std::size_t MaximumEffectBatchBytes = 2304;
 constexpr inline std::size_t MaximumPeerRuntimeBytes = KiB(24);
 constexpr inline std::size_t MaximumPeerRegistryBytes = KiB(192);
@@ -69,7 +72,8 @@ static_assert(PeerSlots > 0);
 static_assert(ActivePeerSlots == 1);
 static_assert(IpcServerPorts == 2);
 static_assert(TunnelClientServiceAllocatorBytes >= KiB(4));
-static_assert(PacketQueueSlots > 0);
+static_assert(PeerOutboundStagingSlots > 0);
+static_assert(LegacyPacketChannelReceiveSlots > 0);
 static_assert(EffectBatchSlots > 0);
 static_assert(OrderedWorkqueueSlots == 5);
 static_assert(ResolveWorkSlots + SubmissionWorkSlots + TransmitWorkSlots + ReceiveWorkSlots + TimerWorkSlots == 11);

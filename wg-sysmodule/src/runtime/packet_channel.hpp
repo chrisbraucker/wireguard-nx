@@ -10,7 +10,7 @@ namespace wgnx::sysmodule::runtime {
 
 class PacketChannel final : public PacketTransport {
   public:
-    static constexpr std::size_t ReceiveCapacity = wgnx::resource_budget::PacketQueueSlots;
+    static constexpr std::size_t ReceiveCapacity = wgnx::resource_budget::LegacyPacketChannelReceiveSlots;
 
     ProcessId ConsumerId() const override {
         return m_owner_process_id;
@@ -68,6 +68,6 @@ class PacketChannel final : public PacketTransport {
     ProcessId m_owner_process_id{};
 };
 
-static_assert(sizeof(PacketChannel) <= wgnx::resource_budget::MaximumPacketChannelBytes);
+static_assert(sizeof(PacketChannel) <= wgnx::resource_budget::MaximumLegacyPacketChannelBytes);
 
 } // namespace wgnx::sysmodule::runtime
