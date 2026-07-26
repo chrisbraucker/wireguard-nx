@@ -40,7 +40,9 @@ HOST_TEST_DIR := $(OUTDIR)/host-test
 HOST_TEST_TARGET := $(HOST_TEST_DIR)/mitm-host-test
 HOST_SANITIZE_DIR := $(OUTDIR)/host-test-sanitize
 HOST_SANITIZE_TARGET := $(HOST_SANITIZE_DIR)/mitm-host-test
-HOST_TEST_SOURCES := test/policy_tests.cpp
+HOST_TEST_SOURCES	:= \
+						test/policy_tests.cpp \
+						test/tunnel_discovery_tests.cpp
 HOST_TEST_INCLUDES := -I$(CURDIR)/src
 
 DEFINES += -DDISABLE_IPC -D__SWITCH__ \
@@ -77,7 +79,7 @@ all: $(BUILD)
 dist: $(BUILD)
 	@[ -d $(DISTDIR)/flags ] || mkdir -p $(DISTDIR)/flags
 	@cp $(OUTDIR)/$(TARGET).nsp $(DISTDIR)/exefs.nsp
-	@printf '{\n  "name": "WireGuard-NX MITM",\n  "tid": "$(TITLE_ID)",\n  "requires_reboot": false\n}\n' > $(DISTDIR)/toolbox.json
+	@printf '{\n  "name": "WireGuard-MITM",\n  "tid": "$(TITLE_ID)",\n  "requires_reboot": false\n}\n' > $(DISTDIR)/toolbox.json
 	@: > $(DISTDIR)/flags/boot2.flag
 	@echo "prepared Atmosphere layout in $(DISTDIR)"
 
@@ -102,11 +104,11 @@ verify:
 	@$(MAKE) --no-print-directory diff-check
 	@echo "verification passed"
 
-$(HOST_TEST_TARGET): Makefile $(HOST_TEST_SOURCES) src/mitm_policy.hpp
+$(HOST_TEST_TARGET): Makefile $(HOST_TEST_SOURCES) src/mitm_policy.hpp src/tunnel_discovery_state.hpp test/tunnel_discovery_tests.hpp
 	@[ -d $(HOST_TEST_DIR) ] || mkdir -p $(HOST_TEST_DIR)
 	@$(HOST_CXX) $(HOST_TEST_CXXFLAGS) $(HOST_TEST_INCLUDES) $(addprefix $(CURDIR)/,$(HOST_TEST_SOURCES)) -o $(HOST_TEST_TARGET)
 
-$(HOST_SANITIZE_TARGET): Makefile $(HOST_TEST_SOURCES) src/mitm_policy.hpp
+$(HOST_SANITIZE_TARGET): Makefile $(HOST_TEST_SOURCES) src/mitm_policy.hpp src/tunnel_discovery_state.hpp test/tunnel_discovery_tests.hpp
 	@[ -d $(HOST_SANITIZE_DIR) ] || mkdir -p $(HOST_SANITIZE_DIR)
 	@$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -fsanitize=address,undefined -fno-omit-frame-pointer $(HOST_TEST_INCLUDES) $(addprefix $(CURDIR)/,$(HOST_TEST_SOURCES)) -o $(HOST_SANITIZE_TARGET)
 

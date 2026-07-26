@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 
 namespace wgnx::tunnel::client {
 
@@ -18,6 +19,21 @@ class ScopedRootService {
 
     ScopedRootService(const ScopedRootService&) = delete;
     ScopedRootService& operator=(const ScopedRootService&) = delete;
+
+    ScopedRootService(ScopedRootService&& other) noexcept {
+        *this = std::move(other);
+    }
+
+    ScopedRootService& operator=(ScopedRootService&& other) noexcept {
+        if (this != std::addressof(other)) {
+            Close();
+            m_service = other.m_service;
+            m_active = other.m_active;
+            other.m_service = {};
+            other.m_active = false;
+        }
+        return *this;
+    }
 
     [[nodiscard]] Result Open() {
         if (m_active) {
@@ -58,6 +74,21 @@ class ScopedClient {
 
     ScopedClient(const ScopedClient&) = delete;
     ScopedClient& operator=(const ScopedClient&) = delete;
+
+    ScopedClient(ScopedClient&& other) noexcept {
+        *this = std::move(other);
+    }
+
+    ScopedClient& operator=(ScopedClient&& other) noexcept {
+        if (this != std::addressof(other)) {
+            Close();
+            m_service = other.m_service;
+            m_active = other.m_active;
+            other.m_service = {};
+            other.m_active = false;
+        }
+        return *this;
+    }
 
     void Close() {
         if (m_active) {

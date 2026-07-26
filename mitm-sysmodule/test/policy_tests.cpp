@@ -1,4 +1,5 @@
 #include "mitm_policy.hpp"
+#include "tunnel_discovery_tests.hpp"
 
 #include <cstdio>
 
@@ -47,7 +48,8 @@ int main() {
         Check(all_configurable_clients_are_individually_toggleable, "system-client policy flags were not independently toggleable") &&
         Check(!SetBsdSystemClientEnabled(requester_only, BsdSystemClient::Unknown, true), "unknown system client was configurable") &&
         Check(!IsConfigurableBsdSystemClient(99), "out-of-range system client was configurable") &&
-        Check(ShouldInterceptBsdSystem(enabled, 0x0100000000001234ULL, BsdSystemClient::Unknown), "ordinary client was rejected");
+        Check(ShouldInterceptBsdSystem(enabled, 0x0100000000001234ULL, BsdSystemClient::Unknown), "ordinary client was rejected") &&
+        Check(RunTunnelDiscoveryTests(), "tunnel discovery state machine failed");
 
     std::printf("RESULT passed=%u\n", static_cast<unsigned>(passed));
     return passed ? 0 : 1;

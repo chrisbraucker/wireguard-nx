@@ -52,7 +52,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--password", default="", help="FTP password")
     parser.add_argument("--timeout", type=float, default=10.0, help="FTP timeout in seconds")
 
-    parser.add_argument("-s", "--push-sysmodule", action="store_true", help="Upload sysmodule NSP to Atmosphere contents")
+    parser.add_argument("-w", "--push-wg-sysmodule", action="store_true", help="Upload sysmodule NSP to Atmosphere contents")
     parser.add_argument("-i", "--push-mitm-sysmodule", action="store_true", help="Upload MITM sysmodule NSP to Atmosphere contents")
     parser.add_argument("-o", "--push-overlay", action="store_true", help="Upload overlay OVL to /switch/.overlays/")
     parser.add_argument("-m", "--push-manager", action="store_true", help="Upload manager NRO to /switch/")
@@ -76,7 +76,7 @@ def parse_args() -> argparse.Namespace:
 
     args = parser.parse_args()
     if args.all:
-        args.push_sysmodule = True
+        args.push_wg_sysmodule = True
         args.push_mitm_sysmodule = True
         args.push_overlay = True
         args.push_manager = True
@@ -87,7 +87,7 @@ def parse_args() -> argparse.Namespace:
         args.pull_logs = True
 
     if not any((
-        args.push_sysmodule,
+        args.push_wg_sysmodule,
         args.push_mitm_sysmodule,
         args.push_overlay,
         args.push_manager,
@@ -257,7 +257,7 @@ def main() -> int:
         ftp.connect(args.host, args.port, timeout=args.timeout)
         ftp.login(args.user, args.password)
 
-        if args.push_sysmodule:
+        if args.push_wg_sysmodule:
             upload_file(ftp, SYSMODULE_NSP, REMOTE_SYSMODULE)
         if args.push_mitm_sysmodule:
             upload_file(ftp, MITM_SYSMODULE_NSP, REMOTE_MITM_SYSMODULE)
