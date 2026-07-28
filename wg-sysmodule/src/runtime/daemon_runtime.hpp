@@ -12,6 +12,7 @@
 namespace wgnx::sysmodule::runtime {
 
 void Initialize();
+void Shutdown();
 wgnx::DaemonStatus GetDaemonStatus();
 std::uint32_t CopyPeers(std::span<wgnx::PeerInfo> out);
 ams::Result SetActivePeer(std::int32_t peer_index);
@@ -23,6 +24,7 @@ wgnx::PacketReceiveResult ReceiveInnerIpv4Packet(std::span<std::uint8_t> packet,
 
 TunnelClientId CreateTunnelClient(TunnelFlowPlane::CompletionNotifier notifier, void* notifier_context);
 void DestroyTunnelClient(TunnelClientId client);
+std::uint32_t SignalTunnelClientShutdown();
 wgnx::tunnel::Capabilities GetTunnelCapabilities();
 wgnx::tunnel::RoutingPolicySnapshot CopyTunnelRoutingPolicy(std::span<wgnx::tunnel::RouteRecord> out);
 wgnx::tunnel::OpenConnectedUdpFlowResult OpenTunnelConnectedUdpFlow(TunnelClientId client,

@@ -89,6 +89,7 @@ class TunnelFlowPlane {
     void CompleteSend(const PreparedTunnelDatagram& datagram, wgnx::tunnel::ProtocolStatus completion_status);
     void ReleasePreparedDatagram(const PreparedTunnelDatagram& datagram);
     void NotifyOutboundCapacityAvailable(const PeerIdentity& peer);
+    [[nodiscard]] std::uint32_t SignalAllClientCompletionEvents() const;
 
     [[nodiscard]] TunnelCompletionDrainOutcome ReceiveCompletions(TunnelClientId client, std::span<wgnx::tunnel::CompletionRecord> records,
                                                                   std::span<std::uint8_t> payload);

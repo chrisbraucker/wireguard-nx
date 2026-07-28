@@ -6,6 +6,7 @@ namespace wgnx::mitm {
 
 constexpr inline std::uint64_t WireGuardProgramId = 0x010000000000EAD0ULL;
 constexpr inline std::uint64_t MitmProgramId = 0x010000000000EAD3ULL;
+constexpr inline std::uint64_t RequesterForwarderProgramId = 0x0515C00B3A04A000;
 
 enum class BsdSystemClient : std::uint8_t {
     Unknown,
@@ -49,6 +50,18 @@ struct BsdSystemPolicy {
 
 constexpr bool IsProgramExcludedFromBsdSystemMitm(std::uint64_t program_id) {
     return program_id == WireGuardProgramId || program_id == MitmProgramId;
+}
+
+constexpr bool IsRequesterForwarderProgram(std::uint64_t program_id) {
+    return program_id == RequesterForwarderProgramId;
+}
+
+// SM asks whether to MITM a service acquisition before the first CMIF command
+// is available, so RegisterClient and StartMonitoring cannot safely select a
+// session here. The requester-only experiment admits every requester bsd:s
+// session and forwards lifecycle-only sessions through the generic path.
+constexpr bool ShouldInterceptRequesterBsdSession() {
+    return true;
 }
 
 constexpr bool IsBsdSystemClientEnabled(const BsdSystemPolicy& policy, BsdSystemClient client) {

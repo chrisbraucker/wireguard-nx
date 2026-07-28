@@ -8,7 +8,7 @@ namespace wgnx {
 
 constexpr inline char ServiceName[] = "wgnx:ctl";
 // Increment whenever the public IPC command set or wire contract changes.
-constexpr inline std::uint32_t IpcApiVersion = 4;
+constexpr inline std::uint32_t IpcApiVersion = 5;
 constexpr inline std::size_t MaxPeers = 8;
 constexpr inline std::size_t MaxInnerIpv4PacketSize = 1500;
 
@@ -23,6 +23,7 @@ enum class CommandId : std::uint32_t {
     SubmitInnerIpv4Packet = 21,
     ReceiveInnerIpv4Packet = 22,
     BumpUdpBinding = 23,
+    Shutdown = 24,
 };
 
 enum class PacketApiStatus : std::uint32_t {

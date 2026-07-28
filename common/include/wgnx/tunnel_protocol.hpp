@@ -9,7 +9,7 @@
 namespace wgnx::tunnel {
 
 constexpr inline char ServiceName[] = "wgnx:tun";
-constexpr inline std::uint32_t TunApiVersion = 1;
+constexpr inline std::uint32_t TunApiVersion = 2;
 
 constexpr inline std::size_t MaximumClientContexts = 4;
 constexpr inline std::size_t MaximumFlowsPerClient = 4;

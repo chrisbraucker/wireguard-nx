@@ -285,6 +285,21 @@ void TestTunnelFlowPlane(TestContext& context) {
                           recycled_client.generation != released_client.generation,
                       "destroyed tunnel client contexts were not returned with a stale-safe generation");
 
+    TunnelFlowPlane shutdown_plane{};
+    NotificationCounter first_shutdown_notification{};
+    NotificationCounter second_shutdown_notification{};
+    const TunnelClientId first_shutdown_client = shutdown_plane.CreateClient(Notify, &first_shutdown_notification);
+    const TunnelClientId second_shutdown_client = shutdown_plane.CreateClient(Notify, &second_shutdown_notification);
+    const std::uint32_t shutdown_signaled = shutdown_plane.SignalAllClientCompletionEvents();
+    const auto first_shutdown_drain = shutdown_plane.ReceiveCompletions(first_shutdown_client, completions, received_payload);
+    const auto second_shutdown_drain = shutdown_plane.ReceiveCompletions(second_shutdown_client, completions, received_payload);
+    WGNX_TEST_REQUIRE(context,
+                      first_shutdown_client.IsValid() && second_shutdown_client.IsValid() && shutdown_signaled == 2 &&
+                          first_shutdown_notification.count == 1 && second_shutdown_notification.count == 1 &&
+                          first_shutdown_drain.status == ProtocolStatus::QueueEmpty &&
+                          second_shutdown_drain.status == ProtocolStatus::QueueEmpty,
+                      "sysmodule shutdown did not wake every tunnel client without fabricating completion records");
+
     TunnelFlowPlane bounded_plane{};
     const TunnelClientId bounded_client = bounded_plane.CreateClient(nullptr, nullptr);
     bounded_plane.RefreshPolicy({.configuration = &config, .peer = first_peer, .selected = true}, 200);

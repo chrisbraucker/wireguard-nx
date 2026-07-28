@@ -37,6 +37,7 @@ int main() {
         TestCase{"runtime.packet-data-plane", wgnx::test::TestPacketDataPlane},
         TestCase{"runtime.typed-rejections", wgnx::test::TestRuntimeTypedRejections},
         TestCase{"runtime.resource-budgets", wgnx::test::TestRuntimeResourceBudgets},
+        TestCase{"runtime.ipc-server-shutdown-lifecycle", wgnx::test::TestIpcServerShutdownLifecycle},
         TestCase{"runtime.auxiliary-workflows", wgnx::test::TestAuxiliaryRuntimeWorkflows},
         TestCase{"runtime.frozen-contracts", wgnx::test::TestRuntimeContracts},
         TestCase{"runtime.peer-registry-ownership", wgnx::test::TestPeerRegistryOwnership},

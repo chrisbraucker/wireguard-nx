@@ -170,6 +170,16 @@ inline Result BumpUdpBinding() {
     return serviceDispatch(service.get(), static_cast<std::uint32_t>(CommandId::BumpUdpBinding));
 }
 
+inline Result Shutdown() {
+    ScopedService service;
+    Result rc = service.open();
+    if (R_FAILED(rc)) {
+        return rc;
+    }
+
+    return serviceDispatch(service.get(), static_cast<std::uint32_t>(CommandId::Shutdown));
+}
+
 inline Result SubmitInnerIpv4Packet(ScopedService& service, const void* packet, std::size_t packet_size,
                                     PacketSubmissionResult* out_result) {
     if (!service.isOpen()) {

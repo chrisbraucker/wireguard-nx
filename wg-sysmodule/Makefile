@@ -237,12 +237,16 @@ export APP_JSON := $(TOPDIR)/res/module.json
 		report-footprint resource-report fuzz fuzz-run fuzz-seeds
 
 #---------------------------------------------------------------------------------
-all	: $(BUILD)
+all	: $(BUILD) $(OUTDIR)/toolbox.json
 
-dist	: $(BUILD)
+$(OUTDIR)/toolbox.json: Makefile
+	@mkdir -p $(OUTDIR)
+	@printf '{\n  "name": "WireGuard-NX",\n  "tid": "$(TITLE_ID)",\n  "requires_reboot": false,\n  "shutdown_service": "wgnx:ctl",\n  "shutdown_cmd": 24\n}\n' > $@
+
+dist	: $(BUILD) $(OUTDIR)/toolbox.json
 	@[ -d $(DISTDIR)/flags ] || mkdir -p $(DISTDIR)/flags
 	@cp $(OUTDIR)/$(TARGET).nsp $(DISTDIR)/exefs.nsp
-	@printf '{\n  "name": "WireGuard-NX",\n  "tid": "$(TITLE_ID)",\n  "requires_reboot": false\n}\n' > $(DISTDIR)/toolbox.json
+	@cp $(OUTDIR)/toolbox.json $(DISTDIR)/toolbox.json
 	@: > $(DISTDIR)/flags/boot2.flag
 	@echo "prepared Atmosphere layout in $(DISTDIR)"
 

@@ -19,6 +19,7 @@ void TestPacketChannelOwnership(TestContext& context);
 void TestPacketDataPlane(TestContext& context);
 void TestRuntimeTypedRejections(TestContext& context);
 void TestRuntimeResourceBudgets(TestContext& context);
+void TestIpcServerShutdownLifecycle(TestContext& context);
 void TestAuxiliaryRuntimeWorkflows(TestContext& context);
 void TestRuntimeContracts(TestContext& context);
 void TestPeerRegistryOwnership(TestContext& context);

@@ -46,11 +46,14 @@ constexpr inline std::size_t TimerManagerBytes = KiB(24);
 // than the optional global SF allocator.
 constexpr inline std::size_t TunnelClientServiceAllocatorBytes = KiB(4);
 
-// Every runtime-owned execution context currently has a 16 KiB stack.
+// Runtime work contexts use 16 KiB stacks.
+// CMIF dispatch receives map-alias buffers and creates child service objects, so
+// it has an independent 32 KiB bounded stack.
 constexpr inline std::size_t MainThreadStackBytes = KiB(16);
 constexpr inline std::size_t WorkqueueThreadStackBytes = KiB(16);
 constexpr inline std::size_t TimerThreadStackBytes = KiB(16);
 constexpr inline std::size_t NifmPathThreadStackBytes = KiB(16);
+constexpr inline std::size_t IpcServerThreadStackBytes = KiB(32);
 
 // Layout ceilings turn otherwise silent fixed-footprint growth into a review gate.
 constexpr inline std::size_t MaximumInnerPacketRecordBytes = 1536;
@@ -80,5 +83,6 @@ static_assert(ResolveWorkSlots + SubmissionWorkSlots + TransmitWorkSlots + Recei
 static_assert(MainThreadStackBytes == WorkqueueThreadStackBytes);
 static_assert(WorkqueueThreadStackBytes == TimerThreadStackBytes);
 static_assert(NifmPathThreadStackBytes == WorkqueueThreadStackBytes);
+static_assert(IpcServerThreadStackBytes >= MainThreadStackBytes);
 
 } // namespace wgnx::resource_budget

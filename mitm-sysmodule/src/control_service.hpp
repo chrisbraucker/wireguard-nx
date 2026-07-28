@@ -19,13 +19,14 @@ struct MitmStatus {
     AMS_SF_METHOD_INFO(C, H, 1, ams::Result, SetBsdSystemPolicyEnabled, (bool enabled), (enabled), ams::hos::Version_Min,                  \
                        ams::hos::Version_Max)                                                                                              \
     AMS_SF_METHOD_INFO(C, H, 2, ams::Result, SetBsdSystemClientEnabled, (std::uint32_t client, bool enabled), (client, enabled),           \
-                       ams::hos::Version_Min, ams::hos::Version_Max)
+                       ams::hos::Version_Min, ams::hos::Version_Max)                                                                       \
+    AMS_SF_METHOD_INFO(C, H, 3, ams::Result, Shutdown, (), (), ams::hos::Version_Min, ams::hos::Version_Max)
 
 AMS_SF_DEFINE_INTERFACE(wgnx::mitm, IMitmControlService, WGNX_I_MITM_CONTROL_SERVICE_INTERFACE_INFO, 0x57474D43);
 
 namespace wgnx::mitm {
 
-constexpr inline std::uint32_t MitmControlApiVersion = 1;
+constexpr inline std::uint32_t MitmControlApiVersion = 2;
 constexpr inline std::uint32_t MitmStatusFlag_BsdSystemPolicyRequested = 1U << 0;
 constexpr inline std::uint32_t MitmStatusFlag_BsdSystemInterceptionInstalled = 1U << 1;
 
@@ -34,10 +35,13 @@ class ControlService {
     ams::Result GetStatus(ams::sf::Out<MitmStatus> out);
     ams::Result SetBsdSystemPolicyEnabled(bool enabled);
     ams::Result SetBsdSystemClientEnabled(std::uint32_t client, bool enabled);
+    ams::Result Shutdown();
 };
 
 static_assert(IsIMitmControlService<ControlService>);
 
-void RunControlServer();
+bool StartControlServer();
+void WaitForShutdownRequest();
+void StopControlServer();
 
 } // namespace wgnx::mitm

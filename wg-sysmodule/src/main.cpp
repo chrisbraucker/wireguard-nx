@@ -11,6 +11,13 @@ void Main() {
     wgnx::sysmodule::logger::Log("Main entered");
     wgnx::sysmodule::logger::Log("Build: %s-%s", VERSION, wgnx::BuildId);
     wgnx::sysmodule::logger::Log("Starting IPC server");
-    wgnx::sysmodule::RunIpcServer();
+    if (!wgnx::sysmodule::StartIpcServer()) {
+        wgnx::sysmodule::logger::Log("IPC server startup failed");
+        return;
+    }
+
+    wgnx::sysmodule::WaitForIpcServerShutdownRequest();
+    wgnx::sysmodule::logger::Log("IPC graceful shutdown begin");
+    wgnx::sysmodule::StopIpcServer();
 }
 } // namespace ams

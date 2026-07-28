@@ -2,6 +2,7 @@
 
 #include "wgnx/tunnel_protocol.hpp"
 #include "wgnx/tunnel_batch.hpp"
+#include "wgnx/protocol.hpp"
 
 #include <array>
 #include <span>
@@ -11,8 +12,11 @@ namespace wgnx::test {
 void TestTunnelProtocolContract(TestContext& context) {
     using namespace wgnx::tunnel;
 
+    WGNX_TEST_REQUIRE(context, wgnx::IpcApiVersion == 5 && static_cast<std::uint32_t>(wgnx::CommandId::Shutdown) == 24,
+                      "control shutdown contract changed");
+
     WGNX_TEST_REQUIRE(context,
-                      TunApiVersion == 1 && wgnx::tunnel::ServiceName[0] == 'w' && wgnx::tunnel::ServiceName[4] == ':' &&
+                      TunApiVersion == 2 && wgnx::tunnel::ServiceName[0] == 'w' && wgnx::tunnel::ServiceName[4] == ':' &&
                           wgnx::tunnel::ServiceName[7] == 'n' && wgnx::tunnel::ServiceName[8] == '\0',
                       "tunnel root identity changed");
     WGNX_TEST_REQUIRE(context,

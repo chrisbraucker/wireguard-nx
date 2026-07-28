@@ -4,7 +4,8 @@ The debug packet API is the first application-independent boundary into the Wire
 It allows one test process to submit complete inner IPv4 packets and poll decrypted IPv4 packets without using BSD sockets or the network MITM.
 
 This API is experimental and is compiled into every development build.
-`IpcApiVersion` 4 adds the manual UDP bind-bump command used by transport recovery testing.
+`IpcApiVersion` 5 adds command 24, `Shutdown`, for an orderly sysmodule teardown initiated by `ovl-sysmodules`.
+Version 4 added the manual UDP bind-bump command used by transport recovery testing.
 Version 3 removed the fixed Program ID authorization used by version 2 while retaining PID-based stream ownership.
 The API version must be incremented whenever the public command set, command semantics, or request/response wire layout changes so clients can reject incompatible sysmodule binaries.
 
@@ -33,6 +34,15 @@ It is nonblocking: an empty queue returns `PacketApiStatus::QueueEmpty` immediat
 Clients should use the wrappers in `common/include/wgnx/client.hpp`; both packet commands send the caller PID required by the service interface.
 A client that submits a packet and waits for a response should open one `ScopedService` and pass it to `GetApiVersion`, `SubmitInnerIpv4Packet`, and every `ReceiveInnerIpv4Packet` call.
 The one-shot overloads remain suitable for isolated control operations, but opening a new SM/CMIF session for every nonblocking receive poll creates unnecessary system-session churn.
+
+`Shutdown` is command 24.
+The CMIF handler only records the request and returns its reply before any server teardown begins.
+The main thread then stops and joins the dedicated IPC server thread.
+Before it destroys the server manager, it signals the existing completion event of every active `wgnx:tun` client context without enqueuing a completion record.
+The server manager then closes `wgnx:ctl` and `wgnx:tun` sessions, and the runtime finally deactivates the selected peer through the normal lifecycle and closes transport and NIFM state.
+A `wgnx:tun` client awakened during this sequence must treat a failed `ReceiveCompletions` call or any later CMIF call as terminal service loss and release its local flow state and event handle.
+The shutdown wake is not a drainable `CompletionRecord` and does not add a new protocol status or completion type.
+It is intended for process managers and is not a recoverable tunnel-state transition.
 
 The submission and receive result structures report:
 

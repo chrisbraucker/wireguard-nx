@@ -1,5 +1,6 @@
 #include "protocol_tests.hpp"
 #include "protocol_test_support.hpp"
+#include "ipc_server_lifecycle.hpp"
 
 namespace wgnx::test {
 
@@ -30,6 +31,20 @@ void TestRuntimeResourceBudgets(TestContext& context) {
                           pressured.high_watermark == 1 && pressured.admitted == 2 && pressured.replaced == 1 && pressured.coalesced == 0 &&
                           pressured.taken == 0 && final.depth == 0 && final.admitted == 3 && final.taken == 1 && final.cancelled == 1,
                       "central runtime capacities or pending-slot pressure accounting diverged");
+}
+
+void TestIpcServerShutdownLifecycle(TestContext& context) {
+    using wgnx::sysmodule::IpcServerLifecycle;
+    using wgnx::sysmodule::IpcServerLifecyclePhase;
+
+    IpcServerLifecycle lifecycle{};
+    WGNX_TEST_REQUIRE(context,
+                      lifecycle.Phase() == IpcServerLifecyclePhase::Idle && !lifecycle.BeginStopping() &&
+                          !lifecycle.MarkServerThreadJoined() && !lifecycle.MarkDestroyed() && lifecycle.BeginServing() &&
+                          !lifecycle.BeginServing() && lifecycle.BeginStopping() && !lifecycle.MarkDestroyed() &&
+                          lifecycle.MarkServerThreadJoined() && lifecycle.MarkDestroyed() &&
+                          lifecycle.Phase() == IpcServerLifecyclePhase::Destroyed,
+                      "IPC server shutdown lifecycle permitted manager destruction before the server thread joined");
 }
 
 void TestRuntimeTypedRejections(TestContext& context) {

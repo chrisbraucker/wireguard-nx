@@ -42,6 +42,7 @@ class DaemonRuntime {
     DaemonRuntime();
 
     void Initialize();
+    void Shutdown();
     wgnx::DaemonStatus GetDaemonStatus();
     std::uint32_t CopyPeers(std::span<wgnx::PeerInfo> out);
     ams::Result SetActivePeer(std::int32_t peer_index);
@@ -52,6 +53,7 @@ class DaemonRuntime {
     wgnx::PacketReceiveResult ReceiveInnerIpv4Packet(std::span<std::uint8_t> packet, runtime::ProcessId process_id);
     runtime::TunnelClientId CreateTunnelClient(runtime::TunnelFlowPlane::CompletionNotifier notifier, void* notifier_context);
     void DestroyTunnelClient(runtime::TunnelClientId client);
+    std::uint32_t SignalTunnelClientShutdown();
     wgnx::tunnel::Capabilities GetTunnelCapabilities();
     wgnx::tunnel::RoutingPolicySnapshot CopyTunnelRoutingPolicy(std::span<wgnx::tunnel::RouteRecord> out);
     wgnx::tunnel::OpenConnectedUdpFlowResult OpenTunnelConnectedUdpFlow(runtime::TunnelClientId client,
@@ -629,6 +631,12 @@ void DaemonRuntime::DestroyTunnelClient(runtime::TunnelClientId client) {
     m_tunnel_flow_plane.DestroyClient(client, GetRuntimeNowNs());
 }
 
+std::uint32_t DaemonRuntime::SignalTunnelClientShutdown() {
+    EnsureInitialized();
+    std::scoped_lock lock(m_state_mutex);
+    return m_tunnel_flow_plane.SignalAllClientCompletionEvents();
+}
+
 wgnx::tunnel::Capabilities DaemonRuntime::GetTunnelCapabilities() {
     EnsureInitialized();
     std::scoped_lock lock(m_state_mutex);
@@ -729,6 +737,21 @@ void DaemonRuntime::Initialize() {
     logger::Flush();
 }
 
+void DaemonRuntime::Shutdown() {
+    if (!m_state.initialized) {
+        return;
+    }
+
+    logger::Log("Runtime graceful shutdown deactivating active peer");
+    const ams::Result deactivate_result = SetActivePeer(-1);
+    if (R_FAILED(deactivate_result)) {
+        logger::Log("Runtime graceful shutdown deactivation failed rc=0x%08X", deactivate_result.GetValue());
+    }
+    m_timer_scheduler.CancelAllProtocolTimers();
+    m_timer_scheduler.CancelDebugProbeTimeout();
+    logger::Flush();
+}
+
 DaemonRuntime g_daemon_runtime{};
 
 } // namespace
@@ -737,6 +760,10 @@ namespace runtime {
 
 void Initialize() {
     g_daemon_runtime.Initialize();
+}
+
+void Shutdown() {
+    g_daemon_runtime.Shutdown();
 }
 
 wgnx::DaemonStatus GetDaemonStatus() {
@@ -777,6 +804,10 @@ TunnelClientId CreateTunnelClient(TunnelFlowPlane::CompletionNotifier notifier, 
 
 void DestroyTunnelClient(TunnelClientId client) {
     g_daemon_runtime.DestroyTunnelClient(client);
+}
+
+std::uint32_t SignalTunnelClientShutdown() {
+    return g_daemon_runtime.SignalTunnelClientShutdown();
 }
 
 wgnx::tunnel::Capabilities GetTunnelCapabilities() {

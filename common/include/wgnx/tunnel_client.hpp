@@ -120,17 +120,6 @@ class ScopedClient {
     bool m_active{false};
 };
 
-[[nodiscard]] inline bool IsServiceRunning() {
-    Handle handle = INVALID_HANDLE;
-    const Result rc = smRegisterService(&handle, smEncodeName(ServiceName), false, 1);
-    if (R_FAILED(rc)) {
-        return true;
-    }
-    smUnregisterService(smEncodeName(ServiceName));
-    svcCloseHandle(handle);
-    return false;
-}
-
 [[nodiscard]] inline Result GetTunCapabilities(ScopedRootService& root, Capabilities* out_capabilities) {
     if (!root.IsOpen() || out_capabilities == nullptr) {
         return MAKERESULT(Module_Libnx, LibnxError_NotInitialized);

@@ -165,6 +165,18 @@ wgnx::tunnel::Capabilities TunnelFlowPlane::GetCapabilities() const {
     };
 }
 
+std::uint32_t TunnelFlowPlane::SignalAllClientCompletionEvents() const {
+    std::uint32_t signaled = 0;
+    for (const ClientSlot& client : m_clients) {
+        if (!client.allocated || client.notifier == nullptr) {
+            continue;
+        }
+        client.notifier(client.notifier_context);
+        ++signaled;
+    }
+    return signaled;
+}
+
 wgnx::tunnel::RoutingPolicySnapshot TunnelFlowPlane::CopyRoutingPolicy(std::span<wgnx::tunnel::RouteRecord> out) const {
     const std::size_t copy_count = std::min<std::size_t>(out.size(), m_route_count);
     for (std::size_t index = 0; index < copy_count; ++index) {

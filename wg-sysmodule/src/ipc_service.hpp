@@ -32,6 +32,8 @@
                        (const wgnx::PeerSelectionRequest& request), (request), ams::hos::Version_Min, ams::hos::Version_Max)               \
     AMS_SF_METHOD_INFO(C, H, static_cast<u32>(wgnx::CommandId::SetAutoStartPeer), ams::Result, SetAutoStartPeer,                           \
                        (const wgnx::PeerSelectionRequest& request), (request), ams::hos::Version_Min, ams::hos::Version_Max)               \
+    AMS_SF_METHOD_INFO(C, H, static_cast<u32>(wgnx::CommandId::Shutdown), ams::Result, Shutdown, (), (), ams::hos::Version_Min,            \
+                       ams::hos::Version_Max)                                                                                              \
     WGNX_I_CONTROL_SERVICE_INTERFACE_DEBUG_INFO(C, H)
 
 // Interface ID for Stratosphere's service framework.
@@ -51,6 +53,7 @@ class ControlService {
     ams::Result SetAutoStartPeer(const wgnx::PeerSelectionRequest& request);
     ams::Result TriggerDebugPayload(const wgnx::DebugTriggerRequest& request);
     ams::Result BumpUdpBinding();
+    ams::Result Shutdown();
     ams::Result SubmitInnerIpv4Packet(ams::sf::Out<wgnx::PacketSubmissionResult> out, const ams::sf::InBuffer& packet,
                                       const ams::sf::ClientProcessId& client_pid);
     ams::Result ReceiveInnerIpv4Packet(ams::sf::Out<wgnx::PacketReceiveResult> out, const ams::sf::OutBuffer& packet,
@@ -58,6 +61,8 @@ class ControlService {
 };
 static_assert(IsIControlService<ControlService>);
 
-void RunIpcServer();
+[[nodiscard]] bool StartIpcServer();
+void WaitForIpcServerShutdownRequest();
+void StopIpcServer();
 
 } // namespace wgnx::sysmodule

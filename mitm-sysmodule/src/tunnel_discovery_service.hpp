@@ -18,30 +18,30 @@ class TunnelDiscoveryService {
     TunnelDiscoveryService& operator=(const TunnelDiscoveryService&) = delete;
 
     void Start();
+    void Stop();
 
-    // This is safe to call from the future BSD dispatch path.
-    // It only updates bounded local state and signals the worker.
+    // This is safe to call from the BSD dispatch path.
+    // It updates bounded local state and asks the flow worker to discover the tunnel.
     void RequestForInterceptedTraffic();
 
-    // Future CMIF callers use this after a command failure.
-    // The worker owns service-handle closure and reacquisition.
+    // The flow worker uses this after a client CMIF failure.
+    // It publishes bypass before asking the same worker to discard its handles.
     void ReportTunnelClientFailure();
 
     [[nodiscard]] TunnelAvailabilityState GetState() const;
 
   private:
-    static void ThreadMain(void* argument);
-    void Run();
+    friend class TunnelFlowWorker;
+
+    // Only the flow worker completes a scheduled discovery attempt.
+    void CompleteDiscoverySuccess();
     void CompleteDiscoveryFailure();
+
     void PublishStateLocked();
 
     ams::os::Mutex m_mutex{false};
-    ams::os::Event m_wake_event{ams::os::EventClearMode_ManualClear};
-    ams::os::ThreadType m_thread{};
     TunnelDiscoveryBackoff m_backoff{};
     std::atomic<TunnelAvailabilityState> m_visible_state{TunnelAvailabilityState::Bypass};
-    std::atomic_bool m_attempt_requested{false};
-    std::atomic_bool m_client_invalidation_requested{false};
     bool m_started{false};
 };
 

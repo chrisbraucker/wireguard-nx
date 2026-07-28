@@ -74,12 +74,16 @@ export APP_JSON := $(TOPDIR)/res/module.json
 
 .PHONY: $(BUILD) all clean clean-libs clean-build libs dist test test-sanitize format-check diff-check verify
 
-all: $(BUILD)
+all: $(BUILD) $(OUTDIR)/toolbox.json
 
-dist: $(BUILD)
+$(OUTDIR)/toolbox.json: Makefile
+	@mkdir -p $(OUTDIR)
+	@printf '{\n  "name": "WireGuard-MITM",\n  "tid": "$(TITLE_ID)",\n  "requires_reboot": false,\n  "shutdown_service": "wgm:ctl",\n  "shutdown_cmd": 3\n}\n' > $@
+
+dist: $(BUILD) $(OUTDIR)/toolbox.json
 	@[ -d $(DISTDIR)/flags ] || mkdir -p $(DISTDIR)/flags
 	@cp $(OUTDIR)/$(TARGET).nsp $(DISTDIR)/exefs.nsp
-	@printf '{\n  "name": "WireGuard-MITM",\n  "tid": "$(TITLE_ID)",\n  "requires_reboot": false\n}\n' > $(DISTDIR)/toolbox.json
+	@cp $(OUTDIR)/toolbox.json $(DISTDIR)/toolbox.json
 	@: > $(DISTDIR)/flags/boot2.flag
 	@echo "prepared Atmosphere layout in $(DISTDIR)"
 
@@ -104,11 +108,11 @@ verify:
 	@$(MAKE) --no-print-directory diff-check
 	@echo "verification passed"
 
-$(HOST_TEST_TARGET): Makefile $(HOST_TEST_SOURCES) src/mitm_policy.hpp src/tunnel_discovery_state.hpp test/tunnel_discovery_tests.hpp
+$(HOST_TEST_TARGET): Makefile $(HOST_TEST_SOURCES) src/bsd_endpoint.hpp src/bsd_response.hpp src/mitm_policy.hpp src/tunnel_discovery_state.hpp test/tunnel_discovery_tests.hpp
 	@[ -d $(HOST_TEST_DIR) ] || mkdir -p $(HOST_TEST_DIR)
 	@$(HOST_CXX) $(HOST_TEST_CXXFLAGS) $(HOST_TEST_INCLUDES) $(addprefix $(CURDIR)/,$(HOST_TEST_SOURCES)) -o $(HOST_TEST_TARGET)
 
-$(HOST_SANITIZE_TARGET): Makefile $(HOST_TEST_SOURCES) src/mitm_policy.hpp src/tunnel_discovery_state.hpp test/tunnel_discovery_tests.hpp
+$(HOST_SANITIZE_TARGET): Makefile $(HOST_TEST_SOURCES) src/bsd_endpoint.hpp src/bsd_response.hpp src/mitm_policy.hpp src/tunnel_discovery_state.hpp test/tunnel_discovery_tests.hpp
 	@[ -d $(HOST_SANITIZE_DIR) ] || mkdir -p $(HOST_SANITIZE_DIR)
 	@$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -fsanitize=address,undefined -fno-omit-frame-pointer $(HOST_TEST_INCLUDES) $(addprefix $(CURDIR)/,$(HOST_TEST_SOURCES)) -o $(HOST_SANITIZE_TARGET)
 

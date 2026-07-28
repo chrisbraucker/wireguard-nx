@@ -1,30 +1,14 @@
 #include "tunnel_discovery_service.hpp"
 
 #include "logger.hpp"
-
-#include "wgnx/tunnel_client.hpp"
-
-#include <array>
-#include <memory>
+#include "tunnel_flow_worker.hpp"
 
 namespace wgnx::mitm {
 
 namespace {
 
-constexpr std::size_t DiscoveryThreadStackBytes = 16 * 1024;
-constexpr std::uint32_t RequiredTunnelCapabilities = wgnx::tunnel::CapabilityMask(wgnx::tunnel::Capability::ConnectedIpv4Udp) |
-                                                     wgnx::tunnel::CapabilityMask(wgnx::tunnel::Capability::RoutingPolicySnapshot) |
-                                                     wgnx::tunnel::CapabilityMask(wgnx::tunnel::Capability::CompletionEvent);
-
-alignas(ams::os::ThreadStackAlignment) constinit std::array<std::byte, DiscoveryThreadStackBytes> g_discovery_thread_stack{};
-
 [[nodiscard]] std::uint64_t GetMonotonicNanoseconds() {
     return ams::os::GetSystemTick().ToTimeSpan().GetNanoSeconds();
-}
-
-[[nodiscard]] bool HasRequiredCapabilities(const wgnx::tunnel::Capabilities& capabilities) {
-    return capabilities.api_version == wgnx::tunnel::TunApiVersion &&
-           (capabilities.capability_mask & RequiredTunnelCapabilities) == RequiredTunnelCapabilities;
 }
 
 } // namespace
@@ -40,15 +24,23 @@ void TunnelDiscoveryService::Start() {
         m_started = true;
     }
 
-    R_ABORT_UNLESS(ams::os::CreateThread(std::addressof(m_thread), ThreadMain, this, g_discovery_thread_stack.data(),
-                                         g_discovery_thread_stack.size(), ams::os::DefaultThreadPriority));
-    ams::os::SetThreadNamePointer(std::addressof(m_thread), "wgnx-tun-discovery");
-    ams::os::StartThread(std::addressof(m_thread));
-    logger::Log("tunnel discovery worker started state=bypass");
+    logger::Log("tunnel discovery controller started state=bypass");
 
     // The startup probe makes absent-service operation observable.
-    // Later attempts are driven only by intercepted traffic or a CMIF failure.
+    // Later attempts are driven only by intercepted traffic or a client CMIF failure.
     RequestForInterceptedTraffic();
+}
+
+void TunnelDiscoveryService::Stop() {
+    bool was_started = false;
+    {
+        std::scoped_lock lock(m_mutex);
+        was_started = m_started;
+        m_started = false;
+        m_backoff = {};
+        PublishStateLocked();
+    }
+    logger::Log("tunnel discovery controller stopped prior_started=%u", was_started ? 1U : 0U);
 }
 
 void TunnelDiscoveryService::RequestForInterceptedTraffic() {
@@ -61,82 +53,40 @@ void TunnelDiscoveryService::RequestForInterceptedTraffic() {
         scheduled = m_backoff.RequestForTraffic(GetMonotonicNanoseconds());
         if (scheduled) {
             PublishStateLocked();
-            m_attempt_requested.store(true, std::memory_order_release);
         }
     }
     if (scheduled) {
-        m_wake_event.Signal();
+        logger::Log("tunnel discovery scheduled reason=traffic");
+        GetTunnelFlowWorker().RequestDiscoveryAttempt();
     }
 }
 
 void TunnelDiscoveryService::ReportTunnelClientFailure() {
+    bool invalidated = false;
     {
         std::scoped_lock lock(m_mutex);
         if (!m_started) {
             return;
         }
+        invalidated = m_backoff.State() == TunnelAvailabilityState::Ready;
         m_backoff.InvalidateReadyClient(GetMonotonicNanoseconds());
         PublishStateLocked();
-        m_client_invalidation_requested.store(true, std::memory_order_release);
     }
-    m_wake_event.Signal();
+    logger::Log("tunnel discovery invalidated prior_state=%s", invalidated ? "ready" : "nonready");
+    GetTunnelFlowWorker().RequestTunnelInvalidation();
 }
 
 TunnelAvailabilityState TunnelDiscoveryService::GetState() const {
     return m_visible_state.load(std::memory_order_acquire);
 }
 
-void TunnelDiscoveryService::ThreadMain(void* argument) {
-    static_cast<TunnelDiscoveryService*>(argument)->Run();
-}
-
-void TunnelDiscoveryService::Run() {
-    // The worker is intentionally process-lifetime because the sysmodule is resident.
-    // It is the only owner of the root CMIF session.
-    // A child tunnel-client context is acquired only by future active interception.
-    wgnx::tunnel::client::ScopedRootService root;
-
-    for (;;) {
-        m_wake_event.Wait();
-        m_wake_event.Clear();
-
-        if (m_client_invalidation_requested.exchange(false, std::memory_order_acq_rel)) {
-            root.Close();
-            logger::Log("tunnel root invalidated state=bypass");
-        }
-
-        if (!m_attempt_requested.exchange(false, std::memory_order_acq_rel)) {
-            continue;
-        }
-
-        root.Close();
-
-        if (!wgnx::tunnel::client::IsServiceRunning()) {
-            CompleteDiscoveryFailure();
-            continue;
-        }
-
-        const Result root_result = root.Open();
-        if (R_FAILED(root_result)) {
-            CompleteDiscoveryFailure();
-            continue;
-        }
-
-        wgnx::tunnel::Capabilities capabilities{};
-        const Result capabilities_result = wgnx::tunnel::client::GetTunCapabilities(root, std::addressof(capabilities));
-        if (R_FAILED(capabilities_result) || !HasRequiredCapabilities(capabilities)) {
-            root.Close();
-            CompleteDiscoveryFailure();
-            continue;
-        }
-
-        {
-            std::scoped_lock lock(m_mutex);
-            m_backoff.CompleteSuccess();
-            PublishStateLocked();
-        }
-        logger::Log("tunnel root ready api=%u capabilities=0x%08X", capabilities.api_version, capabilities.capability_mask);
+void TunnelDiscoveryService::CompleteDiscoverySuccess() {
+    std::scoped_lock lock(m_mutex);
+    if (!m_started || m_backoff.State() != TunnelAvailabilityState::DiscoveryPending) {
+        return;
     }
+    m_backoff.CompleteSuccess();
+    PublishStateLocked();
 }
 
 void TunnelDiscoveryService::CompleteDiscoveryFailure() {
@@ -144,6 +94,9 @@ void TunnelDiscoveryService::CompleteDiscoveryFailure() {
     std::uint32_t failures = 0;
     {
         std::scoped_lock lock(m_mutex);
+        if (!m_started || m_backoff.State() != TunnelAvailabilityState::DiscoveryPending) {
+            return;
+        }
         const std::uint64_t now_nanoseconds = GetMonotonicNanoseconds();
         m_backoff.CompleteFailure(now_nanoseconds);
         PublishStateLocked();
