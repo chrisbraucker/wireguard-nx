@@ -1,6 +1,7 @@
 #include "GuiMain.hpp"
 
 #include "wgnx/client.hpp"
+#include "wgnx/mitm_client.hpp"
 
 #include <algorithm>
 #include <array>
@@ -101,6 +102,20 @@ tsl::elm::Element* GuiMain::createUI() {
         for (const auto& peer : this->m_peers) {
             peer.listItem->enableShortHoldKey();
             peerList->addItem(peer.listItem);
+        }
+        if (wgnx::mitm::client::IsServiceRunning()) {
+            peerList->addItem(new tsl::elm::CategoryHeader("MITM", true));
+            auto* stopMitm = new tsl::elm::ListItem("Stop MITM");
+            stopMitm->setValue("A", false);
+            stopMitm->setClickListener([](u64 keys) {
+                if ((keys & KEY_A) == 0) {
+                    return false;
+                }
+
+                static_cast<void>(wgnx::mitm::client::Shutdown());
+                return true;
+            });
+            peerList->addItem(stopMitm);
         }
         peerList->addItem(new tsl::elm::CategoryHeader("Connection Info", true));
         m_activePeer = nullptr;
