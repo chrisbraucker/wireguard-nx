@@ -20,11 +20,19 @@ void TestTunnelProtocolContract(TestContext& context) {
                           wgnx::tunnel::ServiceName[7] == 'n' && wgnx::tunnel::ServiceName[8] == '\0',
                       "tunnel root identity changed");
     WGNX_TEST_REQUIRE(context,
-                      MaximumClientContexts == 4 && MaximumFlowsPerClient == 4 && MaximumFlows == 16 && MaximumUdpPayloadBytes == 1472 &&
-                          OutboundPacketSlabCount == 16 && InboundPacketSlabCount == 16 && MaximumInboundDatagramsPerFlow == 4 &&
-                          CompletionQueueCapacity == 16 && MaximumBatchEntries == 8 && MaximumPolicyRoutes == 16 &&
-                          KernelHandlesPerClient == 1 && ReverseTupleQuarantineCapacity == 16,
+                      MaximumClientContexts == 4 && MaximumFlowsPerClient == 4 && MaximumFlows == 16 &&
+                          MaximumUdpPayloadStorageBytes == 1472 && OutboundPacketSlabCount == 16 && InboundPacketSlabCount == 16 &&
+                          MaximumInboundDatagramsPerFlow == 4 && CompletionQueueCapacity == 16 && MaximumBatchEntries == 8 &&
+                          MaximumPolicyRoutes == 16 && KernelHandlesPerClient == 1 && ReverseTupleQuarantineCapacity == 16,
                       "tunnel resource contract changed");
+    WGNX_TEST_REQUIRE(context,
+                      DefaultEffectiveInnerMtu == 1420 && MinimumEffectiveInnerMtu == 576 && MaximumEffectiveInnerMtu == 1500 &&
+                          IsValidEffectiveInnerMtu(DefaultEffectiveInnerMtu) && IsValidEffectiveInnerMtu(1500) &&
+                          !IsValidEffectiveInnerMtu(575) && !IsValidEffectiveInnerMtu(1501) &&
+                          ResolveEffectiveInnerMtu(0) == DefaultEffectiveInnerMtu && ResolveEffectiveInnerMtu(1280) == 1280 &&
+                          MaximumUdpPayloadForInnerMtu(DefaultEffectiveInnerMtu) == 1392 && MaximumUdpPayloadForInnerMtu(1280) == 1252 &&
+                          MaximumUdpPayloadForInnerMtu(575) == 0,
+                      "effective inner MTU contract changed");
     WGNX_TEST_REQUIRE(context,
                       static_cast<std::uint32_t>(RootCommandId::GetTunApiVersion) == 0 &&
                           static_cast<std::uint32_t>(RootCommandId::OpenTunnelClient) == 1 &&
@@ -84,7 +92,7 @@ void TestTunnelProtocolContract(TestContext& context) {
                           sizeof(RouteRecord) == 32,
                       "tunnel binary record layout changed");
 
-    std::array<std::uint8_t, MaximumUdpPayloadBytes + 1> payload{};
+    std::array<std::uint8_t, MaximumUdpPayloadStorageBytes + 1> payload{};
     const std::array<DatagramDescriptor, 5> descriptors = {
         DatagramDescriptor{.flow = {.value = 1}, .payload_offset = 0, .payload_size = 8, .client_tag = 1},
         DatagramDescriptor{
@@ -101,7 +109,7 @@ void TestTunnelProtocolContract(TestContext& context) {
             ++send_count;
             switch (descriptor.flow.value) {
             case 1:
-                return descriptor.payload_size > MaximumUdpPayloadBytes ? ProtocolStatus::DatagramTooLarge : ProtocolStatus::Success;
+                return descriptor.payload_size > MaximumUdpPayloadStorageBytes ? ProtocolStatus::DatagramTooLarge : ProtocolStatus::Success;
             case 2:
                 return ProtocolStatus::StaleHandle;
             case 3:

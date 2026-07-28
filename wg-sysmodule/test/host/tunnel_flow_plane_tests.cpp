@@ -117,6 +117,68 @@ void TestTunnelFlowPlane(TestContext& context) {
     std::snprintf(config.allowed_ips.data(), config.allowed_ips.size(), "%s", "10.0.0.0/8, 10.251.0.0/16");
     const PeerIdentity first_peer{.peer_index = PeerIndex{0}, .activation_generation = ActivationGeneration{7}};
 
+    config.mtu = 0;
+    TunnelFlowPlane mtu_plane{};
+    const TunnelClientId mtu_client = mtu_plane.CreateClient(nullptr, nullptr);
+    mtu_plane.RefreshPolicy({.configuration = &config, .peer = first_peer, .selected = true}, 90);
+    const auto default_mtu_capabilities = mtu_plane.GetCapabilities();
+    const OpenConnectedUdpFlowRequest mtu_open{
+        .remote = {.address = {10, 251, 0, 2}, .port = 29000, .reserved = 0},
+        .diagnostic_tag = 0x4D5455,
+    };
+    const auto mtu_flow = mtu_plane.OpenConnectedUdpFlow(mtu_client, mtu_open, 91);
+    std::array<std::uint8_t, 1392> default_mtu_payload{};
+    std::array<std::uint8_t, 1393> oversized_default_mtu_payload{};
+    const DatagramDescriptor default_mtu_descriptor{
+        .flow = mtu_flow.flow,
+        .payload_offset = 0,
+        .payload_size = static_cast<std::uint32_t>(default_mtu_payload.size()),
+        .client_tag = 0xD001,
+    };
+    const DatagramDescriptor oversized_default_mtu_descriptor{
+        .flow = mtu_flow.flow,
+        .payload_offset = 0,
+        .payload_size = static_cast<std::uint32_t>(oversized_default_mtu_payload.size()),
+        .client_tag = 0xD002,
+    };
+    const auto default_mtu_send = mtu_plane.PrepareSend(mtu_client, default_mtu_descriptor, default_mtu_payload, TransportReady, 92);
+    const auto oversized_default_mtu_send =
+        mtu_plane.PrepareSend(mtu_client, oversized_default_mtu_descriptor, oversized_default_mtu_payload, TransportReady, 93);
+    mtu_plane.ReleasePreparedDatagram(default_mtu_send);
+
+    config.mtu = 1280;
+    mtu_plane.RefreshPolicy({.configuration = &config, .peer = first_peer, .selected = true}, 94);
+    const auto configured_mtu_capabilities = mtu_plane.GetCapabilities();
+    std::array<std::uint8_t, 1252> configured_mtu_payload{};
+    std::array<std::uint8_t, 1253> oversized_configured_mtu_payload{};
+    const DatagramDescriptor configured_mtu_descriptor{
+        .flow = mtu_flow.flow,
+        .payload_offset = 0,
+        .payload_size = static_cast<std::uint32_t>(configured_mtu_payload.size()),
+        .client_tag = 0xD003,
+    };
+    const DatagramDescriptor oversized_configured_mtu_descriptor{
+        .flow = mtu_flow.flow,
+        .payload_offset = 0,
+        .payload_size = static_cast<std::uint32_t>(oversized_configured_mtu_payload.size()),
+        .client_tag = 0xD004,
+    };
+    const auto configured_mtu_send =
+        mtu_plane.PrepareSend(mtu_client, configured_mtu_descriptor, configured_mtu_payload, TransportReady, 95);
+    const auto oversized_configured_mtu_send =
+        mtu_plane.PrepareSend(mtu_client, oversized_configured_mtu_descriptor, oversized_configured_mtu_payload, TransportReady, 96);
+    mtu_plane.ReleasePreparedDatagram(configured_mtu_send);
+    WGNX_TEST_REQUIRE(
+        context,
+        mtu_flow.status == ProtocolStatus::Success && default_mtu_capabilities.effective_inner_mtu == 1420 &&
+            default_mtu_capabilities.maximum_udp_payload_bytes == 1392 && default_mtu_send.status == ProtocolStatus::Success &&
+            default_mtu_send.packet.size() == 1420 && oversized_default_mtu_send.status == ProtocolStatus::DatagramTooLarge &&
+            configured_mtu_capabilities.effective_inner_mtu == 1280 && configured_mtu_capabilities.maximum_udp_payload_bytes == 1252 &&
+            configured_mtu_send.status == ProtocolStatus::Success && configured_mtu_send.packet.size() == 1280 &&
+            oversized_configured_mtu_send.status == ProtocolStatus::DatagramTooLarge,
+        "flow plane did not enforce the effective inner MTU at default and configured boundaries");
+    config.mtu = 1420;
+
     TunnelFlowPlane plane{};
     NotificationCounter notifications{};
     const TunnelClientId client = plane.CreateClient(Notify, &notifications);
@@ -182,7 +244,7 @@ void TestTunnelFlowPlane(TestContext& context) {
     reply[Ipv4HeaderSize + 6] ^= 0xFFU;
     const auto delivered = plane.DeliverDecryptedIpv4Packet(first_peer, std::span<const std::uint8_t>(reply.data(), reply_size), 150);
     std::array<CompletionRecord, MaximumBatchEntries> completions{};
-    std::array<std::uint8_t, MaximumUdpPayloadBytes> received_payload{};
+    std::array<std::uint8_t, MaximumUdpPayloadStorageBytes> received_payload{};
     const auto received = plane.ReceiveCompletions(client, completions, received_payload);
     WGNX_TEST_REQUIRE(context,
                       reply_size != 0 && foreign.disposition == TunnelInboundDisposition::NotClaimed &&

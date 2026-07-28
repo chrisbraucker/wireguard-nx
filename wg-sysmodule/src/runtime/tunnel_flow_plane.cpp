@@ -118,6 +118,7 @@ void TunnelFlowPlane::RefreshPolicy(const TunnelPolicyInput& input, wgnx::platfo
     const bool previous_available = m_policy_available;
     const bool previous_leak_protection = m_policy_leak_protection;
     const std::uint32_t previous_count = m_route_count;
+    const std::uint16_t previous_effective_inner_mtu = m_effective_inner_mtu;
 
     m_policy_available = ParseAndNormalizePolicy(input);
     if (!m_policy_available) {
@@ -125,11 +126,12 @@ void TunnelFlowPlane::RefreshPolicy(const TunnelPolicyInput& input, wgnx::platfo
         m_tunnel_source = {};
         m_policy_peer = {};
         m_policy_leak_protection = false;
+        m_effective_inner_mtu = wgnx::tunnel::DefaultEffectiveInnerMtu;
     }
 
     const bool changed = previous_available != m_policy_available || previous_count != m_route_count ||
                          previous_source != m_tunnel_source || previous_peer != m_policy_peer || previous_routes != m_routes ||
-                         previous_leak_protection != m_policy_leak_protection;
+                         previous_leak_protection != m_policy_leak_protection || previous_effective_inner_mtu != m_effective_inner_mtu;
     if (!changed) {
         return;
     }
@@ -151,8 +153,8 @@ wgnx::tunnel::Capabilities TunnelFlowPlane::GetCapabilities() const {
     return {
         .api_version = wgnx::tunnel::TunApiVersion,
         .capability_mask = wgnx::tunnel::SupportedCapabilityMask,
-        .effective_inner_mtu = wgnx::MaxInnerIpv4PacketSize,
-        .maximum_udp_payload_bytes = wgnx::tunnel::MaximumUdpPayloadBytes,
+        .effective_inner_mtu = m_effective_inner_mtu,
+        .maximum_udp_payload_bytes = static_cast<std::uint32_t>(wgnx::tunnel::MaximumUdpPayloadForInnerMtu(m_effective_inner_mtu)),
         .maximum_client_contexts = wgnx::tunnel::MaximumClientContexts,
         .maximum_flows_per_client = wgnx::tunnel::MaximumFlowsPerClient,
         .maximum_flows = wgnx::tunnel::MaximumFlows,
@@ -294,7 +296,7 @@ PreparedTunnelDatagram TunnelFlowPlane::PrepareSend(TunnelClientId client, const
         outcome.status = wgnx::tunnel::ProtocolStatus::MalformedInput;
         return outcome;
     }
-    if (payload.size() > wgnx::tunnel::MaximumUdpPayloadBytes) {
+    if (payload.size() > wgnx::tunnel::MaximumUdpPayloadForInnerMtu(m_effective_inner_mtu)) {
         outcome.status = wgnx::tunnel::ProtocolStatus::DatagramTooLarge;
         return outcome;
     }
@@ -933,6 +935,10 @@ bool TunnelFlowPlane::ParseAndNormalizePolicy(const TunnelPolicyInput& input) {
     if (!input.selected || input.configuration == nullptr || input.peer.activation_generation.IsZero()) {
         return false;
     }
+    const std::uint16_t effective_inner_mtu = wgnx::tunnel::ResolveEffectiveInnerMtu(input.configuration->mtu);
+    if (!wgnx::tunnel::IsValidEffectiveInnerMtu(effective_inner_mtu)) {
+        return false;
+    }
     std::array<std::uint8_t, 4> source{};
     std::uint8_t source_prefix = 0;
     if (!ParseIpv4Cidr(input.configuration->address.data(), &source, &source_prefix)) {
@@ -984,6 +990,7 @@ bool TunnelFlowPlane::ParseAndNormalizePolicy(const TunnelPolicyInput& input) {
     m_tunnel_source = source;
     m_policy_peer = input.peer;
     m_policy_leak_protection = input.configuration->leak_protection;
+    m_effective_inner_mtu = effective_inner_mtu;
     return true;
 }
 
@@ -1106,7 +1113,7 @@ std::uint16_t TunnelFlowPlane::ComputeUdpChecksum(const std::uint8_t source[4], 
 }
 
 bool TunnelFlowPlane::BuildUdpPacket(FlowSlot& flow, std::span<const std::uint8_t> payload, OutboundSlab& out, std::size_t* out_size) {
-    if (out_size == nullptr || payload.size() > wgnx::tunnel::MaximumUdpPayloadBytes) {
+    if (out_size == nullptr || payload.size() > wgnx::tunnel::MaximumUdpPayloadForInnerMtu(m_effective_inner_mtu)) {
         return false;
     }
     const std::size_t udp_size = UdpHeaderSize + payload.size();

@@ -14,7 +14,14 @@ constexpr inline std::uint32_t TunApiVersion = 3;
 constexpr inline std::size_t MaximumClientContexts = 4;
 constexpr inline std::size_t MaximumFlowsPerClient = 4;
 constexpr inline std::size_t MaximumFlows = MaximumClientContexts * MaximumFlowsPerClient;
-constexpr inline std::size_t MaximumUdpPayloadBytes = MaxInnerIpv4PacketSize - 20 - 8;
+constexpr inline std::size_t Ipv4HeaderBytes = 20;
+constexpr inline std::size_t UdpHeaderBytes = 8;
+// This is the conventional WireGuard interface MTU for a 1500-byte Ethernet path.
+constexpr inline std::uint16_t DefaultEffectiveInnerMtu = 1420;
+constexpr inline std::uint16_t MinimumEffectiveInnerMtu = 576;
+constexpr inline std::uint16_t MaximumEffectiveInnerMtu = static_cast<std::uint16_t>(MaxInnerIpv4PacketSize);
+// This is backing-store capacity, not the active per-peer transmission limit.
+constexpr inline std::size_t MaximumUdpPayloadStorageBytes = MaxInnerIpv4PacketSize - Ipv4HeaderBytes - UdpHeaderBytes;
 constexpr inline std::size_t OutboundPacketSlabCount = 16;
 constexpr inline std::size_t InboundPacketSlabCount = 16;
 constexpr inline std::size_t MaximumInboundDatagramsPerFlow = 4;
@@ -23,6 +30,18 @@ constexpr inline std::size_t MaximumBatchEntries = 8;
 constexpr inline std::size_t MaximumPolicyRoutes = 16;
 constexpr inline std::size_t KernelHandlesPerClient = 1;
 constexpr inline std::size_t ReverseTupleQuarantineCapacity = MaximumFlows;
+
+[[nodiscard]] constexpr bool IsValidEffectiveInnerMtu(std::uint16_t mtu) {
+    return mtu >= MinimumEffectiveInnerMtu && mtu <= MaximumEffectiveInnerMtu;
+}
+
+[[nodiscard]] constexpr std::uint16_t ResolveEffectiveInnerMtu(std::uint16_t configured_mtu) {
+    return configured_mtu == 0 ? DefaultEffectiveInnerMtu : configured_mtu;
+}
+
+[[nodiscard]] constexpr std::size_t MaximumUdpPayloadForInnerMtu(std::uint16_t mtu) {
+    return IsValidEffectiveInnerMtu(mtu) ? static_cast<std::size_t>(mtu) - Ipv4HeaderBytes - UdpHeaderBytes : 0;
+}
 
 enum class RootCommandId : std::uint32_t {
     GetTunApiVersion = 0,

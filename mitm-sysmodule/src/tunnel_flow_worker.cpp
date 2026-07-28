@@ -27,7 +27,7 @@ struct InboundDatagram {
     bool occupied{};
     std::size_t size{};
     TunnelFlowEndpoint remote{};
-    std::array<std::uint8_t, wgnx::tunnel::MaximumUdpPayloadBytes> payload{};
+    std::array<std::uint8_t, wgnx::tunnel::MaximumUdpPayloadStorageBytes> payload{};
 };
 
 struct FlowEntry {
@@ -46,7 +46,7 @@ struct FlowEntry {
 alignas(ams::os::ThreadStackAlignment) constinit std::array<std::byte, WorkerThreadStackBytes> g_worker_stack{};
 std::array<FlowEntry, TunnelFlowWorker::MaximumSockets> g_flows{};
 std::array<wgnx::tunnel::CompletionRecord, wgnx::tunnel::MaximumBatchEntries> g_completions{};
-std::array<std::uint8_t, wgnx::tunnel::MaximumBatchEntries * wgnx::tunnel::MaximumUdpPayloadBytes> g_completion_payload{};
+std::array<std::uint8_t, wgnx::tunnel::MaximumBatchEntries * wgnx::tunnel::MaximumUdpPayloadStorageBytes> g_completion_payload{};
 
 [[nodiscard]] bool SameEndpoint(const wgnx::tunnel::Ipv4Endpoint& endpoint, const TunnelFlowEndpoint& value) {
     return endpoint.port == value.port && std::memcmp(endpoint.address, value.address, sizeof(value.address)) == 0;
@@ -583,10 +583,6 @@ void TunnelFlowWorker::Dispatch(Operation& operation) {
     }
 
     if (operation.type == OperationType::Send) {
-        if (operation.input_size > wgnx::tunnel::MaximumUdpPayloadBytes) {
-            operation.result = TunnelFlowResult::MessageTooLarge;
-            return;
-        }
         const wgnx::tunnel::DatagramDescriptor descriptor{
             .flow = flow->flow,
             .payload_offset = 0,
@@ -602,10 +598,20 @@ void TunnelFlowWorker::Dispatch(Operation& operation) {
             operation.result = TunnelFlowResult::SocketError;
             return;
         }
-        operation.result = disposition.status == wgnx::tunnel::ProtocolStatus::Success
-                               ? TunnelFlowResult::Opened
-                               : (disposition.status == wgnx::tunnel::ProtocolStatus::QueueFull ? TunnelFlowResult::WouldBlock
-                                                                                                : TunnelFlowResult::SocketError);
+        switch (disposition.status) {
+        case wgnx::tunnel::ProtocolStatus::Success:
+            operation.result = TunnelFlowResult::Opened;
+            break;
+        case wgnx::tunnel::ProtocolStatus::DatagramTooLarge:
+            operation.result = TunnelFlowResult::MessageTooLarge;
+            break;
+        case wgnx::tunnel::ProtocolStatus::QueueFull:
+            operation.result = TunnelFlowResult::WouldBlock;
+            break;
+        default:
+            operation.result = TunnelFlowResult::SocketError;
+            break;
+        }
         return;
     }
 

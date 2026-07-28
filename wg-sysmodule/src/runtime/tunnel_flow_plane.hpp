@@ -124,7 +124,7 @@ class TunnelFlowPlane {
     };
 
     struct InboundSlab {
-        std::array<std::uint8_t, wgnx::tunnel::MaximumUdpPayloadBytes> bytes{};
+        std::array<std::uint8_t, wgnx::tunnel::MaximumUdpPayloadStorageBytes> bytes{};
         std::uint16_t size{0};
         bool allocated{false};
     };
@@ -228,6 +228,7 @@ class TunnelFlowPlane {
     std::uint32_t m_next_flow_generation{1};
     std::uint16_t m_next_virtual_source_port{49152};
     std::uint16_t m_next_ipv4_identification{1};
+    std::uint16_t m_effective_inner_mtu{wgnx::tunnel::DefaultEffectiveInnerMtu};
     bool m_policy_available{false};
     bool m_policy_leak_protection{false};
 };

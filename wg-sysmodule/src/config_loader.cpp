@@ -13,6 +13,7 @@
 #include "fs_runtime.hpp"
 #include "logger.hpp"
 #include "wgnx/paths.hpp"
+#include "wgnx/tunnel_protocol.hpp"
 
 namespace wgnx::sysmodule {
 
@@ -200,6 +201,10 @@ int HandleConnectionConfig(void* user_ctx, const char* section, const char* name
             }
 
             if (!ParseUnsignedField(&ctx->out->mtu, value, ctx->error, 0, "MTU")) {
+                return 0;
+            }
+            if (!wgnx::tunnel::IsValidEffectiveInnerMtu(ctx->out->mtu)) {
+                SetError(ctx->error, 0, "MTU must be between 576 and 1500 bytes");
                 return 0;
             }
 

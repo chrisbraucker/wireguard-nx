@@ -640,6 +640,7 @@ std::uint32_t DaemonRuntime::SignalTunnelClientShutdown() {
 wgnx::tunnel::Capabilities DaemonRuntime::GetTunnelCapabilities() {
     EnsureInitialized();
     std::scoped_lock lock(m_state_mutex);
+    RefreshTunnelPolicyLocked();
     return m_tunnel_flow_plane.GetCapabilities();
 }
 
