@@ -81,8 +81,13 @@ class TunnelFlowPlane {
     [[nodiscard]] wgnx::tunnel::Capabilities GetCapabilities() const;
     [[nodiscard]] wgnx::tunnel::RoutingPolicySnapshot CopyRoutingPolicy(std::span<wgnx::tunnel::RouteRecord> out) const;
 
-    [[nodiscard]] wgnx::tunnel::OpenConnectedUdpFlowResult
-    OpenConnectedUdpFlow(TunnelClientId client, const wgnx::tunnel::OpenConnectedUdpFlowRequest& request, wgnx::platform::ktime_t now);
+    [[nodiscard]] wgnx::tunnel::OpenConnectedUdpFlowResult OpenConnectedUdpFlow(TunnelClientId client,
+                                                                                const wgnx::tunnel::OpenConnectedUdpFlowRequest& request,
+                                                                                wgnx::platform::ktime_t now,
+                                                                                TunnelTransportAvailability availability = {
+                                                                                    .protocol_available = true,
+                                                                                    .staging_available = true,
+                                                                                });
     [[nodiscard]] PreparedTunnelDatagram PrepareSend(TunnelClientId client, const wgnx::tunnel::DatagramDescriptor& descriptor,
                                                      std::span<const std::uint8_t> payload, TunnelTransportAvailability availability,
                                                      wgnx::platform::ktime_t now);
@@ -224,6 +229,7 @@ class TunnelFlowPlane {
     std::uint16_t m_next_virtual_source_port{49152};
     std::uint16_t m_next_ipv4_identification{1};
     bool m_policy_available{false};
+    bool m_policy_leak_protection{false};
 };
 
 } // namespace wgnx::sysmodule::runtime

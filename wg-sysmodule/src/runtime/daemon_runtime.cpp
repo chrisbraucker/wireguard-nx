@@ -655,7 +655,14 @@ DaemonRuntime::OpenTunnelConnectedUdpFlow(runtime::TunnelClientId client, const 
     EnsureInitialized();
     std::scoped_lock lock(m_state_mutex);
     RefreshTunnelPolicyLocked();
-    return m_tunnel_flow_plane.OpenConnectedUdpFlow(client, request, GetRuntimeNowNs());
+    runtime::PeerPacketStateSnapshot peer{};
+    const bool packet_state_available = m_runtime_coordinator.SnapshotPacketState(peer);
+    return m_tunnel_flow_plane.OpenConnectedUdpFlow(
+        client, request, GetRuntimeNowNs(),
+        {
+            .protocol_available = packet_state_available && peer.protocol_instantiated,
+            .staging_available = packet_state_available && peer.protocol_instantiated && peer.can_stage_packet,
+        });
 }
 
 wgnx::tunnel::ProtocolStatus DaemonRuntime::SendTunnelUdpDatagram(runtime::TunnelClientId client,

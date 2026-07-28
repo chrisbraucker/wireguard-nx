@@ -139,10 +139,22 @@ void TestTunnelFlowPlane(TestContext& context) {
     };
     const auto uncovered_result = plane.OpenConnectedUdpFlow(client, uncovered, 110);
     const auto opened = plane.OpenConnectedUdpFlow(client, open, 120);
+    const auto unavailable_result = plane.OpenConnectedUdpFlow(client, open, 125, TransportUnavailable);
     WGNX_TEST_REQUIRE(context,
                       uncovered_result.status == ProtocolStatus::RouteNotCovered && opened.status == ProtocolStatus::Success &&
+                          unavailable_result.status == ProtocolStatus::TransportUnavailable &&
                           opened.peer_activation_generation == first_peer.activation_generation.Value(),
-                      "flow opening did not distinguish route coverage or bind the peer activation");
+                      "flow opening did not distinguish route coverage, availability, or peer activation");
+
+    config.leak_protection = true;
+    TunnelFlowPlane protected_plane{};
+    NotificationCounter protected_notifications{};
+    const TunnelClientId protected_client = protected_plane.CreateClient(Notify, &protected_notifications);
+    protected_plane.RefreshPolicy({.configuration = &config, .peer = first_peer, .selected = true}, 126);
+    const auto blocked_result = protected_plane.OpenConnectedUdpFlow(protected_client, open, 127, TransportUnavailable);
+    WGNX_TEST_REQUIRE(context, blocked_result.status == ProtocolStatus::TunnelBlockedByPolicy,
+                      "leak protection did not block a covered route with unavailable tunnel transport");
+    config.leak_protection = false;
 
     constexpr std::array<std::uint8_t, 5> Payload = {'h', 'e', 'l', 'l', 'o'};
     const DatagramDescriptor descriptor{

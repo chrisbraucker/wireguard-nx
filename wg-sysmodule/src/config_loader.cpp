@@ -46,6 +46,7 @@ struct ConnectionParseContext {
     bool saw_allowed_ips{false};
     bool saw_endpoint{false};
     bool saw_persistent_keepalive{false};
+    bool saw_leak_protection{false};
 };
 
 constinit std::array<char, MaxConfigBytes + 1> g_config_buffer = {};
@@ -101,6 +102,29 @@ bool ParseUnsignedField(std::uint16_t* out, const char* value, ConfigParseError*
 
     *out = static_cast<std::uint16_t>(parsed);
     return true;
+}
+
+bool ParseBooleanField(bool* out, const char* value, ConfigParseError* error, std::size_t line, const char* field_name) {
+    if (out == nullptr) {
+        SetError(error, line, "boolean output pointer is null");
+        return false;
+    }
+    if (value == nullptr) {
+        SetError(error, line, "boolean value is null");
+        return false;
+    }
+    if (std::strcmp(value, "true") == 0) {
+        *out = true;
+        return true;
+    }
+    if (std::strcmp(value, "false") == 0) {
+        *out = false;
+        return true;
+    }
+    char message[sizeof(ConfigParseError::message)] = {};
+    std::snprintf(message, sizeof(message), "%s must be true or false", field_name);
+    SetError(error, line, message);
+    return false;
 }
 
 int HandleConnectionConfig(void* user_ctx, const char* section, const char* name, const char* value) {
@@ -181,6 +205,21 @@ int HandleConnectionConfig(void* user_ctx, const char* section, const char* name
 
             ctx->out->field_flags |= wgnx::PeerConfigField_Mtu;
             ctx->saw_mtu = true;
+            return 1;
+        }
+
+        if (std::strcmp(name, "LeakProtection") == 0) {
+            if (ctx->saw_leak_protection) {
+                SetError(ctx->error, 0, "multiple Interface.LeakProtection values are not supported");
+                return 0;
+            }
+
+            if (!ParseBooleanField(&ctx->out->leak_protection, value, ctx->error, 0, "LeakProtection")) {
+                return 0;
+            }
+
+            ctx->out->field_flags |= wgnx::PeerConfigField_LeakProtection;
+            ctx->saw_leak_protection = true;
             return 1;
         }
 

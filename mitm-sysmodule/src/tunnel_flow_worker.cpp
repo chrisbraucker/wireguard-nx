@@ -2,6 +2,7 @@
 
 #include "logger.hpp"
 #include "tunnel_discovery_service.hpp"
+#include "tunnel_open_disposition.hpp"
 
 #include "wgnx/tunnel_client.hpp"
 
@@ -19,7 +20,8 @@ constexpr std::size_t WorkerThreadStackBytes = 24 * 1024;
 constexpr std::size_t MaximumInboundDatagramsPerSocket = 4;
 constexpr std::uint32_t RequiredTunnelCapabilities = wgnx::tunnel::CapabilityMask(wgnx::tunnel::Capability::ConnectedIpv4Udp) |
                                                      wgnx::tunnel::CapabilityMask(wgnx::tunnel::Capability::RoutingPolicySnapshot) |
-                                                     wgnx::tunnel::CapabilityMask(wgnx::tunnel::Capability::CompletionEvent);
+                                                     wgnx::tunnel::CapabilityMask(wgnx::tunnel::Capability::CompletionEvent) |
+                                                     wgnx::tunnel::CapabilityMask(wgnx::tunnel::Capability::LeakProtection);
 
 struct InboundDatagram {
     bool occupied{};
@@ -196,16 +198,18 @@ void DrainCompletions(FlowEntry& flow) {
 }
 
 [[nodiscard]] TunnelFlowResult MapOpenStatus(wgnx::tunnel::ProtocolStatus status) {
-    switch (status) {
-    case wgnx::tunnel::ProtocolStatus::Success:
+    switch (ClassifyTunnelOpenStatus(status)) {
+    case TunnelOpenDisposition::Tunnel:
         return TunnelFlowResult::Opened;
-    case wgnx::tunnel::ProtocolStatus::RouteNotCovered:
-    case wgnx::tunnel::ProtocolStatus::PeerUnavailable:
-    case wgnx::tunnel::ProtocolStatus::TransportUnavailable:
-        return TunnelFlowResult::Bypass;
-    default:
+    case TunnelOpenDisposition::Direct:
+        return status == wgnx::tunnel::ProtocolStatus::RouteNotCovered ? TunnelFlowResult::RouteNotCovered
+                                                                       : TunnelFlowResult::TunnelUnavailable;
+    case TunnelOpenDisposition::Blocked:
+        return TunnelFlowResult::BlockedByPolicy;
+    case TunnelOpenDisposition::Error:
         return TunnelFlowResult::SocketError;
     }
+    return TunnelFlowResult::SocketError;
 }
 
 } // namespace
@@ -292,7 +296,7 @@ TunnelFlowResult TunnelFlowWorker::OpenConnectedUdp(std::uint64_t owner, s32 des
     if (!EnqueueAndWait(operation)) {
         logger::Log("tunnel flow open bypass owner=%llu fd=%d reason=worker_queue_unavailable", static_cast<unsigned long long>(owner),
                     descriptor);
-        return TunnelFlowResult::Bypass;
+        return TunnelFlowResult::TunnelUnavailable;
     }
     return operation.result;
 }
@@ -502,14 +506,14 @@ void TunnelFlowWorker::Dispatch(Operation& operation) {
             logger::Log("tunnel flow open bypass owner=%llu fd=%d reason=discovery_state state=%u",
                         static_cast<unsigned long long>(operation.owner), operation.descriptor,
                         static_cast<unsigned>(GetTunnelDiscoveryService().GetState()));
-            operation.result = TunnelFlowResult::Bypass;
+            operation.result = TunnelFlowResult::TunnelUnavailable;
             return;
         }
         if (!m_root.IsOpen()) {
             logger::Log("tunnel flow open rejected missing_ready_root owner=%llu fd=%d", static_cast<unsigned long long>(operation.owner),
                         operation.descriptor);
             GetTunnelDiscoveryService().ReportTunnelClientFailure();
-            operation.result = TunnelFlowResult::Bypass;
+            operation.result = TunnelFlowResult::TunnelUnavailable;
             return;
         }
         flow = AllocateFlow(operation.owner, operation.descriptor);
@@ -525,7 +529,7 @@ void TunnelFlowWorker::Dispatch(Operation& operation) {
                         static_cast<unsigned long long>(operation.owner), operation.descriptor, static_cast<unsigned>(client_rc));
             ResetFlow(*flow);
             GetTunnelDiscoveryService().ReportTunnelClientFailure();
-            operation.result = TunnelFlowResult::Bypass;
+            operation.result = TunnelFlowResult::TunnelUnavailable;
             return;
         }
         const wgnx::tunnel::OpenConnectedUdpFlowRequest request{
@@ -542,7 +546,7 @@ void TunnelFlowWorker::Dispatch(Operation& operation) {
                         static_cast<unsigned long long>(operation.owner), operation.descriptor, static_cast<unsigned>(open_rc));
             ResetFlow(*flow);
             GetTunnelDiscoveryService().ReportTunnelClientFailure();
-            operation.result = TunnelFlowResult::Bypass;
+            operation.result = TunnelFlowResult::TunnelUnavailable;
             return;
         }
         operation.result = MapOpenStatus(opened.status);

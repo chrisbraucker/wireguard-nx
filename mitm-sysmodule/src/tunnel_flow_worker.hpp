@@ -13,7 +13,9 @@ namespace wgnx::mitm {
 
 enum class TunnelFlowResult : std::uint8_t {
     Opened,
-    Bypass,
+    RouteNotCovered,
+    TunnelUnavailable,
+    BlockedByPolicy,
     SocketError,
     MessageTooLarge,
     WouldBlock,

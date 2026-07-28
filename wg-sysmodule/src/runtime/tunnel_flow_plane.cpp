@@ -116,6 +116,7 @@ void TunnelFlowPlane::RefreshPolicy(const TunnelPolicyInput& input, wgnx::platfo
     const auto previous_source = m_tunnel_source;
     const PeerIdentity previous_peer = m_policy_peer;
     const bool previous_available = m_policy_available;
+    const bool previous_leak_protection = m_policy_leak_protection;
     const std::uint32_t previous_count = m_route_count;
 
     m_policy_available = ParseAndNormalizePolicy(input);
@@ -123,10 +124,12 @@ void TunnelFlowPlane::RefreshPolicy(const TunnelPolicyInput& input, wgnx::platfo
         m_route_count = 0;
         m_tunnel_source = {};
         m_policy_peer = {};
+        m_policy_leak_protection = false;
     }
 
     const bool changed = previous_available != m_policy_available || previous_count != m_route_count ||
-                         previous_source != m_tunnel_source || previous_peer != m_policy_peer || previous_routes != m_routes;
+                         previous_source != m_tunnel_source || previous_peer != m_policy_peer || previous_routes != m_routes ||
+                         previous_leak_protection != m_policy_leak_protection;
     if (!changed) {
         return;
     }
@@ -197,7 +200,8 @@ wgnx::tunnel::RoutingPolicySnapshot TunnelFlowPlane::CopyRoutingPolicy(std::span
 
 wgnx::tunnel::OpenConnectedUdpFlowResult TunnelFlowPlane::OpenConnectedUdpFlow(TunnelClientId client,
                                                                                const wgnx::tunnel::OpenConnectedUdpFlowRequest& request,
-                                                                               wgnx::platform::ktime_t now) {
+                                                                               wgnx::platform::ktime_t now,
+                                                                               TunnelTransportAvailability availability) {
     wgnx::tunnel::OpenConnectedUdpFlowResult result{
         .status = wgnx::tunnel::ProtocolStatus::MalformedInput,
         .flow = {},
@@ -214,6 +218,11 @@ wgnx::tunnel::OpenConnectedUdpFlowResult TunnelFlowPlane::OpenConnectedUdpFlow(T
     }
     if (SelectRoute(request.remote) == nullptr) {
         result.status = wgnx::tunnel::ProtocolStatus::RouteNotCovered;
+        return result;
+    }
+    if (!availability.protocol_available) {
+        result.status = m_policy_leak_protection ? wgnx::tunnel::ProtocolStatus::TunnelBlockedByPolicy
+                                                 : wgnx::tunnel::ProtocolStatus::TransportUnavailable;
         return result;
     }
 
@@ -974,6 +983,7 @@ bool TunnelFlowPlane::ParseAndNormalizePolicy(const TunnelPolicyInput& input) {
     });
     m_tunnel_source = source;
     m_policy_peer = input.peer;
+    m_policy_leak_protection = input.configuration->leak_protection;
     return true;
 }
 

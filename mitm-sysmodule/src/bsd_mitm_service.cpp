@@ -59,7 +59,10 @@ void EncodeIpv4Endpoint(const TunnelFlowEndpoint& endpoint, void* out_buffer) {
         return EIO;
     case TunnelFlowResult::MessageTooLarge:
         return EMSGSIZE;
-    case TunnelFlowResult::Bypass:
+    case TunnelFlowResult::BlockedByPolicy:
+        return ENETUNREACH;
+    case TunnelFlowResult::RouteNotCovered:
+    case TunnelFlowResult::TunnelUnavailable:
     case TunnelFlowResult::Opened:
         return 0;
     }
@@ -74,8 +77,12 @@ void EncodeIpv4Endpoint(const TunnelFlowEndpoint& endpoint, void* out_buffer) {
     switch (result) {
     case TunnelFlowResult::Opened:
         return "opened";
-    case TunnelFlowResult::Bypass:
-        return "bypass";
+    case TunnelFlowResult::RouteNotCovered:
+        return "route_not_covered";
+    case TunnelFlowResult::TunnelUnavailable:
+        return "tunnel_unavailable";
+    case TunnelFlowResult::BlockedByPolicy:
+        return "blocked_by_policy";
     case TunnelFlowResult::SocketError:
         return "socket_error";
     case TunnelFlowResult::MessageTooLarge:
@@ -187,7 +194,7 @@ ams::Result BsdMitmService::Connect(ams::sf::Out<s32> out_result, ams::sf::Out<s
     TunnelFlowEndpoint remote{};
     const bool decoded_endpoint = DecodeIpv4Endpoint(address, std::addressof(remote));
     const bool eligible = socket != nullptr && socket->udp_ipv4 && !socket->tunneled && decoded_endpoint;
-    TunnelFlowResult tunnel_result = TunnelFlowResult::Bypass;
+    TunnelFlowResult tunnel_result = TunnelFlowResult::TunnelUnavailable;
     if (eligible) {
         GetTunnelDiscoveryService().RequestForInterceptedTraffic();
         tunnel_result = GetTunnelFlowWorker().OpenConnectedUdp(m_owner, fd, remote);
@@ -202,7 +209,7 @@ ams::Result BsdMitmService::Connect(ams::sf::Out<s32> out_result, ams::sf::Out<s
                         remote.address[0], remote.address[1], remote.address[2], remote.address[3], remote.port);
             R_SUCCEED();
         }
-        if (tunnel_result != TunnelFlowResult::Bypass) {
+        if (tunnel_result != TunnelFlowResult::RouteNotCovered && tunnel_result != TunnelFlowResult::TunnelUnavailable) {
             out_result.SetValue(-1);
             out_errno.SetValue(ErrnoForResult(tunnel_result));
             R_SUCCEED();

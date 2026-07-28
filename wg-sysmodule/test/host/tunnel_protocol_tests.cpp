@@ -16,7 +16,7 @@ void TestTunnelProtocolContract(TestContext& context) {
                       "control shutdown contract changed");
 
     WGNX_TEST_REQUIRE(context,
-                      TunApiVersion == 2 && wgnx::tunnel::ServiceName[0] == 'w' && wgnx::tunnel::ServiceName[4] == ':' &&
+                      TunApiVersion == 3 && wgnx::tunnel::ServiceName[0] == 'w' && wgnx::tunnel::ServiceName[4] == ':' &&
                           wgnx::tunnel::ServiceName[7] == 'n' && wgnx::tunnel::ServiceName[8] == '\0',
                       "tunnel root identity changed");
     WGNX_TEST_REQUIRE(context,
@@ -39,9 +39,10 @@ void TestTunnelProtocolContract(TestContext& context) {
                           static_cast<std::uint32_t>(ClientCommandId::CloseFlow) == 8,
                       "tunnel command identifiers changed");
     WGNX_TEST_REQUIRE(context,
-                      SupportedCapabilityMask == 0x1FU && CapabilityMask(Capability::ConnectedIpv4Udp) == 0x01U &&
+                      SupportedCapabilityMask == 0x3FU && CapabilityMask(Capability::ConnectedIpv4Udp) == 0x01U &&
                           CapabilityMask(Capability::DatagramBatches) == 0x02U && CapabilityMask(Capability::CompletionEvent) == 0x04U &&
-                          CapabilityMask(Capability::RoutingPolicySnapshot) == 0x08U && CapabilityMask(Capability::FlowStateQuery) == 0x10U,
+                          CapabilityMask(Capability::RoutingPolicySnapshot) == 0x08U &&
+                          CapabilityMask(Capability::FlowStateQuery) == 0x10U && CapabilityMask(Capability::LeakProtection) == 0x20U,
                       "tunnel capability bits changed");
     WGNX_TEST_REQUIRE(
         context,
@@ -56,7 +57,8 @@ void TestTunnelProtocolContract(TestContext& context) {
             static_cast<std::uint32_t>(ProtocolStatus::QueueFull) == 9 && static_cast<std::uint32_t>(ProtocolStatus::StaleHandle) == 10 &&
             static_cast<std::uint32_t>(ProtocolStatus::FlowClosed) == 11 && static_cast<std::uint32_t>(ProtocolStatus::QueueEmpty) == 12 &&
             static_cast<std::uint32_t>(ProtocolStatus::OutputBufferTooSmall) == 13 &&
-            static_cast<std::uint32_t>(ProtocolStatus::ReverseTupleExhausted) == 14,
+            static_cast<std::uint32_t>(ProtocolStatus::ReverseTupleExhausted) == 14 &&
+            static_cast<std::uint32_t>(ProtocolStatus::TunnelBlockedByPolicy) == 15,
         "tunnel protocol statuses changed");
     WGNX_TEST_REQUIRE(context,
                       static_cast<std::uint32_t>(FlowState::Open) == 0 && static_cast<std::uint32_t>(FlowState::Suspended) == 1 &&

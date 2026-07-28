@@ -1,6 +1,7 @@
 #include "bsd_endpoint.hpp"
 #include "bsd_response.hpp"
 #include "mitm_policy.hpp"
+#include "tunnel_open_disposition.hpp"
 #include "tunnel_discovery_tests.hpp"
 
 #include <array>
@@ -92,6 +93,23 @@ bool RunBsdResponseLayoutTests() {
                  "BSD address response did not encode result, errno, and address length in order");
 }
 
+bool RunTunnelOpenDispositionTests() {
+    using namespace wgnx::mitm;
+    using wgnx::tunnel::ProtocolStatus;
+
+    return Check(ClassifyTunnelOpenStatus(ProtocolStatus::Success) == TunnelOpenDisposition::Tunnel,
+                 "successful tunnel flow open was not classified as tunneled") &&
+           Check(ClassifyTunnelOpenStatus(ProtocolStatus::RouteNotCovered) == TunnelOpenDisposition::Direct,
+                 "uncovered route was not classified as direct") &&
+           Check(ClassifyTunnelOpenStatus(ProtocolStatus::PeerUnavailable) == TunnelOpenDisposition::Direct &&
+                     ClassifyTunnelOpenStatus(ProtocolStatus::TransportUnavailable) == TunnelOpenDisposition::Direct,
+                 "temporary tunnel unavailability was not classified as direct") &&
+           Check(ClassifyTunnelOpenStatus(ProtocolStatus::TunnelBlockedByPolicy) == TunnelOpenDisposition::Blocked,
+                 "leak-protection block was not classified as blocked") &&
+           Check(ClassifyTunnelOpenStatus(ProtocolStatus::QueueFull) == TunnelOpenDisposition::Error,
+                 "unexpected tunnel status was not classified as an error");
+}
+
 } // namespace
 
 int main() {
@@ -133,6 +151,7 @@ int main() {
         Check(ShouldInterceptBsdSystem(enabled, 0x0100000000001234ULL, BsdSystemClient::Unknown), "ordinary client was rejected") &&
         Check(RunBsdEndpointTests(), "BSD IPv4 endpoint codec failed") &&
         Check(RunBsdResponseLayoutTests(), "BSD response layout failed") &&
+        Check(RunTunnelOpenDispositionTests(), "tunnel open disposition mapping failed") &&
         Check(RunTunnelDiscoveryTests(), "tunnel discovery state machine failed");
 
     std::printf("RESULT passed=%u\n", static_cast<unsigned>(passed));

@@ -17,6 +17,7 @@ enum PeerConfigFieldFlags : std::uint32_t {
     PeerConfigField_PresharedKey = 1U << 5,
     PeerConfigField_AllowedIps = 1U << 6,
     PeerConfigField_PersistentKeepalive = 1U << 7,
+    PeerConfigField_LeakProtection = 1U << 8,
 };
 
 struct PeerConfigEntry {
@@ -33,6 +34,8 @@ struct PeerConfigEntry {
     std::uint16_t mtu;
     std::uint16_t reserved0;
     std::uint32_t field_flags;
+    bool leak_protection;
+    std::array<std::uint8_t, 3> reserved1{};
 };
 
 struct PeerConfigSet {

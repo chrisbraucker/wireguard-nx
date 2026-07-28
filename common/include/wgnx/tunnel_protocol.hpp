@@ -9,7 +9,7 @@
 namespace wgnx::tunnel {
 
 constexpr inline char ServiceName[] = "wgnx:tun";
-constexpr inline std::uint32_t TunApiVersion = 2;
+constexpr inline std::uint32_t TunApiVersion = 3;
 
 constexpr inline std::size_t MaximumClientContexts = 4;
 constexpr inline std::size_t MaximumFlowsPerClient = 4;
@@ -47,6 +47,7 @@ enum class Capability : std::uint32_t {
     CompletionEvent = 1U << 2,
     RoutingPolicySnapshot = 1U << 3,
     FlowStateQuery = 1U << 4,
+    LeakProtection = 1U << 5,
 };
 
 constexpr std::uint32_t CapabilityMask(Capability capability) {
@@ -56,7 +57,7 @@ constexpr std::uint32_t CapabilityMask(Capability capability) {
 constexpr inline std::uint32_t SupportedCapabilityMask =
     CapabilityMask(Capability::ConnectedIpv4Udp) | CapabilityMask(Capability::DatagramBatches) |
     CapabilityMask(Capability::CompletionEvent) | CapabilityMask(Capability::RoutingPolicySnapshot) |
-    CapabilityMask(Capability::FlowStateQuery);
+    CapabilityMask(Capability::FlowStateQuery) | CapabilityMask(Capability::LeakProtection);
 
 enum class ProtocolStatus : std::uint32_t {
     Success = 0,
@@ -74,6 +75,7 @@ enum class ProtocolStatus : std::uint32_t {
     QueueEmpty = 12,
     OutputBufferTooSmall = 13,
     ReverseTupleExhausted = 14,
+    TunnelBlockedByPolicy = 15,
 };
 
 enum class FlowState : std::uint32_t {
