@@ -7,11 +7,12 @@ enum class IpcServerLifecyclePhase {
     Serving,
     StopRequested,
     ServerThreadJoined,
-    Destroyed,
+    ProcessExitReady,
 };
 
 // This model makes the required shutdown ownership explicit and host-testable.
-// The ServerManager may only be destroyed after its LoopProcess thread has exited.
+// Normal shutdown is terminal for the process, so the static ServerManager is retained
+// after its LoopProcess thread exits and Horizon reclaims its handles on process exit.
 class IpcServerLifecycle {
   public:
     [[nodiscard]] bool BeginServing() {
@@ -41,12 +42,12 @@ class IpcServerLifecycle {
         return true;
     }
 
-    [[nodiscard]] bool MarkDestroyed() {
+    [[nodiscard]] bool MarkProcessExitReady() {
         if (m_phase != IpcServerLifecyclePhase::ServerThreadJoined) {
             return false;
         }
 
-        m_phase = IpcServerLifecyclePhase::Destroyed;
+        m_phase = IpcServerLifecyclePhase::ProcessExitReady;
         return true;
     }
 

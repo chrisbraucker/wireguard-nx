@@ -38,8 +38,10 @@ The one-shot overloads remain suitable for isolated control operations, but open
 `Shutdown` is command 24.
 The CMIF handler only records the request and returns its reply before any server teardown begins.
 The main thread then stops and joins the dedicated IPC server thread.
-Before it destroys the server manager, it signals the existing completion event of every active `wgnx:tun` client context without enqueuing a completion record.
-The server manager then closes `wgnx:ctl` and `wgnx:tun` sessions, and the runtime finally deactivates the selected peer through the normal lifecycle and closes transport and NIFM state.
+Before the terminal server-manager hand-off, it signals the existing completion event of every active `wgnx:tun` client context without enqueuing a completion record.
+The terminal shutdown path intentionally retains the static two-service server manager after its dispatch thread has stopped, because destroying that manager aborts within Horizon's service teardown path.
+`ams::Main` returns immediately after runtime shutdown, so Horizon tears down the process and reclaims `wgnx:ctl`, `wgnx:tun`, and their remaining IPC handles.
+The runtime deactivates the selected peer through the normal lifecycle and closes transport and NIFM state before that process exit.
 A `wgnx:tun` client awakened during this sequence must treat a failed `ReceiveCompletions` call or any later CMIF call as terminal service loss and release its local flow state and event handle.
 The shutdown wake is not a drainable `CompletionRecord` and does not add a new protocol status or completion type.
 It is intended for process managers and is not a recoverable tunnel-state transition.

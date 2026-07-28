@@ -168,23 +168,28 @@ void StopIpcServer() {
         return;
     }
 
-    R_ABORT_UNLESS(g_server_lifecycle.BeginStopping());
+    // Lifecycle transitions return bool, unlike Horizon APIs which return ams::Result.
+    AMS_ABORT_UNLESS(g_server_lifecycle.BeginStopping());
     logger::Log("IPC server shutdown requesting server-loop stop");
     g_server_manager->RequestStopProcessing();
     if (g_server_thread_started) {
         ams::os::WaitThread(std::addressof(g_server_thread));
         ams::os::DestroyThread(std::addressof(g_server_thread));
         g_server_thread_started = false;
-        R_ABORT_UNLESS(g_server_lifecycle.MarkServerThreadJoined());
+        AMS_ABORT_UNLESS(g_server_lifecycle.MarkServerThreadJoined());
         logger::Log("IPC server shutdown server thread joined");
     }
 
     const std::uint32_t tunnel_clients = runtime::SignalTunnelClientShutdown();
     logger::Log("IPC server shutdown signaled tunnel clients count=%u", tunnel_clients);
-    logger::Log("IPC server shutdown destroying server manager");
-    ams::util::DestroyAt(g_server_manager_storage);
+
+    // ServerManager<2> destruction enters its per-service mutex teardown after the
+    // dispatch loop has stopped, which aborts on Horizon in this terminal path.
+    // Main returns immediately after this function, so keep the static manager alive
+    // until Horizon destroys the process and reclaims its service and IPC handles.
+    logger::Log("IPC server shutdown retaining terminal server manager for process exit");
     g_server_manager = nullptr;
-    R_ABORT_UNLESS(g_server_lifecycle.MarkDestroyed());
+    AMS_ABORT_UNLESS(g_server_lifecycle.MarkProcessExitReady());
     runtime::Shutdown();
     logger::Log("IPC graceful shutdown complete");
 }

@@ -40,11 +40,11 @@ void TestIpcServerShutdownLifecycle(TestContext& context) {
     IpcServerLifecycle lifecycle{};
     WGNX_TEST_REQUIRE(context,
                       lifecycle.Phase() == IpcServerLifecyclePhase::Idle && !lifecycle.BeginStopping() &&
-                          !lifecycle.MarkServerThreadJoined() && !lifecycle.MarkDestroyed() && lifecycle.BeginServing() &&
-                          !lifecycle.BeginServing() && lifecycle.BeginStopping() && !lifecycle.MarkDestroyed() &&
-                          lifecycle.MarkServerThreadJoined() && lifecycle.MarkDestroyed() &&
-                          lifecycle.Phase() == IpcServerLifecyclePhase::Destroyed,
-                      "IPC server shutdown lifecycle permitted manager destruction before the server thread joined");
+                          !lifecycle.MarkServerThreadJoined() && !lifecycle.MarkProcessExitReady() && lifecycle.BeginServing() &&
+                          !lifecycle.BeginServing() && lifecycle.BeginStopping() && !lifecycle.MarkProcessExitReady() &&
+                          lifecycle.MarkServerThreadJoined() && lifecycle.MarkProcessExitReady() &&
+                          lifecycle.Phase() == IpcServerLifecyclePhase::ProcessExitReady,
+                      "IPC server shutdown lifecycle reached process exit before the server thread joined");
 }
 
 void TestRuntimeTypedRejections(TestContext& context) {
