@@ -195,6 +195,25 @@ void Log(const char* fmt, ...) {
     EnqueueLine(message, message_size);
 }
 
+void LogPacket(const char* fmt, ...) {
+#if WGNX_PACKET_DIAGNOSTICS
+    char message[512];
+    va_list args;
+    va_start(args, fmt);
+    const int written = std::vsnprintf(message, sizeof(message), fmt, args);
+    va_end(args);
+
+    if (written <= 0) {
+        return;
+    }
+
+    const size_t message_size = static_cast<size_t>(std::min(written, static_cast<int>(sizeof(message) - 1)));
+    EnqueueLine(message, message_size);
+#else
+    static_cast<void>(fmt);
+#endif
+}
+
 void Flush() {
     const std::size_t dropped = TakeDroppedLogCount();
     if (dropped != 0) {

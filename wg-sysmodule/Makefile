@@ -41,6 +41,16 @@ INCLUDES	+=	\
 			$(ATMOSPHERE_LIBS_INCLUDE_DIR)/libvapours/include
 LIBNAMES	:= $(ATMOSPHERE_LIBS_DIR)/libstratosphere
 
+#---------------------------------------------------------------------------------
+# version control constants
+#---------------------------------------------------------------------------------
+APP_VERSION		:= 0.0.1-dev
+BUILD_ID		:= $(shell git describe --always --dirty 2>/dev/null || echo "unknown")
+BUILD_ID_HEADER		:= $(TOPDIR)/$(BUILD)/build_id.hpp
+
+#---------------------------------------------------------------------------------
+# host test framework config
+#---------------------------------------------------------------------------------
 HOST_CXX	?= g++
 HOST_CC		?= cc
 PYTHON		?= python3
@@ -158,21 +168,19 @@ FUZZ_RESOLVER_RESULT_SOURCES := \
 FUZZ_HEADERS := $(shell find $(TOPDIR)/src $(TOPDIR)/../common/include -type f -name '*.hpp')
 
 #---------------------------------------------------------------------------------
-# version control constants
+# diagnostics
 #---------------------------------------------------------------------------------
-APP_VERSION		:= 0.0.1-dev
-BUILD_ID		:= $(shell git describe --always --dirty 2>/dev/null || echo "unknown")
-BUILD_ID_HEADER		:= $(TOPDIR)/$(BUILD)/build_id.hpp
+WGNX_PACKET_DIAGNOSTICS ?= 0
 
 #---------------------------------------------------------------------------------
 # options for code generation
 #---------------------------------------------------------------------------------
 DEFINES	+=	-DDISABLE_IPC -D__SWITCH__ \
+	-DWGNX_PACKET_DIAGNOSTICS=$(WGNX_PACKET_DIAGNOSTICS) \
 	-DTARGET="\"$(TARGET)\"" \
 	-DVERSION="\"$(APP_VERSION)\""
 
 CFLAGS	+= $(INCLUDE) -Wno-unused-result -fstack-usage
-
 CXXFLAGS	+= $(CFLAGS) -std=c++23 -Werror=frame-larger-than=8192
 
 #---------------------------------------------------------------------------------

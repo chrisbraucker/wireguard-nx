@@ -29,8 +29,15 @@ INCLUDES 	:= \
 				$(ATMOSPHERE_LIBS_INCLUDE_DIR)/libvapours/include
 LIBNAMES	:= $(ATMOSPHERE_LIBS_DIR)/libstratosphere
 
+#---------------------------------------------------------------------------------
+# version control constants
+#---------------------------------------------------------------------------------
 APP_VERSION := 0.0.1-dev
 BUILD_ID := $(shell git -C $(TOPDIR)/.. describe --always --dirty 2>/dev/null || echo "unknown")
+
+#---------------------------------------------------------------------------------
+# host test framework config
+#---------------------------------------------------------------------------------
 HOST_CXX ?= g++
 PYTHON ?= python3
 CLANG_FORMAT ?= clang-format
@@ -42,34 +49,64 @@ HOST_SANITIZE_DIR := $(OUTDIR)/host-test-sanitize
 HOST_SANITIZE_TARGET := $(HOST_SANITIZE_DIR)/mitm-host-test
 HOST_TEST_SOURCES	:= \
 						test/policy_tests.cpp \
-						test/tunnel_discovery_tests.cpp
+						test/tunnel_discovery_tests.cpp \
+						test/tunnel_flow_readiness_tests.cpp
 HOST_TEST_INCLUDES := -I$(CURDIR)/src -I$(CURDIR)/../common/include
 
+#---------------------------------------------------------------------------------
+# diagnostics
+#---------------------------------------------------------------------------------
+MITM_PACKET_DIAGNOSTICS ?= 0
+
+#---------------------------------------------------------------------------------
+# options for code generation
+#---------------------------------------------------------------------------------
 DEFINES += -DDISABLE_IPC -D__SWITCH__ \
+	-DWGNX_MITM_PACKET_DIAGNOSTICS=$(MITM_PACKET_DIAGNOSTICS) \
 	-DTARGET="\"$(TARGET)\"" \
 	-DVERSION="\"$(APP_VERSION)\"" \
 	-DBUILD_ID="\"$(BUILD_ID)\""
 
 CFLAGS += $(INCLUDE) -Wno-unused-result -fstack-usage
 CXXFLAGS += $(CFLAGS) -std=c++23 -Werror=frame-larger-than=8192
+
+#---------------------------------------------------------------------------------
+# list of directories containing libraries, this must be the top level containing
+# include and lib
+#---------------------------------------------------------------------------------
 LIBDIRS += $(LIBNAMES)
 
+#---------------------------------------------------------------------------------
+# no real need to edit anything past this point unless you need to add additional
+# rules for different file extensions
+#---------------------------------------------------------------------------------
 ifneq ($(BUILD),$(notdir $(CURDIR)))
+#---------------------------------------------------------------------------------
 
 export OUTPUT := $(CURDIR)/$(OUTDIR)/$(TARGET)
 export TOPDIR := $(CURDIR)
+
 export VPATH := $(foreach dir,$(SOURCES),$(CURDIR)/$(dir))
+
 export DEPSDIR := $(CURDIR)/$(BUILD)
-CPPFILES := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))
-export OFILES := $(CPPFILES:.cpp=.o)
-export LD := $(CXX)
+
+CFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
+CPPFILES	:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))
+SFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.s)))
+BINFILES	:=	$(foreach dir,$(DATA),$(notdir $(wildcard $(dir)/*.*)))
+
+export OFILES	:= $(CPPFILES:.cpp=.o)
+export LD 		:= $(CXX)
+
 export INCLUDE := $(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) \
 	$(foreach dir,$(LIBDIRS),-I$(dir)/include) \
 	$(foreach dir,$(AMS_LIBDIRS),-I$(dir)/include) \
 	-I$(CURDIR)/$(BUILD)
+
 export LIBPATHS := $(foreach dir,$(LIBDIRS),-L$(dir)/lib) \
 	$(foreach dir,$(AMS_LIBDIRS),-L$(dir)/lib) \
 	$(foreach dir,$(AMS_LIBDIRS),-L$(dir)/$(ATMOSPHERE_LIBRARY_DIR))
+
 export APP_JSON := $(TOPDIR)/res/module.json
 
 .PHONY: $(BUILD) all clean clean-libs clean-build libs dist test test-sanitize format-check diff-check verify
@@ -78,7 +115,7 @@ all: $(BUILD) $(OUTDIR)/toolbox.json
 
 $(OUTDIR)/toolbox.json: Makefile
 	@mkdir -p $(OUTDIR)
-	@printf '{\n  "name": "WireGuard-MITM",\n  "tid": "$(TITLE_ID)",\n  "requires_reboot": false,\n  "shutdown_service": "wgm:ctl",\n  "shutdown_cmd": 3\n}\n' > $@
+	@printf '{\n  "name": "Tun-MITM",\n  "tid": "$(TITLE_ID)",\n  "requires_reboot": false,\n  "shutdown_service": "wgm:ctl",\n  "shutdown_cmd": 3\n}\n' > $@
 
 dist: $(BUILD) $(OUTDIR)/toolbox.json
 	@[ -d $(DISTDIR)/flags ] || mkdir -p $(DISTDIR)/flags
@@ -108,11 +145,11 @@ verify:
 	@$(MAKE) --no-print-directory diff-check
 	@echo "verification passed"
 
-$(HOST_TEST_TARGET): Makefile $(HOST_TEST_SOURCES) src/bsd_endpoint.hpp src/bsd_response.hpp src/mitm_policy.hpp src/tunnel_discovery_state.hpp src/tunnel_open_disposition.hpp test/tunnel_discovery_tests.hpp
+$(HOST_TEST_TARGET): Makefile $(HOST_TEST_SOURCES) src/bsd_endpoint.hpp src/bsd_response.hpp src/mitm_policy.hpp src/tunnel_discovery_state.hpp src/tunnel_flow_readiness.hpp src/tunnel_open_disposition.hpp test/tunnel_discovery_tests.hpp test/tunnel_flow_readiness_tests.hpp
 	@[ -d $(HOST_TEST_DIR) ] || mkdir -p $(HOST_TEST_DIR)
 	@$(HOST_CXX) $(HOST_TEST_CXXFLAGS) $(HOST_TEST_INCLUDES) $(addprefix $(CURDIR)/,$(HOST_TEST_SOURCES)) -o $(HOST_TEST_TARGET)
 
-$(HOST_SANITIZE_TARGET): Makefile $(HOST_TEST_SOURCES) src/bsd_endpoint.hpp src/bsd_response.hpp src/mitm_policy.hpp src/tunnel_discovery_state.hpp src/tunnel_open_disposition.hpp test/tunnel_discovery_tests.hpp
+$(HOST_SANITIZE_TARGET): Makefile $(HOST_TEST_SOURCES) src/bsd_endpoint.hpp src/bsd_response.hpp src/mitm_policy.hpp src/tunnel_discovery_state.hpp src/tunnel_flow_readiness.hpp src/tunnel_open_disposition.hpp test/tunnel_discovery_tests.hpp test/tunnel_flow_readiness_tests.hpp
 	@[ -d $(HOST_SANITIZE_DIR) ] || mkdir -p $(HOST_SANITIZE_DIR)
 	@$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -fsanitize=address,undefined -fno-omit-frame-pointer $(HOST_TEST_INCLUDES) $(addprefix $(CURDIR)/,$(HOST_TEST_SOURCES)) -o $(HOST_SANITIZE_TARGET)
 

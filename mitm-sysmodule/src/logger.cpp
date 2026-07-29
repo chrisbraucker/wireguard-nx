@@ -109,4 +109,21 @@ void Log(const char* fmt, ...) {
     WriteLine(line, line_size);
 }
 
+void LogPacket(const char* fmt, ...) {
+#if WGNX_MITM_PACKET_DIAGNOSTICS
+    char message[384] = {};
+    va_list args;
+    va_start(args, fmt);
+    const int written = std::vsnprintf(message, sizeof(message), fmt, args);
+    va_end(args);
+    if (written <= 0) {
+        return;
+    }
+
+    Log("%.*s", static_cast<int>(written < static_cast<int>(sizeof(message)) ? written : sizeof(message) - 1), message);
+#else
+    static_cast<void>(fmt);
+#endif
+}
+
 } // namespace wgnx::mitm::logger

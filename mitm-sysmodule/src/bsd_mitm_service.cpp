@@ -242,14 +242,14 @@ ams::Result BsdMitmService::Connect(ams::sf::Out<s32> out_result, ams::sf::Out<s
 ams::Result BsdMitmService::Send(ams::sf::Out<s32> out_size, ams::sf::Out<s32> out_errno, const s32 fd, const s32 flags,
                                  const ams::sf::InAutoSelectBuffer& buffer) {
     const SocketState* socket = FindSocket(fd);
-    logger::Log("bsd:s send enter owner=%llu fd=%d route=%s bytes=%zu flags=0x%X", static_cast<unsigned long long>(m_owner), fd,
-                SocketRouteName(socket), buffer.GetSize(), static_cast<unsigned>(flags));
+    logger::LogPacket("bsd:s send enter owner=%llu fd=%d route=%s bytes=%zu flags=0x%X", static_cast<unsigned long long>(m_owner), fd,
+                      SocketRouteName(socket), buffer.GetSize(), static_cast<unsigned>(flags));
     if (socket != nullptr && socket->tunneled) {
         const TunnelFlowResult result = GetTunnelFlowWorker().Send(m_owner, fd, buffer.GetPointer(), buffer.GetSize());
         out_errno.SetValue(ErrnoForResult(result));
         out_size.SetValue(result == TunnelFlowResult::Opened ? static_cast<s32>(buffer.GetSize()) : -1);
-        logger::Log("bsd:s send tunneled owner=%llu fd=%d bytes=%zu result=%s", static_cast<unsigned long long>(m_owner), fd,
-                    buffer.GetSize(), TunnelFlowResultName(result));
+        logger::LogPacket("bsd:s send tunneled owner=%llu fd=%d bytes=%zu result=%s", static_cast<unsigned long long>(m_owner), fd,
+                          buffer.GetSize(), TunnelFlowResultName(result));
         R_SUCCEED();
     }
     struct {
@@ -262,9 +262,9 @@ ams::Result BsdMitmService::Send(ams::sf::Out<s32> out_size, ams::sf::Out<s32> o
                                                .buffers = {{buffer.GetPointer(), buffer.GetSize()}});
     out_errno.SetValue(output.error);
     out_size.SetValue(output.result);
-    logger::Log("bsd:s send direct owner=%llu fd=%d bytes=%zu flags=0x%X rc=0x%08X errno=%d result=%d",
-                static_cast<unsigned long long>(m_owner), fd, buffer.GetSize(), static_cast<unsigned>(flags), static_cast<unsigned>(rc),
-                output.error, output.result);
+    logger::LogPacket("bsd:s send direct owner=%llu fd=%d bytes=%zu flags=0x%X rc=0x%08X errno=%d result=%d",
+                      static_cast<unsigned long long>(m_owner), fd, buffer.GetSize(), static_cast<unsigned>(flags),
+                      static_cast<unsigned>(rc), output.error, output.result);
     return rc;
 }
 
@@ -301,14 +301,14 @@ ams::Result BsdMitmService::SendTo(ams::sf::Out<s32> out_size, ams::sf::Out<s32>
 ams::Result BsdMitmService::Recv(ams::sf::Out<s32> out_size, ams::sf::Out<s32> out_errno, const s32 fd, const s32 flags,
                                  ams::sf::OutAutoSelectBuffer buffer) {
     const SocketState* socket = FindSocket(fd);
-    logger::Log("bsd:s recv enter owner=%llu fd=%d route=%s capacity=%zu flags=0x%X", static_cast<unsigned long long>(m_owner), fd,
-                SocketRouteName(socket), buffer.GetSize(), static_cast<unsigned>(flags));
+    logger::LogPacket("bsd:s recv enter owner=%llu fd=%d route=%s capacity=%zu flags=0x%X", static_cast<unsigned long long>(m_owner), fd,
+                      SocketRouteName(socket), buffer.GetSize(), static_cast<unsigned>(flags));
     if (socket != nullptr && socket->tunneled) {
         const TunnelReceiveResult result = GetTunnelFlowWorker().Receive(m_owner, fd, buffer.GetPointer(), buffer.GetSize());
         out_errno.SetValue(ErrnoForResult(result.result));
         out_size.SetValue(result.result == TunnelFlowResult::Opened ? static_cast<s32>(result.size) : -1);
-        logger::Log("bsd:s recv tunneled owner=%llu fd=%d capacity=%zu result=%s bytes=%zu", static_cast<unsigned long long>(m_owner), fd,
-                    buffer.GetSize(), TunnelFlowResultName(result.result), result.size);
+        logger::LogPacket("bsd:s recv tunneled owner=%llu fd=%d capacity=%zu result=%s bytes=%zu", static_cast<unsigned long long>(m_owner),
+                          fd, buffer.GetSize(), TunnelFlowResultName(result.result), result.size);
         R_SUCCEED();
     }
     struct {
@@ -321,18 +321,18 @@ ams::Result BsdMitmService::Recv(ams::sf::Out<s32> out_size, ams::sf::Out<s32> o
                                                .buffers = {{buffer.GetPointer(), buffer.GetSize()}});
     out_errno.SetValue(output.error);
     out_size.SetValue(output.result);
-    logger::Log("bsd:s recv direct owner=%llu fd=%d capacity=%zu flags=0x%X rc=0x%08X errno=%d result=%d",
-                static_cast<unsigned long long>(m_owner), fd, buffer.GetSize(), static_cast<unsigned>(flags), static_cast<unsigned>(rc),
-                output.error, output.result);
+    logger::LogPacket("bsd:s recv direct owner=%llu fd=%d capacity=%zu flags=0x%X rc=0x%08X errno=%d result=%d",
+                      static_cast<unsigned long long>(m_owner), fd, buffer.GetSize(), static_cast<unsigned>(flags),
+                      static_cast<unsigned>(rc), output.error, output.result);
     return rc;
 }
 
 ams::Result BsdMitmService::RecvFrom(ams::sf::Out<s32> out_size, ams::sf::Out<s32> out_errno, ams::sf::Out<u32> out_addr_len, const s32 fd,
                                      const s32 flags, ams::sf::OutAutoSelectBuffer buffer, ams::sf::OutAutoSelectBuffer address) {
     const SocketState* socket = FindSocket(fd);
-    logger::Log("bsd:s recvfrom enter owner=%llu fd=%d route=%s capacity=%zu address_capacity=%zu flags=0x%X",
-                static_cast<unsigned long long>(m_owner), fd, SocketRouteName(socket), buffer.GetSize(), address.GetSize(),
-                static_cast<unsigned>(flags));
+    logger::LogPacket("bsd:s recvfrom enter owner=%llu fd=%d route=%s capacity=%zu address_capacity=%zu flags=0x%X",
+                      static_cast<unsigned long long>(m_owner), fd, SocketRouteName(socket), buffer.GetSize(), address.GetSize(),
+                      static_cast<unsigned>(flags));
     if (socket != nullptr && socket->tunneled) {
         const TunnelReceiveResult result = GetTunnelFlowWorker().Receive(m_owner, fd, buffer.GetPointer(), buffer.GetSize());
         out_errno.SetValue(ErrnoForResult(result.result));
@@ -343,8 +343,8 @@ ams::Result BsdMitmService::RecvFrom(ams::sf::Out<s32> out_size, ams::sf::Out<s3
         } else {
             out_addr_len.SetValue(0);
         }
-        logger::Log("bsd:s recvfrom tunneled owner=%llu fd=%d capacity=%zu result=%s bytes=%zu", static_cast<unsigned long long>(m_owner),
-                    fd, buffer.GetSize(), TunnelFlowResultName(result.result), result.size);
+        logger::LogPacket("bsd:s recvfrom tunneled owner=%llu fd=%d capacity=%zu result=%s bytes=%zu",
+                          static_cast<unsigned long long>(m_owner), fd, buffer.GetSize(), TunnelFlowResultName(result.result), result.size);
         R_SUCCEED();
     }
     struct {
@@ -359,7 +359,7 @@ ams::Result BsdMitmService::RecvFrom(ams::sf::Out<s32> out_size, ams::sf::Out<s3
     out_size.SetValue(output.response.result);
     out_errno.SetValue(output.response.error);
     out_addr_len.SetValue(output.address_size);
-    logger::Log(
+    logger::LogPacket(
         "bsd:s recvfrom direct owner=%llu fd=%d capacity=%zu address_capacity=%zu flags=0x%X rc=0x%08X errno=%d result=%d address_size=%u",
         static_cast<unsigned long long>(m_owner), fd, buffer.GetSize(), address.GetSize(), static_cast<unsigned>(flags),
         static_cast<unsigned>(rc), output.response.error, output.response.result, output.address_size);
@@ -381,12 +381,12 @@ ams::Result BsdMitmService::Poll(ams::sf::Out<s32> out_count, ams::sf::Out<s32> 
     std::memcpy(descriptors.data(), fds_in.GetPointer(), static_cast<std::size_t>(nfds) * sizeof(pollfd));
     bool any_tunneled = false;
     bool any_direct = false;
-    logger::Log("bsd:s poll enter owner=%llu nfds=%d timeout_ms=%d input_bytes=%zu output_bytes=%zu",
-                static_cast<unsigned long long>(m_owner), nfds, timeout, fds_in.GetSize(), fds_out.GetSize());
+    logger::LogPacket("bsd:s poll enter owner=%llu nfds=%d timeout_ms=%d input_bytes=%zu output_bytes=%zu",
+                      static_cast<unsigned long long>(m_owner), nfds, timeout, fds_in.GetSize(), fds_out.GetSize());
     for (s32 index = 0; index < nfds; ++index) {
         const SocketState* socket = FindSocket(descriptors[index].fd);
-        logger::Log("bsd:s poll descriptor owner=%llu index=%d fd=%d events=0x%X route=%s", static_cast<unsigned long long>(m_owner), index,
-                    descriptors[index].fd, static_cast<unsigned>(descriptors[index].events), SocketRouteName(socket));
+        logger::LogPacket("bsd:s poll descriptor owner=%llu index=%d fd=%d events=0x%X route=%s", static_cast<unsigned long long>(m_owner),
+                          index, descriptors[index].fd, static_cast<unsigned>(descriptors[index].events), SocketRouteName(socket));
         descriptors[index].revents = 0;
         any_tunneled = any_tunneled || (socket != nullptr && socket->tunneled);
         any_direct = any_direct || socket == nullptr || !socket->tunneled;
@@ -403,8 +403,8 @@ ams::Result BsdMitmService::Poll(ams::sf::Out<s32> out_count, ams::sf::Out<s32> 
             .buffers = {{fds_in.GetPointer(), fds_in.GetSize()}, {fds_out.GetPointer(), fds_out.GetSize()}});
         out_errno.SetValue(output.error);
         out_count.SetValue(output.result);
-        logger::Log("bsd:s poll direct owner=%llu nfds=%d timeout_ms=%d rc=0x%08X errno=%d ready=%d",
-                    static_cast<unsigned long long>(m_owner), nfds, timeout, static_cast<unsigned>(rc), output.error, output.result);
+        logger::LogPacket("bsd:s poll direct owner=%llu nfds=%d timeout_ms=%d rc=0x%08X errno=%d ready=%d",
+                          static_cast<unsigned long long>(m_owner), nfds, timeout, static_cast<unsigned>(rc), output.error, output.result);
         return rc;
     }
     if (any_direct) {
@@ -416,20 +416,18 @@ ams::Result BsdMitmService::Poll(ams::sf::Out<s32> out_count, ams::sf::Out<s32> 
     }
     s32 ready_count = 0;
     for (s32 index = 0; index < nfds; ++index) {
-        const TunnelFlowResult result = GetTunnelFlowWorker().Poll(m_owner, descriptors[index].fd, index == 0 ? timeout : 0);
-        if (result == TunnelFlowResult::Opened && (descriptors[index].events & POLLIN) != 0) {
-            descriptors[index].revents |= POLLIN;
-            ++ready_count;
-        } else if (result == TunnelFlowResult::Closed) {
-            descriptors[index].revents |= POLLHUP;
+        const TunnelPollResult result =
+            GetTunnelFlowWorker().Poll(m_owner, descriptors[index].fd, descriptors[index].events, index == 0 ? timeout : 0);
+        descriptors[index].revents = result.revents;
+        if (descriptors[index].revents != 0) {
             ++ready_count;
         }
     }
     std::memcpy(fds_out.GetPointer(), descriptors.data(), static_cast<std::size_t>(nfds) * sizeof(pollfd));
     out_errno.SetValue(0);
     out_count.SetValue(ready_count);
-    logger::Log("bsd:s poll tunneled owner=%llu nfds=%d timeout_ms=%d ready=%d", static_cast<unsigned long long>(m_owner), nfds, timeout,
-                ready_count);
+    logger::LogPacket("bsd:s poll tunneled owner=%llu nfds=%d timeout_ms=%d ready=%d", static_cast<unsigned long long>(m_owner), nfds,
+                      timeout, ready_count);
     R_SUCCEED();
 }
 
