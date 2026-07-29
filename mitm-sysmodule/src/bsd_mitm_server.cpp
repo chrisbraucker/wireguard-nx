@@ -2,6 +2,7 @@
 
 #include "bsd_mitm_service.hpp"
 #include "logger.hpp"
+#include "terminal_server_lifecycle.hpp"
 
 #include <stratosphere.hpp>
 
@@ -24,6 +25,7 @@ struct BsdMitmServerOptions {
 constexpr std::size_t MaximumSessions = 4;
 constexpr std::size_t ServerThreadStackBytes = 32 * 1024;
 constexpr std::size_t ObjectHeapBytes = 32 * 1024;
+constexpr ams::sm::ServiceName BsdServiceName = ams::sm::ServiceName::Encode("bsd:s");
 
 alignas(ams::os::MemoryPageSize) constinit std::byte g_object_heap[ObjectHeapBytes]{};
 constinit ams::lmem::HeapHandle g_object_heap_handle = nullptr;
@@ -54,11 +56,34 @@ alignas(ams::os::ThreadStackAlignment) constinit std::byte g_server_thread_stack
 constinit ams::os::ThreadType g_server_thread{};
 constinit std::atomic_bool g_server_running = false;
 constinit bool g_server_thread_started = false;
+// This becomes true only after this process successfully installs bsd:s.
+// It prevents a failed registration from ever uninstalling another MITM owner.
+constinit bool g_bsd_mitm_registration_owned = false;
+constinit TerminalServerLifecycle g_server_lifecycle{};
 
 void LogMitmState(const char* phase) {
     bool installed = false;
-    const ams::Result rc = ams::sm::mitm::HasMitm(std::addressof(installed), ams::sm::ServiceName::Encode("bsd:s"));
+    const ams::Result rc = ams::sm::mitm::HasMitm(std::addressof(installed), BsdServiceName);
     logger::Log("bsd:s MITM state phase=%s rc=0x%08X installed=%u", phase, rc.GetValue(), installed ? 1U : 0U);
+}
+
+void UninstallOwnedBsdMitmRegistration() {
+    if (!g_bsd_mitm_registration_owned) {
+        logger::Log("bsd:s MITM shutdown uninstall skipped state=not_owner");
+        return;
+    }
+
+    LogMitmState("before_unregister");
+    const ams::Result uninstall_result = ams::sm::mitm::UninstallMitm(BsdServiceName);
+    logger::Log("bsd:s MITM shutdown UninstallMitm rc=0x%08X", uninstall_result.GetValue());
+    LogMitmState("after_unregister");
+
+    // Retain the manager rather than invoking its destructor, which repeats this
+    // operation through an opaque post-dispatch path that has aborted on-device.
+    // An unsuccessful unregister remains visible in the diagnostic state above.
+    if (R_SUCCEEDED(uninstall_result)) {
+        g_bsd_mitm_registration_owned = false;
+    }
 }
 
 void ServerThreadMain(void*) {
@@ -85,7 +110,7 @@ bool StartBsdMitmServer() {
     g_object_memory_resource.Attach(g_object_heap_handle);
 
     g_server_manager = ams::util::ConstructAt(g_server_manager_storage);
-    const ams::Result register_result = g_server_manager->RegisterMitmServer<BsdMitmService>(0, ams::sm::ServiceName::Encode("bsd:s"));
+    const ams::Result register_result = g_server_manager->RegisterMitmServer<BsdMitmService>(0, BsdServiceName);
     if (R_FAILED(register_result)) {
         logger::Log("RegisterMitmServer(bsd:s) failed rc=0x%08X", register_result.GetValue());
         // The failed registration may mean another process owns bsd:s.
@@ -93,6 +118,7 @@ bool StartBsdMitmServer() {
         g_server_manager = nullptr;
         return false;
     }
+    g_bsd_mitm_registration_owned = true;
     LogMitmState("after_register");
 
     const ams::Result thread_result =
@@ -100,10 +126,15 @@ bool StartBsdMitmServer() {
                               sizeof(g_server_thread_stack), ams::os::DefaultThreadPriority);
     if (R_FAILED(thread_result)) {
         logger::Log("CreateThread(wgnx-bsd-mitm) failed rc=0x%08X", thread_result.GetValue());
+        UninstallOwnedBsdMitmRegistration();
+        // The manager cannot be safely destroyed after it has installed a MITM.
+        // It remains terminally retained even though its server loop never started.
+        g_server_manager = nullptr;
         return false;
     }
     ams::os::SetThreadNamePointer(std::addressof(g_server_thread), "wgnx-bsd-mitm");
     g_server_running.store(true, std::memory_order_release);
+    AMS_ABORT_UNLESS(g_server_lifecycle.BeginServing());
     ams::os::StartThread(std::addressof(g_server_thread));
     g_server_thread_started = true;
     logger::Log("bsd:s MITM registered requester-only server stack=%zu object_heap=%zu", ServerThreadStackBytes, ObjectHeapBytes);
@@ -117,28 +148,30 @@ void StopBsdMitmServer() {
         return;
     }
 
+    AMS_ABORT_UNLESS(g_server_lifecycle.BeginStopping());
     logger::Log("bsd:s MITM shutdown requesting server-loop stop");
     g_server_manager->RequestStopProcessing();
     if (g_server_thread_started) {
         ams::os::WaitThread(std::addressof(g_server_thread));
         ams::os::DestroyThread(std::addressof(g_server_thread));
         g_server_thread_started = false;
+        AMS_ABORT_UNLESS(g_server_lifecycle.MarkServerThreadJoined());
         logger::Log("bsd:s MITM shutdown server thread joined");
     }
 
-    // ServerManager owns the bsd:s install and uninstalls it while destroying its managed server.
-    // No code below this point may issue UninstallMitm or ClearFutureMitm for bsd:s.
-    LogMitmState("before_manager_destroy");
-    logger::Log("bsd:s MITM shutdown destroying server manager");
-    ams::util::DestroyAt(g_server_manager_storage);
+    // The manager destructor invokes UninstallMitm from a post-dispatch path that
+    // has aborted on-device, so the manager itself must remain alive until exit.
+    // SM does not reliably remove a retained MITM registration when this process
+    // exits, so explicitly relinquish the registration after dispatch has stopped.
+    UninstallOwnedBsdMitmRegistration();
+
+    // Keep the manager and its object heap alive until process exit because active
+    // session objects are allocated from that heap and remain manager-owned.
+    // This module never declares a future MITM, so ClearFutureMitm is not needed.
+    logger::Log("bsd:s MITM shutdown retaining terminal server manager and object heap for process exit");
     g_server_manager = nullptr;
     g_server_running.store(false, std::memory_order_release);
-
-    if (g_object_heap_handle != nullptr) {
-        ams::lmem::DestroyExpHeap(g_object_heap_handle);
-        g_object_heap_handle = nullptr;
-    }
-    logger::Log("bsd:s MITM shutdown complete");
+    AMS_ABORT_UNLESS(g_server_lifecycle.RetainForProcessExit());
 }
 
 bool IsBsdMitmServerRunning() {

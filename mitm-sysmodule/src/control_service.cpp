@@ -4,6 +4,7 @@
 #include "logger.hpp"
 #include "mitm_policy.hpp"
 #include "mitm_runtime_policy.hpp"
+#include "terminal_server_lifecycle.hpp"
 
 #include <array>
 #include <atomic>
@@ -22,6 +23,7 @@ alignas(ams::os::ThreadStackAlignment) constinit std::array<std::byte, 16 * 1024
 constinit ams::os::ThreadType g_server_thread{};
 constinit bool g_server_thread_started = false;
 constinit std::atomic_bool g_shutdown_requested = false;
+constinit TerminalServerLifecycle g_server_lifecycle{};
 
 ams::os::Event& ShutdownEvent() {
     static ams::os::Event event{ams::os::EventClearMode_ManualClear};
@@ -101,6 +103,7 @@ bool StartControlServer() {
     }
 
     ams::os::SetThreadNamePointer(std::addressof(g_server_thread), "wgnx-mitm-ctl");
+    AMS_ABORT_UNLESS(g_server_lifecycle.BeginServing());
     ams::os::StartThread(std::addressof(g_server_thread));
     g_server_thread_started = true;
     logger::Log("MITM control server started");
@@ -116,16 +119,24 @@ void StopControlServer() {
         return;
     }
 
+    AMS_ABORT_UNLESS(g_server_lifecycle.BeginStopping());
     logger::Log("MITM control shutdown requesting server-loop stop");
     g_server_manager->RequestStopProcessing();
     if (g_server_thread_started) {
         ams::os::WaitThread(std::addressof(g_server_thread));
         ams::os::DestroyThread(std::addressof(g_server_thread));
         g_server_thread_started = false;
+        AMS_ABORT_UNLESS(g_server_lifecycle.MarkServerThreadJoined());
+        logger::Log("MITM control shutdown server thread joined");
     }
-    ams::util::DestroyAt(g_server_manager_storage);
+
+    // ServerManager destruction enters Horizon mutex teardown after LoopProcess
+    // stops and aborts in this terminal path.
+    // Main returns immediately after shutdown, so retain static service state and
+    // let Horizon reclaim the service and session handles during process exit.
+    logger::Log("MITM control shutdown retaining terminal server manager for process exit");
     g_server_manager = nullptr;
-    logger::Log("MITM control shutdown complete");
+    AMS_ABORT_UNLESS(g_server_lifecycle.RetainForProcessExit());
 }
 
 } // namespace wgnx::mitm

@@ -1,6 +1,9 @@
 #include "bsd_endpoint.hpp"
 #include "bsd_response.hpp"
+#include "bsd_socket_state_tests.hpp"
+#include "bsd_tunneled_contract_tests.hpp"
 #include "mitm_policy.hpp"
+#include "terminal_server_lifecycle.hpp"
 #include "tunnel_open_disposition.hpp"
 #include "tunnel_discovery_tests.hpp"
 #include "tunnel_flow_readiness_tests.hpp"
@@ -111,6 +114,18 @@ bool RunTunnelOpenDispositionTests() {
                  "unexpected tunnel status was not classified as an error");
 }
 
+bool RunTerminalServerLifecycleTests() {
+    using namespace wgnx::mitm;
+
+    TerminalServerLifecycle lifecycle{};
+    return Check(lifecycle.Phase() == TerminalServerLifecyclePhase::Idle && !lifecycle.BeginStopping() &&
+                     !lifecycle.MarkServerThreadJoined() && !lifecycle.RetainForProcessExit() && lifecycle.BeginServing() &&
+                     !lifecycle.BeginServing() && lifecycle.BeginStopping() && !lifecycle.RetainForProcessExit() &&
+                     lifecycle.MarkServerThreadJoined() && lifecycle.RetainForProcessExit() &&
+                     lifecycle.Phase() == TerminalServerLifecyclePhase::RetainedForProcessExit,
+                 "terminal server lifecycle retained state before its server thread joined");
+}
+
 } // namespace
 
 int main() {
@@ -152,7 +167,10 @@ int main() {
         Check(ShouldInterceptBsdSystem(enabled, 0x0100000000001234ULL, BsdSystemClient::Unknown), "ordinary client was rejected") &&
         Check(RunBsdEndpointTests(), "BSD IPv4 endpoint codec failed") &&
         Check(RunBsdResponseLayoutTests(), "BSD response layout failed") &&
+        Check(RunBsdSocketStateTests(), "BSD socket route state contract failed") &&
+        Check(RunBsdTunneledContractTests(), "BSD tunneled contract failed") &&
         Check(RunTunnelOpenDispositionTests(), "tunnel open disposition mapping failed") &&
+        Check(RunTerminalServerLifecycleTests(), "terminal server lifecycle failed") &&
         Check(RunTunnelDiscoveryTests(), "tunnel discovery state machine failed") &&
         Check(RunTunnelFlowReadinessTests(), "tunnel flow readiness mapping failed");
 

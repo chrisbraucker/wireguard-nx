@@ -77,7 +77,6 @@ class TunnelFlowWorker {
     TunnelFlowResult Send(std::uint64_t owner, s32 descriptor, const void* payload, std::size_t payload_size);
     TunnelReceiveResult Receive(std::uint64_t owner, s32 descriptor, void* payload, std::size_t payload_size);
     TunnelPollResult Poll(std::uint64_t owner, s32 descriptor, short events, std::int32_t timeout_milliseconds);
-    bool GetEndpoints(std::uint64_t owner, s32 descriptor, TunnelFlowEndpoint* out_remote, TunnelFlowEndpoint* out_local);
     void Close(std::uint64_t owner, s32 descriptor);
     void CloseOwner(std::uint64_t owner);
 
@@ -87,7 +86,6 @@ class TunnelFlowWorker {
         Send,
         Receive,
         Poll,
-        GetEndpoints,
         Close,
         CloseOwner,
     };
@@ -108,8 +106,6 @@ class TunnelFlowWorker {
         std::int32_t timeout_milliseconds{};
         TunnelFlowResult result{TunnelFlowResult::SocketError};
         TunnelReceiveResult receive{};
-        TunnelFlowEndpoint local{};
-        bool endpoints_available{};
         ams::os::Event complete;
     };
 

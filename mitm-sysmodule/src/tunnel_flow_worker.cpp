@@ -40,7 +40,6 @@ struct FlowEntry {
     Handle completion_handle{INVALID_HANDLE};
     wgnx::tunnel::FlowHandle flow{};
     TunnelFlowEndpoint remote{};
-    TunnelFlowEndpoint local{};
     bool closed{};
     bool writable{true};
     std::array<InboundDatagram, MaximumInboundDatagramsPerSocket> inbound{};
@@ -390,22 +389,6 @@ TunnelPollResult TunnelFlowWorker::Poll(std::uint64_t owner, s32 descriptor, sho
                                      : TunnelPollResult{.result = TunnelFlowResult::SocketError};
 }
 
-bool TunnelFlowWorker::GetEndpoints(std::uint64_t owner, s32 descriptor, TunnelFlowEndpoint* out_remote, TunnelFlowEndpoint* out_local) {
-    Operation operation{OperationType::GetEndpoints};
-    operation.owner = owner;
-    operation.descriptor = descriptor;
-    if (!EnqueueAndWait(operation) || !operation.endpoints_available) {
-        return false;
-    }
-    if (out_remote != nullptr) {
-        *out_remote = operation.remote;
-    }
-    if (out_local != nullptr) {
-        *out_local = operation.local;
-    }
-    return true;
-}
-
 void TunnelFlowWorker::Close(std::uint64_t owner, s32 descriptor) {
     Operation operation{OperationType::Close};
     operation.owner = owner;
@@ -628,11 +611,6 @@ void TunnelFlowWorker::Dispatch(Operation& operation) {
             operation.result = TunnelFlowResult::SocketError;
             return;
         }
-        wgnx::tunnel::FlowStateResult state{};
-        if (R_SUCCEEDED(wgnx::tunnel::client::GetFlowState(flow->client, flow->flow, std::addressof(state))) &&
-            state.status == wgnx::tunnel::ProtocolStatus::Success) {
-            flow->local = ToEndpoint(state.advertised_local);
-        }
         logger::Log("tunnel flow opened owner=%llu fd=%d remote=%u.%u.%u.%u:%u", static_cast<unsigned long long>(flow->owner),
                     flow->descriptor, flow->remote.address[0], flow->remote.address[1], flow->remote.address[2], flow->remote.address[3],
                     flow->remote.port);
@@ -739,12 +717,6 @@ void TunnelFlowWorker::Dispatch(Operation& operation) {
         operation.receive = {.result = TunnelFlowResult::Opened, .size = datagram->size, .remote = datagram->remote};
         datagram->occupied = false;
         return;
-    }
-
-    if (operation.type == OperationType::GetEndpoints) {
-        operation.remote = flow->remote;
-        operation.local = flow->local;
-        operation.endpoints_available = true;
     }
 }
 

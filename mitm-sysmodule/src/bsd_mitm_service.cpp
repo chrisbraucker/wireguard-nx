@@ -2,6 +2,7 @@
 
 #include "bsd_endpoint.hpp"
 #include "bsd_response.hpp"
+#include "bsd_tunneled_contract.hpp"
 #include "logger.hpp"
 #include "mitm_policy.hpp"
 #include "mitm_runtime_policy.hpp"
@@ -46,6 +47,11 @@ void EncodeIpv4Endpoint(const TunnelFlowEndpoint& endpoint, void* out_buffer) {
     std::memcpy(encoded.address.data(), endpoint.address, encoded.address.size());
     encoded.port = endpoint.port;
     const bool written = EncodeBsdIpv4Endpoint(encoded, {static_cast<std::uint8_t*>(out_buffer), sizeof(BsdSockAddrIn)});
+    AMS_ABORT_UNLESS(written);
+}
+
+void EncodeIpv4Endpoint(const BsdIpv4Endpoint& endpoint, void* out_buffer) {
+    const bool written = EncodeBsdIpv4Endpoint(endpoint, {static_cast<std::uint8_t*>(out_buffer), sizeof(BsdSockAddrIn)});
     AMS_ABORT_UNLESS(written);
 }
 
@@ -137,19 +143,36 @@ const char* BsdMitmService::SocketRouteName(const SocketState* socket) {
     if (socket == nullptr) {
         return "untracked";
     }
-    if (socket->tunneled) {
-        return "tunneled";
+    return BsdSocketRouteStateName(socket->route);
+}
+
+bool BsdMitmService::CaptureVisibleLocalEndpoint(SocketState& socket) {
+    std::array<std::uint8_t, sizeof(BsdSockAddrIn)> address{};
+    BsdResultAndAddressLength output{};
+    const Result rc = serviceMitmDispatchInOut(m_forward_service.get(), 16, socket.descriptor, output,
+                                               .buffer_attrs = {SfBufferAttr_Out | SfBufferAttr_HipcAutoSelect},
+                                               .buffers = {{address.data(), address.size()}});
+    BsdIpv4Endpoint endpoint{};
+    if (R_FAILED(rc) || output.response.result != 0 || output.response.error != 0 || output.address_size < sizeof(BsdSockAddrIn) ||
+        !DecodeBsdIpv4Endpoint(address, std::addressof(endpoint))) {
+        logger::Log("bsd:s visible endpoint capture failed owner=%llu fd=%d rc=0x%08X result=%d errno=%d address_size=%u",
+                    static_cast<unsigned long long>(m_owner), socket.descriptor, static_cast<unsigned>(rc), output.response.result,
+                    output.response.error, output.address_size);
+        return false;
     }
-    if (socket->udp_ipv4) {
-        return "direct_ipv4_udp";
-    }
-    return "direct_other";
+
+    socket.visible_local = endpoint;
+    socket.visible_local_valid = true;
+    logger::Log("bsd:s visible endpoint captured owner=%llu fd=%d local=%u.%u.%u.%u:%u", static_cast<unsigned long long>(m_owner),
+                socket.descriptor, endpoint.address[0], endpoint.address[1], endpoint.address[2], endpoint.address[3], endpoint.port);
+    return true;
 }
 
 void BsdMitmService::ForgetSocket(const s32 descriptor) {
     if (SocketState* socket = FindSocket(descriptor); socket != nullptr) {
-        logger::Log("bsd:s socket forget owner=%llu fd=%d tunneled=%u", static_cast<unsigned long long>(m_owner), descriptor,
-                    socket->tunneled ? 1U : 0U);
+        socket->route = BsdSocketRouteState::Closed;
+        logger::Log("bsd:s socket forget owner=%llu fd=%d route=%s", static_cast<unsigned long long>(m_owner), descriptor,
+                    SocketRouteName(socket));
         *socket = {};
         return;
     }
@@ -191,37 +214,83 @@ ams::Result BsdMitmService::Connect(ams::sf::Out<s32> out_result, ams::sf::Out<s
     SocketState* socket = FindSocket(fd);
     logger::Log("bsd:s connect enter owner=%llu fd=%d route=%s address_bytes=%zu", static_cast<unsigned long long>(m_owner), fd,
                 SocketRouteName(socket), address.GetSize());
+
+    if (socket != nullptr && socket->route == BsdSocketRouteState::Tunneled) {
+        out_result.SetValue(-1);
+        out_errno.SetValue(EISCONN);
+        logger::Log("bsd:s connect rejected owner=%llu fd=%d route=tunneled reason=already_connected",
+                    static_cast<unsigned long long>(m_owner), fd);
+        R_SUCCEED();
+    }
+    if (socket != nullptr && socket->route == BsdSocketRouteState::OpeningTunnel) {
+        out_result.SetValue(-1);
+        out_errno.SetValue(EALREADY);
+        logger::Log("bsd:s connect rejected owner=%llu fd=%d route=opening_tunnel reason=operation_in_progress",
+                    static_cast<unsigned long long>(m_owner), fd);
+        R_SUCCEED();
+    }
+    if (socket != nullptr && IsTerminalSocketRoute(socket->route)) {
+        out_result.SetValue(-1);
+        out_errno.SetValue(ECONNABORTED);
+        logger::Log("bsd:s connect rejected owner=%llu fd=%d route=%s reason=terminal_socket", static_cast<unsigned long long>(m_owner), fd,
+                    SocketRouteName(socket));
+        R_SUCCEED();
+    }
+
     TunnelFlowEndpoint remote{};
     const bool decoded_endpoint = DecodeIpv4Endpoint(address, std::addressof(remote));
-    const bool eligible = socket != nullptr && socket->udp_ipv4 && !socket->tunneled && decoded_endpoint;
+    const bool eligible = socket != nullptr && socket->udp_ipv4 && CanOpenTunnelFlow(socket->route) && decoded_endpoint;
     TunnelFlowResult tunnel_result = TunnelFlowResult::TunnelUnavailable;
     if (eligible) {
+        socket->route = BsdSocketRouteState::OpeningTunnel;
         GetTunnelDiscoveryService().RequestForInterceptedTraffic();
         tunnel_result = GetTunnelFlowWorker().OpenConnectedUdp(m_owner, fd, remote);
         logger::Log("bsd:s connect tunnel-open owner=%llu fd=%d remote=%u.%u.%u.%u:%u result=%s", static_cast<unsigned long long>(m_owner),
                     fd, remote.address[0], remote.address[1], remote.address[2], remote.address[3], remote.port,
                     TunnelFlowResultName(tunnel_result));
         if (tunnel_result == TunnelFlowResult::Opened) {
-            socket->tunneled = true;
+            // The retained descriptor selects the native local address and ephemeral
+            // port we expose to the application while payload traffic stays on wgnx:tun.
+            BsdResultAndErrno anchor_connect{};
+            const Result anchor_rc = serviceMitmDispatchInOut(m_forward_service.get(), 14, fd, anchor_connect,
+                                                              .buffer_attrs = {SfBufferAttr_In | SfBufferAttr_HipcAutoSelect},
+                                                              .buffers = {{address.GetPointer(), address.GetSize()}});
+            if (R_FAILED(anchor_rc) || anchor_connect.result != 0 || anchor_connect.error != 0 || !CaptureVisibleLocalEndpoint(*socket)) {
+                GetTunnelFlowWorker().Close(m_owner, fd);
+                socket->route = BsdSocketRouteState::Failed;
+                out_result.SetValue(-1);
+                out_errno.SetValue(R_SUCCEEDED(anchor_rc) && anchor_connect.error != 0 ? anchor_connect.error : EIO);
+                logger::Log("bsd:s connect tunnel-anchor failed owner=%llu fd=%d rc=0x%08X result=%d errno=%d",
+                            static_cast<unsigned long long>(m_owner), fd, static_cast<unsigned>(anchor_rc), anchor_connect.result,
+                            anchor_connect.error);
+                R_RETURN(anchor_rc);
+            }
+            std::memcpy(socket->remote.address.data(), remote.address, socket->remote.address.size());
+            socket->remote.port = remote.port;
+            socket->route = BsdSocketRouteState::Tunneled;
             out_result.SetValue(0);
             out_errno.SetValue(0);
-            logger::Log("bsd:s connect tunneled owner=%llu fd=%d remote=%u.%u.%u.%u:%u", static_cast<unsigned long long>(m_owner), fd,
-                        remote.address[0], remote.address[1], remote.address[2], remote.address[3], remote.port);
+            logger::Log("bsd:s connect tunneled owner=%llu fd=%d remote=%u.%u.%u.%u:%u visible_local=%u.%u.%u.%u:%u",
+                        static_cast<unsigned long long>(m_owner), fd, remote.address[0], remote.address[1], remote.address[2],
+                        remote.address[3], remote.port, socket->visible_local.address[0], socket->visible_local.address[1],
+                        socket->visible_local.address[2], socket->visible_local.address[3], socket->visible_local.port);
             R_SUCCEED();
         }
         if (tunnel_result != TunnelFlowResult::RouteNotCovered && tunnel_result != TunnelFlowResult::TunnelUnavailable) {
+            socket->route = tunnel_result == TunnelFlowResult::BlockedByPolicy ? BsdSocketRouteState::Created : BsdSocketRouteState::Failed;
             out_result.SetValue(-1);
             out_errno.SetValue(ErrnoForResult(tunnel_result));
             R_SUCCEED();
         }
+        socket->route = BsdSocketRouteState::Created;
     }
 
     if (!eligible) {
-        const char* reason = socket == nullptr   ? "untracked_fd"
-                             : !socket->udp_ipv4 ? "not_ipv4_udp"
-                             : socket->tunneled  ? "already_tunneled"
-                             : !decoded_endpoint ? "invalid_endpoint"
-                                                 : "unknown";
+        const char* reason = socket == nullptr                              ? "untracked_fd"
+                             : !socket->udp_ipv4                            ? "not_ipv4_udp"
+                             : socket->route == BsdSocketRouteState::Direct ? "already_direct"
+                             : !decoded_endpoint                            ? "invalid_endpoint"
+                                                                            : "unknown";
         logger::Log("bsd:s connect bypass owner=%llu fd=%d reason=%s address_bytes=%zu", static_cast<unsigned long long>(m_owner), fd,
                     reason, address.GetSize());
     } else {
@@ -235,6 +304,9 @@ ams::Result BsdMitmService::Connect(ams::sf::Out<s32> out_result, ams::sf::Out<s
                                  .buffers = {{address.GetPointer(), address.GetSize()}});
     out_result.SetValue(output.result);
     out_errno.SetValue(output.error);
+    if (socket != nullptr && socket->route == BsdSocketRouteState::Created && R_SUCCEEDED(rc) && output.result == 0 && output.error == 0) {
+        socket->route = BsdSocketRouteState::Direct;
+    }
     logger::Log("bsd:s connect direct owner=%llu fd=%d rc=0x%08X", static_cast<unsigned long long>(m_owner), fd, static_cast<unsigned>(rc));
     return rc;
 }
@@ -244,12 +316,24 @@ ams::Result BsdMitmService::Send(ams::sf::Out<s32> out_size, ams::sf::Out<s32> o
     const SocketState* socket = FindSocket(fd);
     logger::LogPacket("bsd:s send enter owner=%llu fd=%d route=%s bytes=%zu flags=0x%X", static_cast<unsigned long long>(m_owner), fd,
                       SocketRouteName(socket), buffer.GetSize(), static_cast<unsigned>(flags));
-    if (socket != nullptr && socket->tunneled) {
+    if (socket != nullptr && UsesTunnelFlow(socket->route)) {
+        if (!SupportsTunneledMessageFlags(flags)) {
+            out_errno.SetValue(EOPNOTSUPP);
+            out_size.SetValue(-1);
+            logger::Log("bsd:s send rejected tunneled owner=%llu fd=%d flags=0x%X reason=unsupported_flags",
+                        static_cast<unsigned long long>(m_owner), fd, static_cast<unsigned>(flags));
+            R_SUCCEED();
+        }
         const TunnelFlowResult result = GetTunnelFlowWorker().Send(m_owner, fd, buffer.GetPointer(), buffer.GetSize());
         out_errno.SetValue(ErrnoForResult(result));
         out_size.SetValue(result == TunnelFlowResult::Opened ? static_cast<s32>(buffer.GetSize()) : -1);
         logger::LogPacket("bsd:s send tunneled owner=%llu fd=%d bytes=%zu result=%s", static_cast<unsigned long long>(m_owner), fd,
                           buffer.GetSize(), TunnelFlowResultName(result));
+        R_SUCCEED();
+    }
+    if (socket != nullptr && IsTerminalSocketRoute(socket->route)) {
+        out_errno.SetValue(ECONNABORTED);
+        out_size.SetValue(-1);
         R_SUCCEED();
     }
     struct {
@@ -274,11 +358,16 @@ ams::Result BsdMitmService::SendTo(ams::sf::Out<s32> out_size, ams::sf::Out<s32>
     logger::Log("bsd:s sendto enter owner=%llu fd=%d route=%s bytes=%zu address_bytes=%zu flags=0x%X",
                 static_cast<unsigned long long>(m_owner), fd, SocketRouteName(socket), buffer.GetSize(), address.GetSize(),
                 static_cast<unsigned>(flags));
-    if (socket != nullptr && socket->tunneled) {
+    if (socket != nullptr && UsesTunnelFlow(socket->route)) {
         out_errno.SetValue(EOPNOTSUPP);
         out_size.SetValue(-1);
         logger::Log("bsd:s sendto rejected tunneled owner=%llu fd=%d bytes=%zu reason=connected_udp_only",
                     static_cast<unsigned long long>(m_owner), fd, buffer.GetSize());
+        R_SUCCEED();
+    }
+    if (socket != nullptr && IsTerminalSocketRoute(socket->route)) {
+        out_errno.SetValue(ECONNABORTED);
+        out_size.SetValue(-1);
         R_SUCCEED();
     }
     struct {
@@ -303,12 +392,24 @@ ams::Result BsdMitmService::Recv(ams::sf::Out<s32> out_size, ams::sf::Out<s32> o
     const SocketState* socket = FindSocket(fd);
     logger::LogPacket("bsd:s recv enter owner=%llu fd=%d route=%s capacity=%zu flags=0x%X", static_cast<unsigned long long>(m_owner), fd,
                       SocketRouteName(socket), buffer.GetSize(), static_cast<unsigned>(flags));
-    if (socket != nullptr && socket->tunneled) {
+    if (socket != nullptr && UsesTunnelFlow(socket->route)) {
+        if (!SupportsTunneledMessageFlags(flags)) {
+            out_errno.SetValue(EOPNOTSUPP);
+            out_size.SetValue(-1);
+            logger::Log("bsd:s recv rejected tunneled owner=%llu fd=%d flags=0x%X reason=unsupported_flags",
+                        static_cast<unsigned long long>(m_owner), fd, static_cast<unsigned>(flags));
+            R_SUCCEED();
+        }
         const TunnelReceiveResult result = GetTunnelFlowWorker().Receive(m_owner, fd, buffer.GetPointer(), buffer.GetSize());
         out_errno.SetValue(ErrnoForResult(result.result));
         out_size.SetValue(result.result == TunnelFlowResult::Opened ? static_cast<s32>(result.size) : -1);
         logger::LogPacket("bsd:s recv tunneled owner=%llu fd=%d capacity=%zu result=%s bytes=%zu", static_cast<unsigned long long>(m_owner),
                           fd, buffer.GetSize(), TunnelFlowResultName(result.result), result.size);
+        R_SUCCEED();
+    }
+    if (socket != nullptr && IsTerminalSocketRoute(socket->route)) {
+        out_errno.SetValue(ECONNABORTED);
+        out_size.SetValue(-1);
         R_SUCCEED();
     }
     struct {
@@ -333,7 +434,15 @@ ams::Result BsdMitmService::RecvFrom(ams::sf::Out<s32> out_size, ams::sf::Out<s3
     logger::LogPacket("bsd:s recvfrom enter owner=%llu fd=%d route=%s capacity=%zu address_capacity=%zu flags=0x%X",
                       static_cast<unsigned long long>(m_owner), fd, SocketRouteName(socket), buffer.GetSize(), address.GetSize(),
                       static_cast<unsigned>(flags));
-    if (socket != nullptr && socket->tunneled) {
+    if (socket != nullptr && UsesTunnelFlow(socket->route)) {
+        if (!SupportsTunneledMessageFlags(flags)) {
+            out_errno.SetValue(EOPNOTSUPP);
+            out_size.SetValue(-1);
+            out_addr_len.SetValue(0);
+            logger::Log("bsd:s recvfrom rejected tunneled owner=%llu fd=%d flags=0x%X reason=unsupported_flags",
+                        static_cast<unsigned long long>(m_owner), fd, static_cast<unsigned>(flags));
+            R_SUCCEED();
+        }
         const TunnelReceiveResult result = GetTunnelFlowWorker().Receive(m_owner, fd, buffer.GetPointer(), buffer.GetSize());
         out_errno.SetValue(ErrnoForResult(result.result));
         out_size.SetValue(result.result == TunnelFlowResult::Opened ? static_cast<s32>(result.size) : -1);
@@ -345,6 +454,12 @@ ams::Result BsdMitmService::RecvFrom(ams::sf::Out<s32> out_size, ams::sf::Out<s3
         }
         logger::LogPacket("bsd:s recvfrom tunneled owner=%llu fd=%d capacity=%zu result=%s bytes=%zu",
                           static_cast<unsigned long long>(m_owner), fd, buffer.GetSize(), TunnelFlowResultName(result.result), result.size);
+        R_SUCCEED();
+    }
+    if (socket != nullptr && IsTerminalSocketRoute(socket->route)) {
+        out_errno.SetValue(ECONNABORTED);
+        out_size.SetValue(-1);
+        out_addr_len.SetValue(0);
         R_SUCCEED();
     }
     struct {
@@ -379,7 +494,7 @@ ams::Result BsdMitmService::Poll(ams::sf::Out<s32> out_count, ams::sf::Out<s32> 
     }
     std::array<pollfd, MaximumPollDescriptors> descriptors{};
     std::memcpy(descriptors.data(), fds_in.GetPointer(), static_cast<std::size_t>(nfds) * sizeof(pollfd));
-    bool any_tunneled = false;
+    bool any_virtual = false;
     bool any_direct = false;
     logger::LogPacket("bsd:s poll enter owner=%llu nfds=%d timeout_ms=%d input_bytes=%zu output_bytes=%zu",
                       static_cast<unsigned long long>(m_owner), nfds, timeout, fds_in.GetSize(), fds_out.GetSize());
@@ -388,10 +503,10 @@ ams::Result BsdMitmService::Poll(ams::sf::Out<s32> out_count, ams::sf::Out<s32> 
         logger::LogPacket("bsd:s poll descriptor owner=%llu index=%d fd=%d events=0x%X route=%s", static_cast<unsigned long long>(m_owner),
                           index, descriptors[index].fd, static_cast<unsigned>(descriptors[index].events), SocketRouteName(socket));
         descriptors[index].revents = 0;
-        any_tunneled = any_tunneled || (socket != nullptr && socket->tunneled);
-        any_direct = any_direct || socket == nullptr || !socket->tunneled;
+        any_virtual = any_virtual || (socket != nullptr && !CanForwardToUpstreamBsd(socket->route));
+        any_direct = any_direct || socket == nullptr || (socket != nullptr && CanForwardToUpstreamBsd(socket->route));
     }
-    if (!any_tunneled) {
+    if (!any_virtual) {
         struct {
             s32 descriptor_count;
             s32 timeout_milliseconds;
@@ -410,8 +525,24 @@ ams::Result BsdMitmService::Poll(ams::sf::Out<s32> out_count, ams::sf::Out<s32> 
     if (any_direct) {
         out_errno.SetValue(EOPNOTSUPP);
         out_count.SetValue(-1);
-        logger::Log("bsd:s poll rejected owner=%llu nfds=%d reason=mixed_direct_and_tunneled", static_cast<unsigned long long>(m_owner),
+        logger::Log("bsd:s poll rejected owner=%llu nfds=%d reason=mixed_direct_and_virtual", static_cast<unsigned long long>(m_owner),
                     nfds);
+        R_SUCCEED();
+    }
+    if (const SocketState* socket = FindSocket(descriptors[0].fd); socket != nullptr && IsTerminalSocketRoute(socket->route)) {
+        descriptors[0].revents = POLLHUP;
+        std::memcpy(fds_out.GetPointer(), descriptors.data(), sizeof(pollfd));
+        out_errno.SetValue(0);
+        out_count.SetValue(1);
+        logger::Log("bsd:s poll terminal owner=%llu fd=%d revents=0x%X", static_cast<unsigned long long>(m_owner), descriptors[0].fd,
+                    static_cast<unsigned>(descriptors[0].revents));
+        R_SUCCEED();
+    }
+    if (!SupportsTunneledPoll(nfds, descriptors[0].events)) {
+        out_errno.SetValue(EOPNOTSUPP);
+        out_count.SetValue(-1);
+        logger::Log("bsd:s poll rejected owner=%llu nfds=%d events=0x%X reason=unsupported_tunneled_contract",
+                    static_cast<unsigned long long>(m_owner), nfds, static_cast<unsigned>(descriptors[0].events));
         R_SUCCEED();
     }
     s32 ready_count = 0;
@@ -431,26 +562,47 @@ ams::Result BsdMitmService::Poll(ams::sf::Out<s32> out_count, ams::sf::Out<s32> 
     R_SUCCEED();
 }
 
+ams::Result BsdMitmService::Bind(ams::sf::Out<s32> out_result, ams::sf::Out<s32> out_errno, const s32 fd,
+                                 const ams::sf::InAutoSelectBuffer& address) {
+    if (const SocketState* socket = FindSocket(fd); socket != nullptr && UsesTunnelFlow(socket->route)) {
+        out_result.SetValue(-1);
+        out_errno.SetValue(EOPNOTSUPP);
+        logger::Log("bsd:s bind rejected tunneled owner=%llu fd=%d address_bytes=%zu", static_cast<unsigned long long>(m_owner), fd,
+                    address.GetSize());
+        R_SUCCEED();
+    }
+    if (const SocketState* socket = FindSocket(fd); socket != nullptr && IsTerminalSocketRoute(socket->route)) {
+        out_result.SetValue(-1);
+        out_errno.SetValue(ECONNABORTED);
+        R_SUCCEED();
+    }
+    R_RETURN(ams::sm::mitm::ResultShouldForwardToSession());
+}
+
 ams::Result BsdMitmService::GetPeerName(ams::sf::Out<s32> out_result, ams::sf::Out<s32> out_errno, ams::sf::Out<u32> out_addr_len,
                                         const s32 fd, ams::sf::OutAutoSelectBuffer address) {
     const SocketState* socket = FindSocket(fd);
     logger::Log("bsd:s getpeername enter owner=%llu fd=%d route=%s address_bytes=%zu", static_cast<unsigned long long>(m_owner), fd,
                 SocketRouteName(socket), address.GetSize());
-    if (socket != nullptr && socket->tunneled) {
-        TunnelFlowEndpoint remote{};
-        if (!GetTunnelFlowWorker().GetEndpoints(m_owner, fd, std::addressof(remote), nullptr) ||
-            address.GetSize() < sizeof(BsdSockAddrIn)) {
+    if (socket != nullptr && UsesTunnelFlow(socket->route)) {
+        if (address.GetSize() < sizeof(BsdSockAddrIn)) {
             out_result.SetValue(-1);
             out_errno.SetValue(EINVAL);
             out_addr_len.SetValue(0);
         } else {
-            EncodeIpv4Endpoint(remote, address.GetPointer());
+            EncodeIpv4Endpoint(socket->remote, address.GetPointer());
             out_result.SetValue(0);
             out_errno.SetValue(0);
             out_addr_len.SetValue(sizeof(BsdSockAddrIn));
         }
         logger::Log("bsd:s getpeername tunneled owner=%llu fd=%d address_bytes=%zu", static_cast<unsigned long long>(m_owner), fd,
                     address.GetSize());
+        R_SUCCEED();
+    }
+    if (socket != nullptr && IsTerminalSocketRoute(socket->route)) {
+        out_result.SetValue(-1);
+        out_errno.SetValue(ECONNABORTED);
+        out_addr_len.SetValue(0);
         R_SUCCEED();
     }
     logger::Log("bsd:s getpeername direct owner=%llu fd=%d address_bytes=%zu", static_cast<unsigned long long>(m_owner), fd,
@@ -470,20 +622,25 @@ ams::Result BsdMitmService::GetSockName(ams::sf::Out<s32> out_result, ams::sf::O
     const SocketState* socket = FindSocket(fd);
     logger::Log("bsd:s getsockname enter owner=%llu fd=%d route=%s address_bytes=%zu", static_cast<unsigned long long>(m_owner), fd,
                 SocketRouteName(socket), address.GetSize());
-    if (socket != nullptr && socket->tunneled) {
-        TunnelFlowEndpoint local{};
-        if (!GetTunnelFlowWorker().GetEndpoints(m_owner, fd, nullptr, std::addressof(local)) || address.GetSize() < sizeof(BsdSockAddrIn)) {
+    if (socket != nullptr && UsesTunnelFlow(socket->route)) {
+        if (!socket->visible_local_valid || address.GetSize() < sizeof(BsdSockAddrIn)) {
             out_result.SetValue(-1);
             out_errno.SetValue(EINVAL);
             out_addr_len.SetValue(0);
         } else {
-            EncodeIpv4Endpoint(local, address.GetPointer());
+            EncodeIpv4Endpoint(socket->visible_local, address.GetPointer());
             out_result.SetValue(0);
             out_errno.SetValue(0);
             out_addr_len.SetValue(sizeof(BsdSockAddrIn));
         }
         logger::Log("bsd:s getsockname tunneled owner=%llu fd=%d address_bytes=%zu", static_cast<unsigned long long>(m_owner), fd,
                     address.GetSize());
+        R_SUCCEED();
+    }
+    if (socket != nullptr && IsTerminalSocketRoute(socket->route)) {
+        out_result.SetValue(-1);
+        out_errno.SetValue(ECONNABORTED);
+        out_addr_len.SetValue(0);
         R_SUCCEED();
     }
     logger::Log("bsd:s getsockname direct owner=%llu fd=%d address_bytes=%zu", static_cast<unsigned long long>(m_owner), fd,
@@ -498,9 +655,65 @@ ams::Result BsdMitmService::GetSockName(ams::sf::Out<s32> out_result, ams::sf::O
     return rc;
 }
 
+ams::Result BsdMitmService::Fcntl(ams::sf::Out<s32> out_result, ams::sf::Out<s32> out_errno, const s32 fd, const s32 command,
+                                  const s32 value) {
+    if (const SocketState* socket = FindSocket(fd); socket != nullptr && UsesTunnelFlow(socket->route)) {
+        if (!SupportsTunneledFcntl(command, value)) {
+            out_result.SetValue(-1);
+            out_errno.SetValue(EOPNOTSUPP);
+            logger::Log("bsd:s fcntl rejected tunneled owner=%llu fd=%d command=%d value=0x%X", static_cast<unsigned long long>(m_owner),
+                        fd, command, static_cast<unsigned>(value));
+            R_SUCCEED();
+        }
+        out_result.SetValue(TunneledFcntlResult(command));
+        out_errno.SetValue(0);
+        logger::Log("bsd:s fcntl tunneled owner=%llu fd=%d command=%d value=0x%X", static_cast<unsigned long long>(m_owner), fd, command,
+                    static_cast<unsigned>(value));
+        R_SUCCEED();
+    }
+    if (const SocketState* socket = FindSocket(fd); socket != nullptr && IsTerminalSocketRoute(socket->route)) {
+        out_result.SetValue(-1);
+        out_errno.SetValue(ECONNABORTED);
+        R_SUCCEED();
+    }
+    R_RETURN(ams::sm::mitm::ResultShouldForwardToSession());
+}
+
+ams::Result BsdMitmService::SetSockOpt(ams::sf::Out<s32> out_result, ams::sf::Out<s32> out_errno, const s32 fd, const s32 level,
+                                       const s32 option, const ams::sf::InAutoSelectBuffer& value) {
+    if (const SocketState* socket = FindSocket(fd); socket != nullptr && UsesTunnelFlow(socket->route)) {
+        out_result.SetValue(-1);
+        out_errno.SetValue(EOPNOTSUPP);
+        logger::Log("bsd:s setsockopt rejected tunneled owner=%llu fd=%d level=%d option=%d value_bytes=%zu",
+                    static_cast<unsigned long long>(m_owner), fd, level, option, value.GetSize());
+        R_SUCCEED();
+    }
+    if (const SocketState* socket = FindSocket(fd); socket != nullptr && IsTerminalSocketRoute(socket->route)) {
+        out_result.SetValue(-1);
+        out_errno.SetValue(ECONNABORTED);
+        R_SUCCEED();
+    }
+    R_RETURN(ams::sm::mitm::ResultShouldForwardToSession());
+}
+
+ams::Result BsdMitmService::Shutdown(ams::sf::Out<s32> out_result, ams::sf::Out<s32> out_errno, const s32 fd, const s32 how) {
+    if (const SocketState* socket = FindSocket(fd); socket != nullptr && UsesTunnelFlow(socket->route)) {
+        out_result.SetValue(-1);
+        out_errno.SetValue(EOPNOTSUPP);
+        logger::Log("bsd:s shutdown rejected tunneled owner=%llu fd=%d how=%d", static_cast<unsigned long long>(m_owner), fd, how);
+        R_SUCCEED();
+    }
+    if (const SocketState* socket = FindSocket(fd); socket != nullptr && IsTerminalSocketRoute(socket->route)) {
+        out_result.SetValue(-1);
+        out_errno.SetValue(ECONNABORTED);
+        R_SUCCEED();
+    }
+    R_RETURN(ams::sm::mitm::ResultShouldForwardToSession());
+}
+
 ams::Result BsdMitmService::Close(ams::sf::Out<s32> out_result, ams::sf::Out<s32> out_errno, const s32 fd) {
     const SocketState* socket = FindSocket(fd);
-    const bool tunneled = socket != nullptr && socket->tunneled;
+    const bool tunneled = socket != nullptr && UsesTunnelFlow(socket->route);
     logger::Log("bsd:s close enter owner=%llu fd=%d route=%s", static_cast<unsigned long long>(m_owner), fd, SocketRouteName(socket));
     if (tunneled) {
         GetTunnelFlowWorker().Close(m_owner, fd);

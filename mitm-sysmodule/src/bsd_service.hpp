@@ -33,6 +33,9 @@
                        (ams::sf::Out<s32> out_size, ams::sf::Out<s32> out_errno, s32 fd, s32 flags,                                        \
                         const ams::sf::InAutoSelectBuffer& buffer, const ams::sf::InAutoSelectBuffer& address),                            \
                        (out_size, out_errno, fd, flags, buffer, address), ams::hos::Version_Min, ams::hos::Version_Max)                    \
+    AMS_SF_METHOD_INFO(C, H, 13, ams::Result, Bind,                                                                                        \
+                       (ams::sf::Out<s32> out_result, ams::sf::Out<s32> out_errno, s32 fd, const ams::sf::InAutoSelectBuffer& address),    \
+                       (out_result, out_errno, fd, address), ams::hos::Version_Min, ams::hos::Version_Max)                                 \
     AMS_SF_METHOD_INFO(C, H, 14, ams::Result, Connect,                                                                                     \
                        (ams::sf::Out<s32> out_result, ams::sf::Out<s32> out_errno, s32 fd, const ams::sf::InAutoSelectBuffer& address),    \
                        (out_result, out_errno, fd, address), ams::hos::Version_Min, ams::hos::Version_Max)                                 \
@@ -44,6 +47,15 @@
                        (ams::sf::Out<s32> out_result, ams::sf::Out<s32> out_errno, ams::sf::Out<u32> out_addr_len, s32 fd,                 \
                         ams::sf::OutAutoSelectBuffer address),                                                                             \
                        (out_result, out_errno, out_addr_len, fd, address), ams::hos::Version_Min, ams::hos::Version_Max)                   \
+    AMS_SF_METHOD_INFO(C, H, 20, ams::Result, Fcntl,                                                                                       \
+                       (ams::sf::Out<s32> out_result, ams::sf::Out<s32> out_errno, s32 fd, s32 command, s32 value),                        \
+                       (out_result, out_errno, fd, command, value), ams::hos::Version_Min, ams::hos::Version_Max)                          \
+    AMS_SF_METHOD_INFO(C, H, 21, ams::Result, SetSockOpt,                                                                                  \
+                       (ams::sf::Out<s32> out_result, ams::sf::Out<s32> out_errno, s32 fd, s32 level, s32 option,                          \
+                        const ams::sf::InAutoSelectBuffer& value),                                                                         \
+                       (out_result, out_errno, fd, level, option, value), ams::hos::Version_Min, ams::hos::Version_Max)                    \
+    AMS_SF_METHOD_INFO(C, H, 22, ams::Result, Shutdown, (ams::sf::Out<s32> out_result, ams::sf::Out<s32> out_errno, s32 fd, s32 how),      \
+                       (out_result, out_errno, fd, how), ams::hos::Version_Min, ams::hos::Version_Max)                                     \
     AMS_SF_METHOD_INFO(C, H, 26, ams::Result, Close, (ams::sf::Out<s32> out_result, ams::sf::Out<s32> out_errno, s32 fd),                  \
                        (out_result, out_errno, fd), ams::hos::Version_Min, ams::hos::Version_Max)
 
