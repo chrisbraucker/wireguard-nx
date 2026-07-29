@@ -25,14 +25,19 @@ Requester-only title admission is compile-time scoped while runtime policy toggl
 
 Control API v2 adds `Shutdown` as command ID 3 on `wgm:ctl`.
 The command signals the main thread and returns before teardown starts.
-The main thread then joins and destroys the control server, stops and destroys the BSD MITM server, stops discovery, and closes every `wgnx:tun` handle on the flow worker.
-The BSD server is destroyed while the flow worker is still active because BSD session destruction synchronously closes its worker-owned flows.
+The main thread joins both server loops, stops discovery, and closes every `wgnx:tun` handle on the flow worker.
 The flow worker also interrupts an in-progress tunneled `poll()` so an unbounded caller timeout cannot prevent shutdown.
 Controllers can issue this request through `wgnx/mitm_client.hpp` before terminating the sysmodule process.
 The generated `toolbox.json` declares `wgm:ctl` and command 3 using the `ovl-sysmodules` shutdown contract, so its manager invokes this sequence before it considers forced termination.
-`ServerManager` is the sole owner of the `bsd:s` MITM installation and uninstalls it while its managed server is destroyed.
+After both loop threads have joined, the module deliberately retains the static control and BSD:S `ServerManager` instances until `ams::Main` returns.
+It also retains the BSD MITM object heap because active service objects remain owned by that server manager.
+This follows the WireGuard sysmodule's proven terminal-shutdown pattern because Horizon aborts while destroying `ServerManager` after `LoopProcess` has stopped.
+After the BSD dispatch loop is joined, the module explicitly calls `UninstallMitm("bsd:s")` only when this process successfully installed that registration.
+It then logs `HasMitm` so a stale registration is visible before process exit.
+This is necessary because retaining the manager bypasses its normal destructor cleanup and SM does not reliably remove the retained `bsd:s` registration when the process exits.
+The manager and heap retention remain an explicit Horizon-dependent workaround rather than a general C++ resource-management pattern, so no code may reuse retained state or attempt a second shutdown in the same process.
 The module never declares a future MITM and therefore never calls `ClearFutureMitm` during shutdown.
-It also never performs best-effort residual `UninstallMitm` cleanup because an observed MITM after manager destruction may belong to another module.
+Failed registration never triggers `UninstallMitm`, because an observed MITM could belong to another module.
 The overlay probes `wgm:ctl` with Atmosphere's read-only `HasService` command rather than temporarily registering and unregistering the service name.
 
 The local discovery controller performs one startup probe for diagnostics.
@@ -45,7 +50,13 @@ The discovery controller owns only local backoff state and never opens a service
 BSD request handlers never use either worker session directly.
 
 The implemented routed surface is connected IPv4 UDP through socket creation, connect, send, receive, receive-from, readable polling, endpoint queries, and close.
-The original BSD descriptor is retained as the lifecycle anchor.
+The original BSD descriptor is retained as the lifecycle and application-visible local-endpoint anchor.
+After a WGNX flow opens, the MITM forwards the initial UDP `Connect` only to establish the native local IPv4 address and ephemeral port on that retained descriptor.
+It captures the endpoint immediately and returns it from `GetSockName` while all payload traffic stays on `wgnx:tun`.
+The WireGuard interface address and tunnel source port are never exposed through the BSD-facing socket.
+Failure to establish or capture that endpoint closes the flow and leaves the socket terminal rather than permitting payload fallback to upstream BSD.
+Every tracked descriptor has an explicit `Created`, `OpeningTunnel`, `Direct`, `Tunneled`, `Failed`, or `Closed` route state.
+Only `Created` can choose a path, and neither a direct nor a tunneled socket migrates later because tunnel availability changes.
 Uncovered or unavailable traffic continues through upstream BSD.
 After a socket opens a WGNX flow, it remains tunneled until close and later tunnel failure returns a BSD error rather than switching back to direct BSD.
 `SendTo` and mixed direct plus tunneled polls fail explicitly on a tunneled socket.

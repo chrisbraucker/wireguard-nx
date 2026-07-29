@@ -543,22 +543,24 @@ wgnx::PacketSubmissionResult DaemonRuntime::SubmitInnerIpv4Packet(std::span<cons
     switch (outcome.status) {
     case runtime::PacketSubmissionStatus::Queued:
         result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::Queued);
-        logger::Log("Queued packet API submission id=%llu pid=%llu peer=%u activation=%u bytes=%zu depth=%zu state=%s",
-                    static_cast<unsigned long long>(outcome.packet_id.Value()), static_cast<unsigned long long>(process_id.Value()),
-                    outcome.peer.peer_index.Value(), outcome.peer.activation_generation.Value(), packet_bytes.size(), outcome.queue_depth,
-                    wgnx::GetPeerRuntimeStateName(outcome.peer_state));
+        logger::LogPacket("Queued packet API submission id=%llu pid=%llu peer=%u activation=%u bytes=%zu depth=%zu state=%s",
+                          static_cast<unsigned long long>(outcome.packet_id.Value()), static_cast<unsigned long long>(process_id.Value()),
+                          outcome.peer.peer_index.Value(), outcome.peer.activation_generation.Value(), packet_bytes.size(),
+                          outcome.queue_depth, wgnx::GetPeerRuntimeStateName(outcome.peer_state));
         break;
     case runtime::PacketSubmissionStatus::MalformedPacket:
         result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::MalformedPacket);
-        logger::Log("Rejected packet API submission pid=%llu bytes=%zu validation=%s", static_cast<unsigned long long>(process_id.Value()),
-                    packet_bytes.size(), wgnx::wireguard::GetInnerIpValidationErrorName(outcome.validation));
+        logger::LogPacket("Rejected packet API submission pid=%llu bytes=%zu validation=%s",
+                          static_cast<unsigned long long>(process_id.Value()), packet_bytes.size(),
+                          wgnx::wireguard::GetInnerIpValidationErrorName(outcome.validation));
         break;
     case runtime::PacketSubmissionStatus::TunnelUnavailable:
         result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::TunnelUnavailable);
         break;
     case runtime::PacketSubmissionStatus::QueueFull:
         result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::QueueFull);
-        logger::Log("Rejected packet API submission pid=%llu reason=tx_queue_full", static_cast<unsigned long long>(process_id.Value()));
+        logger::LogPacket("Rejected packet API submission pid=%llu reason=tx_queue_full",
+                          static_cast<unsigned long long>(process_id.Value()));
         break;
     case runtime::PacketSubmissionStatus::InternalError:
         result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::InternalError);
@@ -594,9 +596,10 @@ wgnx::PacketReceiveResult DaemonRuntime::ReceiveInnerIpv4Packet(std::span<std::u
     switch (outcome.status) {
     case runtime::PacketReceiveStatus::Success:
         result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::Success);
-        logger::Log("Delivered packet API receive id=%llu pid=%llu peer=%u activation=%u bytes=%zu remaining=%zu",
-                    static_cast<unsigned long long>(outcome.packet_id.Value()), static_cast<unsigned long long>(process_id.Value()),
-                    outcome.peer.peer_index.Value(), outcome.peer.activation_generation.Value(), outcome.packet_size, outcome.queue_depth);
+        logger::LogPacket("Delivered packet API receive id=%llu pid=%llu peer=%u activation=%u bytes=%zu remaining=%zu",
+                          static_cast<unsigned long long>(outcome.packet_id.Value()), static_cast<unsigned long long>(process_id.Value()),
+                          outcome.peer.peer_index.Value(), outcome.peer.activation_generation.Value(), outcome.packet_size,
+                          outcome.queue_depth);
         break;
     case runtime::PacketReceiveStatus::QueueEmpty:
         break;
@@ -608,8 +611,8 @@ wgnx::PacketReceiveResult DaemonRuntime::ReceiveInnerIpv4Packet(std::span<std::u
         break;
     case runtime::PacketReceiveStatus::StaleActivation:
         result.status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::StaleActivation);
-        logger::Log("Discarded packet API receive id=%llu reason=stale_activation",
-                    static_cast<unsigned long long>(outcome.packet_id.Value()));
+        logger::LogPacket("Discarded packet API receive id=%llu reason=stale_activation",
+                          static_cast<unsigned long long>(outcome.packet_id.Value()));
         break;
     }
     return result;
@@ -735,8 +738,15 @@ wgnx::tunnel::FlowStateResult DaemonRuntime::GetTunnelFlowState(runtime::TunnelC
 
 wgnx::tunnel::ProtocolStatus DaemonRuntime::CloseTunnelFlow(runtime::TunnelClientId client, wgnx::tunnel::FlowHandle flow) {
     EnsureInitialized();
-    std::scoped_lock lock(m_state_mutex);
-    return m_tunnel_flow_plane.CloseFlow(client, flow, GetRuntimeNowNs());
+    wgnx::tunnel::ProtocolStatus status{};
+    {
+        std::scoped_lock lock(m_state_mutex);
+        status = m_tunnel_flow_plane.CloseFlow(client, flow, GetRuntimeNowNs());
+    }
+    // Flow closure is a measurement boundary, so persist its aggregate summary
+    // after releasing the daemon mutex without flushing packet-path traffic.
+    logger::Flush();
+    return status;
 }
 
 void DaemonRuntime::Initialize() {

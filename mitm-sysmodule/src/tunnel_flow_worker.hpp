@@ -33,6 +33,31 @@ struct TunnelReceiveResult {
     TunnelFlowEndpoint remote{};
 };
 
+struct TunnelPollResult {
+    TunnelFlowResult result{TunnelFlowResult::WouldBlock};
+    short revents{};
+};
+
+struct TunnelFlowWorkerMetrics {
+    std::uint64_t operations_enqueued{};
+    std::uint64_t operations_rejected{};
+    std::uint64_t operation_queue_high_water{};
+    std::uint64_t flows_opened{};
+    std::uint64_t flows_closed{};
+    std::uint64_t send_attempts{};
+    std::uint64_t send_accepted{};
+    std::uint64_t send_queue_full{};
+    std::uint64_t send_too_large{};
+    std::uint64_t send_failures{};
+    std::uint64_t completion_drains{};
+    std::uint64_t completion_records{};
+    std::uint64_t completion_event_waits{};
+    std::uint64_t writable_notifications{};
+    std::uint64_t inbound_delivered{};
+    std::uint64_t inbound_dropped{};
+    std::uint64_t terminal_flow_notifications{};
+};
+
 class TunnelFlowWorker {
   public:
     static constexpr std::size_t MaximumSockets = 4;
@@ -51,7 +76,7 @@ class TunnelFlowWorker {
     TunnelFlowResult OpenConnectedUdp(std::uint64_t owner, s32 descriptor, const TunnelFlowEndpoint& remote);
     TunnelFlowResult Send(std::uint64_t owner, s32 descriptor, const void* payload, std::size_t payload_size);
     TunnelReceiveResult Receive(std::uint64_t owner, s32 descriptor, void* payload, std::size_t payload_size);
-    TunnelFlowResult Poll(std::uint64_t owner, s32 descriptor, std::int32_t timeout_milliseconds);
+    TunnelPollResult Poll(std::uint64_t owner, s32 descriptor, short events, std::int32_t timeout_milliseconds);
     bool GetEndpoints(std::uint64_t owner, s32 descriptor, TunnelFlowEndpoint* out_remote, TunnelFlowEndpoint* out_local);
     void Close(std::uint64_t owner, s32 descriptor);
     void CloseOwner(std::uint64_t owner);
@@ -78,6 +103,8 @@ class TunnelFlowWorker {
         std::size_t input_size{};
         void* output{};
         std::size_t output_size{};
+        short events{};
+        short revents{};
         std::int32_t timeout_milliseconds{};
         TunnelFlowResult result{TunnelFlowResult::SocketError};
         TunnelReceiveResult receive{};
@@ -106,6 +133,7 @@ class TunnelFlowWorker {
     std::size_t m_operation_count{};
     bool m_started{};
     bool m_stop_requested{};
+    TunnelFlowWorkerMetrics m_metrics{};
 };
 
 TunnelFlowWorker& GetTunnelFlowWorker();

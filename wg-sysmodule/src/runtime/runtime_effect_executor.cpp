@@ -102,11 +102,12 @@ NOINLINE void RuntimeEffectExecutor::ExecutePendingDatagramSend(const SendPendin
     std::size_t sent = 0;
     const auto error = wgnx::platform::udp_send(snapshot.binding.socket, snapshot.binding.endpoint,
                                                 std::span<const std::uint8_t>(snapshot.bytes).first(snapshot.size), std::addressof(sent));
-    logger::Log("Encrypted datagram send completion peer=%u activation=%u datagram_generation=%u kind=%s packet_id=%llu bytes=%zu sent=%zu "
-                "socket_generation=%u socket=%d error=%u",
-                effect.peer.peer_index.Value(), effect.peer.activation_generation.Value(), effect.datagram_generation.Value(),
-                GetPendingDatagramKindName(snapshot.kind), static_cast<unsigned long long>(snapshot.inner_packet_id.Value()), snapshot.size,
-                sent, snapshot.binding.generation.Value(), static_cast<int>(snapshot.binding.socket), static_cast<unsigned int>(error));
+    logger::LogPacket("Encrypted datagram send completion peer=%u activation=%u datagram_generation=%u kind=%s packet_id=%llu bytes=%zu "
+                      "sent=%zu socket_generation=%u socket=%d error=%u",
+                      effect.peer.peer_index.Value(), effect.peer.activation_generation.Value(), effect.datagram_generation.Value(),
+                      GetPendingDatagramKindName(snapshot.kind), static_cast<unsigned long long>(snapshot.inner_packet_id.Value()),
+                      snapshot.size, sent, snapshot.binding.generation.Value(), static_cast<int>(snapshot.binding.socket),
+                      static_cast<unsigned int>(error));
 
     {
         std::scoped_lock lock(m_state_mutex);
@@ -364,22 +365,22 @@ bool RuntimeEffectExecutor::PublishDecryptedPacketLocked(const PeerIdentity& pee
     const auto tunnel_delivery = m_tunnel_flow_plane.DeliverDecryptedIpv4Packet(peer, inner_packet, GetRuntimeNowNs());
     switch (tunnel_delivery.disposition) {
     case TunnelInboundDisposition::Delivered:
-        logger::Log("Queued tunnel UDP delivery flow=%llu peer=%u activation=%u bytes=%zu",
-                    static_cast<unsigned long long>(tunnel_delivery.flow.value), peer.peer_index.Value(),
-                    peer.activation_generation.Value(), tunnel_delivery.payload_size);
+        logger::LogPacket("Queued tunnel UDP delivery flow=%llu peer=%u activation=%u bytes=%zu",
+                          static_cast<unsigned long long>(tunnel_delivery.flow.value), peer.peer_index.Value(),
+                          peer.activation_generation.Value(), tunnel_delivery.payload_size);
         return true;
     case TunnelInboundDisposition::DroppedMalformed:
-        logger::Log("Dropped tunnel UDP delivery peer=%u activation=%u reason=malformed", peer.peer_index.Value(),
-                    peer.activation_generation.Value());
+        logger::LogPacket("Dropped tunnel UDP delivery peer=%u activation=%u reason=malformed", peer.peer_index.Value(),
+                          peer.activation_generation.Value());
         return true;
     case TunnelInboundDisposition::DroppedStale:
-        logger::Log("Dropped tunnel UDP delivery peer=%u activation=%u reason=reverse_tuple_quarantine", peer.peer_index.Value(),
-                    peer.activation_generation.Value());
+        logger::LogPacket("Dropped tunnel UDP delivery peer=%u activation=%u reason=reverse_tuple_quarantine", peer.peer_index.Value(),
+                          peer.activation_generation.Value());
         return true;
     case TunnelInboundDisposition::DroppedQueueFull:
-        logger::Log("Dropped tunnel UDP delivery flow=%llu peer=%u activation=%u reason=queue_full",
-                    static_cast<unsigned long long>(tunnel_delivery.flow.value), peer.peer_index.Value(),
-                    peer.activation_generation.Value());
+        logger::LogPacket("Dropped tunnel UDP delivery flow=%llu peer=%u activation=%u reason=queue_full",
+                          static_cast<unsigned long long>(tunnel_delivery.flow.value), peer.peer_index.Value(),
+                          peer.activation_generation.Value());
         return true;
     case TunnelInboundDisposition::NotClaimed:
     case TunnelInboundDisposition::DroppedUnknown:

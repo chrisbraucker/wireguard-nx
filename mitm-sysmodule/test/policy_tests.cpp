@@ -3,6 +3,7 @@
 #include "mitm_policy.hpp"
 #include "tunnel_open_disposition.hpp"
 #include "tunnel_discovery_tests.hpp"
+#include "tunnel_flow_readiness_tests.hpp"
 
 #include <array>
 #include <bit>
@@ -152,7 +153,8 @@ int main() {
         Check(RunBsdEndpointTests(), "BSD IPv4 endpoint codec failed") &&
         Check(RunBsdResponseLayoutTests(), "BSD response layout failed") &&
         Check(RunTunnelOpenDispositionTests(), "tunnel open disposition mapping failed") &&
-        Check(RunTunnelDiscoveryTests(), "tunnel discovery state machine failed");
+        Check(RunTunnelDiscoveryTests(), "tunnel discovery state machine failed") &&
+        Check(RunTunnelFlowReadinessTests(), "tunnel flow readiness mapping failed");
 
     std::printf("RESULT passed=%u\n", static_cast<unsigned>(passed));
     return passed ? 0 : 1;

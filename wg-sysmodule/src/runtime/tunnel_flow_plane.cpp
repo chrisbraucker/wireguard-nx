@@ -309,6 +309,7 @@ PreparedTunnelDatagram TunnelFlowPlane::PrepareSend(TunnelClientId client, const
         outcome.status = wgnx::tunnel::ProtocolStatus::FlowClosed;
         return outcome;
     }
+    ++flow->send_attempts;
     if (!m_policy_available || flow->peer != m_policy_peer) {
         outcome.status = wgnx::tunnel::ProtocolStatus::PeerUnavailable;
         return outcome;
@@ -319,6 +320,7 @@ PreparedTunnelDatagram TunnelFlowPlane::PrepareSend(TunnelClientId client, const
     }
     if (!availability.staging_available) {
         flow->writable_waiter = true;
+        ++flow->send_queue_full;
         outcome.status = wgnx::tunnel::ProtocolStatus::QueueFull;
         return outcome;
     }
@@ -326,6 +328,7 @@ PreparedTunnelDatagram TunnelFlowPlane::PrepareSend(TunnelClientId client, const
     const std::uint8_t slab_slot = AllocateOutboundSlab();
     if (slab_slot == InvalidSlabSlot) {
         flow->writable_waiter = true;
+        ++flow->send_queue_full;
         outcome.status = wgnx::tunnel::ProtocolStatus::QueueFull;
         return outcome;
     }
@@ -337,6 +340,7 @@ PreparedTunnelDatagram TunnelFlowPlane::PrepareSend(TunnelClientId client, const
         return outcome;
     }
     flow->last_activity_at = now;
+    ++flow->send_admitted;
     outcome.status = wgnx::tunnel::ProtocolStatus::Success;
     outcome.peer = flow->peer;
     outcome.packet = std::span<const std::uint8_t>(slab.bytes.data(), packet_size);
@@ -355,6 +359,7 @@ void TunnelFlowPlane::CompleteSend(const PreparedTunnelDatagram& datagram, wgnx:
         }
         if (completion_status == wgnx::tunnel::ProtocolStatus::QueueFull) {
             flow.writable_waiter = true;
+            ++flow.send_queue_full;
         } else if (completion_status == wgnx::tunnel::ProtocolStatus::Success) {
             flow.writable_waiter = false;
         }
@@ -532,11 +537,13 @@ TunnelInboundOutcome TunnelFlowPlane::DeliverDecryptedIpv4Packet(const PeerIdent
         outcome.flow = MakeFlowHandle(index, flow);
         outcome.payload_size = payload.size();
         if (flow.inbound_occupancy >= wgnx::tunnel::MaximumInboundDatagramsPerFlow) {
+            ++flow.inbound_dropped;
             outcome.disposition = TunnelInboundDisposition::DroppedQueueFull;
             return outcome;
         }
         const std::uint8_t slab_slot = AllocateInboundSlab();
         if (slab_slot == InvalidSlabSlot) {
+            ++flow.inbound_dropped;
             outcome.disposition = TunnelInboundDisposition::DroppedQueueFull;
             return outcome;
         }
@@ -547,6 +554,11 @@ TunnelInboundOutcome TunnelFlowPlane::DeliverDecryptedIpv4Packet(const PeerIdent
         flow.last_activity_at = now;
         outcome.disposition =
             EnqueueDataCompletion(index, slab_slot) ? TunnelInboundDisposition::Delivered : TunnelInboundDisposition::DroppedQueueFull;
+        if (outcome.disposition == TunnelInboundDisposition::Delivered) {
+            ++flow.inbound_delivered;
+        } else {
+            ++flow.inbound_dropped;
+        }
         return outcome;
     }
 
@@ -805,11 +817,15 @@ void TunnelFlowPlane::CloseFlowSlot(std::size_t flow_slot, wgnx::tunnel::FlowTer
                    sizeof(remote_text));
     FormatIpv4Text(flow.tunnel_source, tunnel_source_text, sizeof(tunnel_source_text));
     logger::Log("Closed tunnel UDP flow=%llu slot=%zu client=%u/%u peer=%u activation=%u policy=%u reason=%u remote=%s:%u "
-                "tunnel_source=%s virtual_source_port=%u",
+                "tunnel_source=%s virtual_source_port=%u send_attempts=%llu send_admitted=%llu send_queue_full=%llu "
+                "inbound_delivered=%llu inbound_dropped=%llu",
                 static_cast<unsigned long long>(MakeFlowHandle(flow_slot, flow).value), flow_slot,
                 static_cast<unsigned int>(flow.client_slot), flow.client_generation, flow.peer.peer_index.Value(),
                 flow.peer.activation_generation.Value(), flow.policy_generation, static_cast<unsigned int>(reason), remote_text,
-                static_cast<unsigned int>(flow.remote.port), tunnel_source_text, static_cast<unsigned int>(flow.virtual_source_port));
+                static_cast<unsigned int>(flow.remote.port), tunnel_source_text, static_cast<unsigned int>(flow.virtual_source_port),
+                static_cast<unsigned long long>(flow.send_attempts), static_cast<unsigned long long>(flow.send_admitted),
+                static_cast<unsigned long long>(flow.send_queue_full), static_cast<unsigned long long>(flow.inbound_delivered),
+                static_cast<unsigned long long>(flow.inbound_dropped));
     if (notify) {
         wgnx::tunnel::CompletionRecord completion{};
         completion.type = wgnx::tunnel::CompletionType::FlowStateChanged;

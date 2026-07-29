@@ -165,4 +165,8 @@ void Log(const char* fmt, ...) {
     static_cast<void>(fmt);
 }
 
+void LogPacket(const char* fmt, ...) {
+    static_cast<void>(fmt);
+}
+
 } // namespace wgnx::sysmodule::logger

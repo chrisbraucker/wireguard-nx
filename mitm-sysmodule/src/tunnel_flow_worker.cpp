@@ -2,10 +2,12 @@
 
 #include "logger.hpp"
 #include "tunnel_discovery_service.hpp"
+#include "tunnel_flow_readiness.hpp"
 #include "tunnel_open_disposition.hpp"
 
 #include "wgnx/tunnel_client.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -40,7 +42,14 @@ struct FlowEntry {
     TunnelFlowEndpoint remote{};
     TunnelFlowEndpoint local{};
     bool closed{};
+    bool writable{true};
     std::array<InboundDatagram, MaximumInboundDatagramsPerSocket> inbound{};
+    std::uint64_t sends{};
+    std::uint64_t send_accepted{};
+    std::uint64_t send_queue_full{};
+    std::uint64_t inbound_delivered{};
+    std::uint64_t inbound_dropped{};
+    std::uint64_t writable_notifications{};
 };
 
 alignas(ams::os::ThreadStackAlignment) constinit std::array<std::byte, WorkerThreadStackBytes> g_worker_stack{};
@@ -91,21 +100,36 @@ void ResetFlow(FlowEntry& flow) {
     flow = {};
 }
 
-void ResetAllFlows() {
+void LogFlowSummary(const FlowEntry& flow, const char* reason) {
+    if (!flow.occupied) {
+        return;
+    }
+    logger::Log("tunnel flow summary owner=%llu fd=%d reason=%s sends=%llu accepted=%llu queue_full=%llu inbound_delivered=%llu "
+                "inbound_dropped=%llu writable=%llu closed=%u",
+                static_cast<unsigned long long>(flow.owner), flow.descriptor, reason, static_cast<unsigned long long>(flow.sends),
+                static_cast<unsigned long long>(flow.send_accepted), static_cast<unsigned long long>(flow.send_queue_full),
+                static_cast<unsigned long long>(flow.inbound_delivered), static_cast<unsigned long long>(flow.inbound_dropped),
+                static_cast<unsigned long long>(flow.writable_notifications), flow.closed ? 1U : 0U);
+}
+
+void ResetAllFlows(const char* reason) {
     for (FlowEntry& flow : g_flows) {
         if (flow.occupied) {
+            LogFlowSummary(flow, reason);
             ResetFlow(flow);
         }
     }
 }
 
-void CloseFlow(FlowEntry& flow) {
+void CloseFlow(FlowEntry& flow, TunnelFlowWorkerMetrics& metrics) {
     if (flow.occupied && !flow.closed && flow.client.IsOpen()) {
         wgnx::tunnel::ProtocolStatus ignored{};
         const Result rc = wgnx::tunnel::client::CloseFlow(flow.client, flow.flow, std::addressof(ignored));
         logger::Log("tunnel flow close owner=%llu fd=%d rc=0x%08X status=%u", static_cast<unsigned long long>(flow.owner), flow.descriptor,
                     rc, static_cast<unsigned>(ignored));
     }
+    LogFlowSummary(flow, "close");
+    ++metrics.flows_closed;
     ResetFlow(flow);
 }
 
@@ -128,12 +152,13 @@ void CloseFlow(FlowEntry& flow) {
     return nullptr;
 }
 
-void DrainCompletions(FlowEntry& flow) {
+void DrainCompletions(FlowEntry& flow, TunnelFlowWorkerMetrics& metrics) {
     if (!flow.client.IsOpen() || flow.closed) {
         return;
     }
 
     for (;;) {
+        ++metrics.completion_drains;
         std::uint32_t count = 0;
         wgnx::tunnel::ProtocolStatus status = wgnx::tunnel::ProtocolStatus::QueueEmpty;
         const Result rc =
@@ -156,6 +181,8 @@ void DrainCompletions(FlowEntry& flow) {
             return;
         }
 
+        metrics.completion_records += count;
+
         for (std::uint32_t index = 0; index < count; ++index) {
             const wgnx::tunnel::CompletionRecord& completion = g_completions[index];
             if (completion.flow.value != flow.flow.value) {
@@ -165,6 +192,15 @@ void DrainCompletions(FlowEntry& flow) {
             }
             if (completion.type == wgnx::tunnel::CompletionType::FlowStateChanged) {
                 flow.closed = completion.flow_state == wgnx::tunnel::FlowState::Closed;
+                if (flow.closed) {
+                    ++metrics.terminal_flow_notifications;
+                }
+                continue;
+            }
+            if (completion.type == wgnx::tunnel::CompletionType::Writable) {
+                flow.writable = true;
+                ++flow.writable_notifications;
+                ++metrics.writable_notifications;
                 continue;
             }
             if (completion.type != wgnx::tunnel::CompletionType::InboundDatagram ||
@@ -175,24 +211,30 @@ void DrainCompletions(FlowEntry& flow) {
             }
             InboundDatagram* datagram = AllocateInbound(flow);
             if (datagram == nullptr) {
-                logger::Log("tunnel inbound dropped mitm_queue_full owner=%llu fd=%d", static_cast<unsigned long long>(flow.owner),
-                            flow.descriptor);
+                ++flow.inbound_dropped;
+                ++metrics.inbound_dropped;
+                logger::LogPacket("tunnel inbound dropped mitm_queue_full owner=%llu fd=%d", static_cast<unsigned long long>(flow.owner),
+                                  flow.descriptor);
                 continue;
             }
             datagram->size = completion.payload_size;
             datagram->remote = ToEndpoint(completion.remote);
             std::memcpy(datagram->payload.data(), g_completion_payload.data() + completion.payload_offset, datagram->size);
+            ++flow.inbound_delivered;
+            ++metrics.inbound_delivered;
         }
     }
 }
 
-[[nodiscard]] bool WaitForCompletion(FlowEntry& flow, const Handle stop_handle, std::int32_t timeout_milliseconds) {
+[[nodiscard]] bool WaitForCompletion(FlowEntry& flow, const Handle stop_handle, std::int32_t timeout_milliseconds,
+                                     TunnelFlowWorkerMetrics& metrics) {
     if (flow.completion_handle == INVALID_HANDLE || timeout_milliseconds == 0) {
         return false;
     }
     const std::int64_t timeout_nanoseconds = timeout_milliseconds < 0 ? -1 : static_cast<std::int64_t>(timeout_milliseconds) * 1'000'000;
     const Handle handles[] = {flow.completion_handle, stop_handle};
     s32 index = 0;
+    ++metrics.completion_event_waits;
     const Result rc = svcWaitSynchronization(std::addressof(index), handles, std::size(handles), timeout_nanoseconds);
     return R_SUCCEEDED(rc) && index == 0;
 }
@@ -222,6 +264,7 @@ void TunnelFlowWorker::Start() {
         return;
     }
     m_stop_requested = false;
+    m_metrics = {};
     m_stop_event.Clear();
     m_started = true;
     R_ABORT_UNLESS(ams::os::CreateThread(std::addressof(m_thread), ThreadMain, this, g_worker_stack.data(), g_worker_stack.size(),
@@ -250,6 +293,20 @@ void TunnelFlowWorker::Stop() {
         std::scoped_lock lock(m_mutex);
         m_started = false;
     }
+    logger::Log(
+        "tunnel worker summary operations_enqueued=%llu operations_rejected=%llu operation_queue_high_water=%llu flows_opened=%llu "
+        "flows_closed=%llu send_attempts=%llu send_accepted=%llu send_queue_full=%llu send_too_large=%llu send_failures=%llu "
+        "completion_drains=%llu completion_records=%llu completion_event_waits=%llu writable_notifications=%llu "
+        "inbound_delivered=%llu inbound_dropped=%llu terminal_flow_notifications=%llu",
+        static_cast<unsigned long long>(m_metrics.operations_enqueued), static_cast<unsigned long long>(m_metrics.operations_rejected),
+        static_cast<unsigned long long>(m_metrics.operation_queue_high_water), static_cast<unsigned long long>(m_metrics.flows_opened),
+        static_cast<unsigned long long>(m_metrics.flows_closed), static_cast<unsigned long long>(m_metrics.send_attempts),
+        static_cast<unsigned long long>(m_metrics.send_accepted), static_cast<unsigned long long>(m_metrics.send_queue_full),
+        static_cast<unsigned long long>(m_metrics.send_too_large), static_cast<unsigned long long>(m_metrics.send_failures),
+        static_cast<unsigned long long>(m_metrics.completion_drains), static_cast<unsigned long long>(m_metrics.completion_records),
+        static_cast<unsigned long long>(m_metrics.completion_event_waits),
+        static_cast<unsigned long long>(m_metrics.writable_notifications), static_cast<unsigned long long>(m_metrics.inbound_delivered),
+        static_cast<unsigned long long>(m_metrics.inbound_dropped), static_cast<unsigned long long>(m_metrics.terminal_flow_notifications));
     logger::Log("tunnel flow worker shutdown complete");
 }
 
@@ -279,9 +336,13 @@ bool TunnelFlowWorker::EnqueueAndWait(Operation& operation) {
     {
         std::scoped_lock lock(m_mutex);
         if (!m_started || m_stop_requested || m_operation_count == std::size(m_operations)) {
+            ++m_metrics.operations_rejected;
             return false;
         }
         m_operations[m_operation_count++] = std::addressof(operation);
+        ++m_metrics.operations_enqueued;
+        m_metrics.operation_queue_high_water =
+            std::max(m_metrics.operation_queue_high_water, static_cast<std::uint64_t>(m_operation_count));
     }
     m_wake_event.Signal();
     operation.complete.Wait();
@@ -319,12 +380,14 @@ TunnelReceiveResult TunnelFlowWorker::Receive(std::uint64_t owner, s32 descripto
     return EnqueueAndWait(operation) ? operation.receive : TunnelReceiveResult{.result = TunnelFlowResult::SocketError};
 }
 
-TunnelFlowResult TunnelFlowWorker::Poll(std::uint64_t owner, s32 descriptor, std::int32_t timeout_milliseconds) {
+TunnelPollResult TunnelFlowWorker::Poll(std::uint64_t owner, s32 descriptor, short events, std::int32_t timeout_milliseconds) {
     Operation operation{OperationType::Poll};
     operation.owner = owner;
     operation.descriptor = descriptor;
+    operation.events = events;
     operation.timeout_milliseconds = timeout_milliseconds;
-    return EnqueueAndWait(operation) ? operation.result : TunnelFlowResult::SocketError;
+    return EnqueueAndWait(operation) ? TunnelPollResult{.result = operation.result, .revents = operation.revents}
+                                     : TunnelPollResult{.result = TunnelFlowResult::SocketError};
 }
 
 bool TunnelFlowWorker::GetEndpoints(std::uint64_t owner, s32 descriptor, TunnelFlowEndpoint* out_remote, TunnelFlowEndpoint* out_local) {
@@ -426,7 +489,7 @@ void TunnelFlowWorker::InvalidateTunnelState() {
     for (const FlowEntry& flow : g_flows) {
         released_flows += flow.occupied ? 1U : 0U;
     }
-    ResetAllFlows();
+    ResetAllFlows("invalidation");
     const bool root_was_open = m_root.IsOpen();
     m_root.Close();
     logger::Log("tunnel worker invalidated root_open=%u released_flows=%zu", root_was_open ? 1U : 0U, released_flows);
@@ -440,7 +503,7 @@ void TunnelFlowWorker::DiscoverTunnelService() {
 
     // This worker owns every raw SM request and all tunnel CMIF handles.
     // A pending discovery cannot coexist with live routed flows.
-    ResetAllFlows();
+    ResetAllFlows("rediscovery");
     m_root.Close();
 
     bool service_present = false;
@@ -478,7 +541,7 @@ void TunnelFlowWorker::Dispatch(Operation& operation) {
     auto close_matching = [&](std::uint64_t owner, s32 descriptor, bool all_owner) {
         for (FlowEntry& flow : g_flows) {
             if (flow.occupied && flow.owner == owner && (all_owner || flow.descriptor == descriptor)) {
-                CloseFlow(flow);
+                CloseFlow(flow, m_metrics);
             }
         }
     };
@@ -560,7 +623,7 @@ void TunnelFlowWorker::Dispatch(Operation& operation) {
         flow->remote = operation.remote;
         const Result event_rc = wgnx::tunnel::client::GetCompletionEvent(flow->client, std::addressof(flow->completion_handle));
         if (R_FAILED(event_rc)) {
-            CloseFlow(*flow);
+            CloseFlow(*flow, m_metrics);
             GetTunnelDiscoveryService().ReportTunnelClientFailure();
             operation.result = TunnelFlowResult::SocketError;
             return;
@@ -573,6 +636,7 @@ void TunnelFlowWorker::Dispatch(Operation& operation) {
         logger::Log("tunnel flow opened owner=%llu fd=%d remote=%u.%u.%u.%u:%u", static_cast<unsigned long long>(flow->owner),
                     flow->descriptor, flow->remote.address[0], flow->remote.address[1], flow->remote.address[2], flow->remote.address[3],
                     flow->remote.port);
+        ++m_metrics.flows_opened;
         return;
     }
 
@@ -583,6 +647,8 @@ void TunnelFlowWorker::Dispatch(Operation& operation) {
     }
 
     if (operation.type == OperationType::Send) {
+        ++flow->sends;
+        ++m_metrics.send_attempts;
         const wgnx::tunnel::DatagramDescriptor descriptor{
             .flow = flow->flow,
             .payload_offset = 0,
@@ -595,43 +661,71 @@ void TunnelFlowWorker::Dispatch(Operation& operation) {
         if (R_FAILED(send_rc)) {
             flow->closed = true;
             GetTunnelDiscoveryService().ReportTunnelClientFailure();
+            ++m_metrics.send_failures;
             operation.result = TunnelFlowResult::SocketError;
             return;
         }
         switch (disposition.status) {
         case wgnx::tunnel::ProtocolStatus::Success:
             operation.result = TunnelFlowResult::Opened;
+            ++flow->send_accepted;
+            ++m_metrics.send_accepted;
             break;
         case wgnx::tunnel::ProtocolStatus::DatagramTooLarge:
             operation.result = TunnelFlowResult::MessageTooLarge;
+            ++m_metrics.send_too_large;
             break;
         case wgnx::tunnel::ProtocolStatus::QueueFull:
             operation.result = TunnelFlowResult::WouldBlock;
+            flow->writable = false;
+            ++flow->send_queue_full;
+            ++m_metrics.send_queue_full;
             break;
         default:
             operation.result = TunnelFlowResult::SocketError;
+            ++m_metrics.send_failures;
             break;
         }
         return;
     }
 
     if (operation.type == OperationType::Poll) {
-        DrainCompletions(*flow);
-        if (TakeInbound(*flow) == nullptr && !flow->closed) {
-            static_cast<void>(WaitForCompletion(*flow, m_stop_event.GetReadableHandle(), operation.timeout_milliseconds));
-            if (IsStopRequested()) {
-                operation.result = TunnelFlowResult::Closed;
+        const std::int64_t start_nanoseconds = ams::os::GetSystemTick().ToTimeSpan().GetNanoSeconds();
+        for (;;) {
+            DrainCompletions(*flow, m_metrics);
+            const TunnelFlowReadiness readiness{
+                .inbound_available = TakeInbound(*flow) != nullptr, .writable = flow->writable, .closed = flow->closed};
+            operation.revents = readiness.Revents(operation.events);
+            if (operation.revents != 0) {
+                operation.result = flow->closed ? TunnelFlowResult::Closed : TunnelFlowResult::Opened;
                 return;
             }
-            DrainCompletions(*flow);
+            if (operation.timeout_milliseconds == 0 || flow->closed) {
+                operation.result = flow->closed ? TunnelFlowResult::Closed : TunnelFlowResult::WouldBlock;
+                return;
+            }
+
+            std::int32_t remaining_milliseconds = -1;
+            if (operation.timeout_milliseconds > 0) {
+                const std::int64_t elapsed_nanoseconds = ams::os::GetSystemTick().ToTimeSpan().GetNanoSeconds() - start_nanoseconds;
+                const std::int64_t timeout_nanoseconds = static_cast<std::int64_t>(operation.timeout_milliseconds) * 1'000'000;
+                if (elapsed_nanoseconds >= timeout_nanoseconds) {
+                    operation.result = TunnelFlowResult::WouldBlock;
+                    return;
+                }
+                remaining_milliseconds = static_cast<std::int32_t>((timeout_nanoseconds - elapsed_nanoseconds + 999'999) / 1'000'000);
+            }
+            static_cast<void>(WaitForCompletion(*flow, m_stop_event.GetReadableHandle(), remaining_milliseconds, m_metrics));
+            if (IsStopRequested()) {
+                operation.result = TunnelFlowResult::Closed;
+                operation.revents = POLLHUP;
+                return;
+            }
         }
-        operation.result = flow->closed ? TunnelFlowResult::Closed
-                                        : (TakeInbound(*flow) != nullptr ? TunnelFlowResult::Opened : TunnelFlowResult::WouldBlock);
-        return;
     }
 
     if (operation.type == OperationType::Receive) {
-        DrainCompletions(*flow);
+        DrainCompletions(*flow, m_metrics);
         InboundDatagram* datagram = TakeInbound(*flow);
         if (datagram == nullptr) {
             operation.receive.result = flow->closed ? TunnelFlowResult::Closed : TunnelFlowResult::WouldBlock;

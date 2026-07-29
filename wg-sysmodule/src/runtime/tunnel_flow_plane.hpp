@@ -151,6 +151,11 @@ class TunnelFlowPlane {
         std::uint64_t diagnostic_tag{0};
         wgnx::tunnel::FlowTerminalReason terminal_reason{wgnx::tunnel::FlowTerminalReason::None};
         bool writable_waiter{false};
+        std::uint64_t send_attempts{};
+        std::uint64_t send_admitted{};
+        std::uint64_t send_queue_full{};
+        std::uint64_t inbound_delivered{};
+        std::uint64_t inbound_dropped{};
     };
 
     struct ClientSlot {
