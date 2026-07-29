@@ -6,7 +6,7 @@ namespace wgnx::mitm {
 
 struct TunnelFlowReadiness {
     bool inbound_available{};
-    bool writable{};
+    bool outbound_admission_available{};
     bool closed{};
 
     [[nodiscard]] short Revents(const short requested_events) const {
@@ -18,7 +18,7 @@ struct TunnelFlowReadiness {
         if (inbound_available && (requested_events & POLLIN) != 0) {
             revents |= POLLIN;
         }
-        if (writable && (requested_events & POLLOUT) != 0) {
+        if (outbound_admission_available && (requested_events & POLLOUT) != 0) {
             revents |= POLLOUT;
         }
         return revents;

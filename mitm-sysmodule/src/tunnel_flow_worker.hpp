@@ -45,10 +45,15 @@ struct TunnelFlowWorkerMetrics {
     std::uint64_t flows_opened{};
     std::uint64_t flows_closed{};
     std::uint64_t send_attempts{};
+    std::uint64_t send_queued{};
     std::uint64_t send_accepted{};
     std::uint64_t send_queue_full{};
+    std::uint64_t send_adapter_queue_full{};
     std::uint64_t send_too_large{};
     std::uint64_t send_failures{};
+    std::uint64_t send_discarded{};
+    std::uint64_t batch_submissions{};
+    std::uint64_t batch_entries{};
     std::uint64_t completion_drains{};
     std::uint64_t completion_records{};
     std::uint64_t completion_event_waits{};
@@ -104,6 +109,7 @@ class TunnelFlowWorker {
         short events{};
         short revents{};
         std::int32_t timeout_milliseconds{};
+        std::int64_t deadline_nanoseconds{-1};
         TunnelFlowResult result{TunnelFlowResult::SocketError};
         TunnelReceiveResult receive{};
         ams::os::Event complete;
@@ -111,7 +117,16 @@ class TunnelFlowWorker {
 
     static void ThreadMain(void* argument);
     void Run();
-    void Dispatch(Operation& operation);
+    [[nodiscard]] bool Dispatch(Operation& operation);
+    void DrainAllCompletions();
+    void SubmitQueuedDatagrams();
+    void CompletePendingPolls();
+    void CompleteAllPendingPolls(TunnelFlowResult result);
+    [[nodiscard]] bool QueuePendingPoll(Operation& operation);
+    [[nodiscard]] bool HasQueuedOperations();
+    [[nodiscard]] bool HasControlSignals() const;
+    [[nodiscard]] std::int64_t NextPollTimeoutNanoseconds() const;
+    void WaitForWorkerActivity();
     void ProcessControlSignals();
     void InvalidateTunnelState();
     void DiscoverTunnelService();
@@ -119,7 +134,7 @@ class TunnelFlowWorker {
     [[nodiscard]] bool IsStopRequested();
 
     ams::os::Mutex m_mutex{false};
-    ams::os::Event m_wake_event{ams::os::EventClearMode_ManualClear};
+    ams::os::SystemEvent m_wake_event{ams::os::EventClearMode_ManualClear, true};
     ams::os::SystemEvent m_stop_event{ams::os::EventClearMode_ManualClear, true};
     ams::os::ThreadType m_thread{};
     wgnx::tunnel::client::ScopedRootService m_root{};
@@ -127,6 +142,9 @@ class TunnelFlowWorker {
     std::atomic_bool m_invalidation_requested{false};
     Operation* m_operations[MaximumSockets]{};
     std::size_t m_operation_count{};
+    Operation* m_pending_polls[MaximumSockets]{};
+    std::size_t m_pending_poll_count{};
+    std::size_t m_maximum_udp_payload_bytes{};
     bool m_started{};
     bool m_stop_requested{};
     TunnelFlowWorkerMetrics m_metrics{};

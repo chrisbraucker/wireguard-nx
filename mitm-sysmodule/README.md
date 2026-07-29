@@ -60,7 +60,10 @@ Only `Created` can choose a path, and neither a direct nor a tunneled socket mig
 Uncovered or unavailable traffic continues through upstream BSD.
 After a socket opens a WGNX flow, it remains tunneled until close and later tunnel failure returns a BSD error rather than switching back to direct BSD.
 `SendTo` and mixed direct plus tunneled polls fail explicitly on a tunneled socket.
-Writable readiness, nonblocking control, socket options, and generalized process admission are deferred work.
+Tunneled `Send` copies payloads into a bounded MITM-owned FIFO and returns without waiting for a WGNX staging-slot retirement or outer UDP transmission.
+The worker batches FIFO entries only for their owning WGNX child client, preserving per-socket UDP submission order.
+WGNX `QueueFull` suppresses `POLLOUT` until its coalesced `Writable` completion arrives, while a full MITM adapter FIFO also returns `EAGAIN` without busy retrying.
+Socket options and generalized process admission remain deferred work.
 
 Build and validate the skeleton with:
 

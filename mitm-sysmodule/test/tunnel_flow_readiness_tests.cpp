@@ -18,10 +18,10 @@ bool Check(const bool condition, const char* message) {
 bool RunTunnelFlowReadinessTests() {
     using wgnx::mitm::TunnelFlowReadiness;
 
-    const TunnelFlowReadiness readable{.inbound_available = true, .writable = false, .closed = false};
-    const TunnelFlowReadiness writable{.inbound_available = false, .writable = true, .closed = false};
-    const TunnelFlowReadiness both{.inbound_available = true, .writable = true, .closed = false};
-    const TunnelFlowReadiness closed{.inbound_available = true, .writable = true, .closed = true};
+    const TunnelFlowReadiness readable{.inbound_available = true, .outbound_admission_available = false, .closed = false};
+    const TunnelFlowReadiness writable{.inbound_available = false, .outbound_admission_available = true, .closed = false};
+    const TunnelFlowReadiness both{.inbound_available = true, .outbound_admission_available = true, .closed = false};
+    const TunnelFlowReadiness closed{.inbound_available = true, .outbound_admission_available = true, .closed = true};
 
     return Check(readable.Revents(POLLIN) == POLLIN, "inbound data did not report POLLIN") &&
            Check(readable.Revents(POLLOUT) == 0, "inbound data incorrectly reported POLLOUT") &&

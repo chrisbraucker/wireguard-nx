@@ -125,6 +125,28 @@ void TestTunnelProtocolContract(TestContext& context) {
                           dispositions[3].client_tag == 4 && dispositions[3].status == ProtocolStatus::StaleHandle &&
                           dispositions[4].client_tag == 5 && dispositions[4].status == ProtocolStatus::QueueFull && send_count == 4,
                       "batch dispatch did not preserve ordered partial dispositions");
+
+    const std::array<DatagramDescriptor, 4> ordered_descriptors = {
+        DatagramDescriptor{.flow = {.value = 9}, .payload_offset = 0, .payload_size = 8, .client_tag = 6},
+        DatagramDescriptor{.flow = {.value = 9}, .payload_offset = 8, .payload_size = 8, .client_tag = 7},
+        DatagramDescriptor{.flow = {.value = 9}, .payload_offset = 16, .payload_size = 8, .client_tag = 8},
+        DatagramDescriptor{.flow = {.value = 9}, .payload_offset = 24, .payload_size = 8, .client_tag = 9},
+    };
+    std::array<DatagramDisposition, ordered_descriptors.size()> ordered_dispositions{};
+    std::uint32_t remaining_admissions = 2;
+    DispatchUdpDatagramBatch(ordered_descriptors, payload, ordered_dispositions,
+                             [&remaining_admissions](const DatagramDescriptor&, std::span<const std::uint8_t>) {
+                                 if (remaining_admissions != 0) {
+                                     --remaining_admissions;
+                                     return ProtocolStatus::Success;
+                                 }
+                                 return ProtocolStatus::QueueFull;
+                             });
+    WGNX_TEST_REQUIRE(
+        context,
+        ordered_dispositions[0].status == ProtocolStatus::Success && ordered_dispositions[1].status == ProtocolStatus::Success &&
+            ordered_dispositions[2].status == ProtocolStatus::QueueFull && ordered_dispositions[3].status == ProtocolStatus::QueueFull,
+        "same-flow batch did not preserve an admitted prefix and queue-full suffix");
 }
 
 } // namespace wgnx::test
