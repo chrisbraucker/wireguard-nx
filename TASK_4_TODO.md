@@ -61,8 +61,8 @@ Implementation note: use one shared peer policy decision rather than adding chec
 
 ### Flow diagnostics
 
-- [ ] Populate `GetFlowState.advertised_local` from the tunnel source address and virtual source port.
-- [ ] Add a host assertion for the advertised local endpoint.
+- [x] Populate `GetFlowState.advertised_local` from the tunnel source address and virtual source port.
+- [x] Add a host assertion for the advertised local endpoint.
 
 Implementation note: remove the field only through a deliberate private API revision if it is no longer part of the diagnostic contract.
 

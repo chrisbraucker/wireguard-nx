@@ -490,6 +490,8 @@ wgnx::tunnel::FlowStateResult TunnelFlowPlane::GetFlowState(TunnelClientId clien
     result.terminal_reason = flow->terminal_reason;
     result.peer_activation_generation = flow->peer.activation_generation.Value();
     result.routing_policy_generation = flow->policy_generation;
+    std::copy(flow->tunnel_source.begin(), flow->tunnel_source.end(), std::begin(result.advertised_local.address));
+    result.advertised_local.port = flow->virtual_source_port;
     result.diagnostic_tag = flow->diagnostic_tag;
     return result;
 }
