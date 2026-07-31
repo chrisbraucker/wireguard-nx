@@ -248,6 +248,7 @@ class TunnelFlowPlane {
     std::array<std::uint8_t, 4> m_tunnel_source{};
     PeerIdentity m_policy_peer{};
     std::uint32_t m_policy_generation{1};
+    std::uint32_t m_next_policy_generation{2};
     std::uint32_t m_route_count{0};
     std::uint32_t m_next_client_generation{1};
     std::uint32_t m_next_flow_generation{1};

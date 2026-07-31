@@ -143,7 +143,7 @@ void TunnelFlowPlane::RefreshPolicy(const TunnelPolicyInput& input, wgnx::platfo
         return;
     }
 
-    m_policy_generation = AllocateNonZero(m_policy_generation);
+    m_policy_generation = AllocateNonZero(m_next_policy_generation);
     for (std::size_t index = 0; index < m_flows.size(); ++index) {
         FlowSlot& flow = m_flows[index];
         if (!flow.allocated || flow.closed) {

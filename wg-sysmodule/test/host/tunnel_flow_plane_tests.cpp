@@ -205,12 +205,20 @@ void TestTunnelFlowPlane(TestContext& context) {
     const auto uncovered_result = plane.OpenConnectedUdpFlow(client, uncovered, 110);
     const auto opened = plane.OpenConnectedUdpFlow(client, open, 120);
     const auto unavailable_result = plane.OpenConnectedUdpFlow(client, open, 125, TransportUnavailable);
+    config.mtu = 1280;
+    plane.RefreshPolicy({.configuration = &config, .peer = first_peer, .selected = true}, 126);
+    const RoutingPolicySnapshot policy_after_refresh = plane.CopyRoutingPolicy(routes);
+    config.mtu = 1420;
+    plane.RefreshPolicy({.configuration = &config, .peer = first_peer, .selected = true}, 127);
+    const RoutingPolicySnapshot policy_after_second_refresh = plane.CopyRoutingPolicy(routes);
     WGNX_TEST_REQUIRE(
         context,
         uncovered_result.status == ProtocolStatus::RouteNotCovered && opened.status == ProtocolStatus::Success &&
             unavailable_result.status == ProtocolStatus::TransportUnavailable &&
-            opened.peer_activation_generation == first_peer.activation_generation.Value(),
-        "flow opening did not distinguish route coverage, availability, or peer activation"
+            opened.peer_activation_generation == first_peer.activation_generation.Value() &&
+            snapshot.policy_generation != policy_after_refresh.policy_generation &&
+            policy_after_refresh.policy_generation != policy_after_second_refresh.policy_generation,
+        "flow opening did not distinguish route coverage, availability, or peer activation, or policy generations did not advance"
     );
 
     config.leak_protection = true;

@@ -27,8 +27,8 @@ Implementation note: follow the wireguard-go receive contract, which drops an au
 
 ### Policy generation
 
-- [ ] Fix `TunnelFlowPlane::RefreshPolicy` so each refresh advances `m_policy_generation` instead of assigning the old allocated value back over the increment.
-- [ ] Add a deterministic test that refreshes policy more than once and asserts that the generation changes.
+- [x] Fix `TunnelFlowPlane::RefreshPolicy` so each refresh advances `m_policy_generation` instead of assigning the old allocated value back over the increment.
+- [x] Add a deterministic test that refreshes policy more than once and asserts that the generation changes.
 
 Implementation note: keep allocation state separate from the published generation so stale-policy detection cannot silently collapse to one permanent value.
 
