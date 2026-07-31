@@ -19,7 +19,7 @@ Do not begin target-side lwIP integration until the high-priority correctness it
 ### AllowedIPs authorization
 
 - [x] Validate the source address of every authenticated decrypted inner packet against the peer's AllowedIPs before publishing it to any consumer.
-- [ ] Apply destination AllowedIPs selection to ordinary outbound raw packets, or document the diagnostic raw-packet API as an explicit privileged bypass.
+- [x] Apply destination AllowedIPs selection to ordinary outbound raw packets, or document the diagnostic raw-packet API as an explicit privileged bypass.
 
 Implementation note: place the inbound check once after authenticated decryption and before the debug probe, tunnel flow plane, or packet channel can observe the packet.
 
