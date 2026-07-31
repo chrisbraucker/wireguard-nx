@@ -105,11 +105,13 @@ Implementation note: this is a target-specific substitute for wireguard-go's han
 - [ ] Fix the three redundant moves reported by clang-tidy in `wg-sysmodule/test/host/scripted_platform.cpp`.
 - [ ] Fix the three `size_t` to signed time-type narrowing conversions reported in `wg-sysmodule/test/host/tunnel_flow_plane_tests.cpp`.
 - [ ] Include `tidy-check` in the intended aggregate verification gate, or document clearly why it remains separate.
-- [ ] Add host coverage for MITM completion validation, receive truncation, errno translation, and route-state transitions.
+- [x] Add host coverage for MITM completion validation, receive truncation, errno translation, and route-state transitions.
 
 Implementation note: the WireGuard normal, ASan/UBSan, and warning suites passed 48 deterministic cases during this review, while `tidy-check` failed on the six test findings above.
 
-Implementation note: the MITM normal, sanitizer, static-analysis, and tidy targets passed, but the host suite does not compile or exercise the production BSD service and tunnel worker implementations.
+Implementation note: completion validation, datagram truncation, readiness, submission state, errno translation, and route transitions are now shared production helpers with deterministic host coverage.
+
+Implementation note: the host suite still does not instantiate Horizon CMIF objects or worker threads, which remain target integration concerns covered by the Task 4 device matrix.
 
 ## Leanups
 

@@ -15,6 +15,33 @@ enum class BsdSocketRouteState : std::uint8_t {
     Closed,
 };
 
+enum class BsdSocketRouteEvent : std::uint8_t {
+    BeginTunnelOpen,
+    TunnelOpened,
+    TunnelBypassed,
+    TunnelFailed,
+    DirectConnected,
+    Close,
+};
+
+[[nodiscard]] constexpr BsdSocketRouteState AdvanceBsdSocketRoute(const BsdSocketRouteState state, const BsdSocketRouteEvent event) {
+    switch (event) {
+    case BsdSocketRouteEvent::BeginTunnelOpen:
+        return state == BsdSocketRouteState::Created ? BsdSocketRouteState::OpeningTunnel : state;
+    case BsdSocketRouteEvent::TunnelOpened:
+        return state == BsdSocketRouteState::OpeningTunnel ? BsdSocketRouteState::Tunneled : state;
+    case BsdSocketRouteEvent::TunnelBypassed:
+        return state == BsdSocketRouteState::OpeningTunnel ? BsdSocketRouteState::Created : state;
+    case BsdSocketRouteEvent::TunnelFailed:
+        return state == BsdSocketRouteState::OpeningTunnel ? BsdSocketRouteState::Failed : state;
+    case BsdSocketRouteEvent::DirectConnected:
+        return state == BsdSocketRouteState::Created ? BsdSocketRouteState::Direct : state;
+    case BsdSocketRouteEvent::Close:
+        return BsdSocketRouteState::Closed;
+    }
+    return state;
+}
+
 [[nodiscard]] constexpr const char* BsdSocketRouteStateName(const BsdSocketRouteState state) {
     switch (state) {
     case BsdSocketRouteState::Created:

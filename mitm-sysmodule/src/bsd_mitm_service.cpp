@@ -177,7 +177,7 @@ bool BsdMitmService::CaptureVisibleLocalEndpoint(SocketState& socket) {
 
 void BsdMitmService::ForgetSocket(const s32 descriptor) {
     if (SocketState* socket = FindSocket(descriptor); socket != nullptr) {
-        socket->route = BsdSocketRouteState::Closed;
+        socket->route = AdvanceBsdSocketRoute(socket->route, BsdSocketRouteEvent::Close);
         logger::Log(
             "bsd:s socket forget owner=%llu fd=%d route=%s",
             static_cast<unsigned long long>(m_owner),
@@ -279,7 +279,7 @@ ams::Result BsdMitmService::Connect(
     const bool eligible = socket != nullptr && socket->udp_ipv4 && CanOpenTunnelFlow(socket->route) && decoded_endpoint;
     TunnelFlowResult tunnel_result = TunnelFlowResult::TunnelUnavailable;
     if (eligible) {
-        socket->route = BsdSocketRouteState::OpeningTunnel;
+        socket->route = AdvanceBsdSocketRoute(socket->route, BsdSocketRouteEvent::BeginTunnelOpen);
         GetTunnelDiscoveryService().RequestForInterceptedTraffic();
         tunnel_result = GetTunnelFlowWorker().OpenConnectedUdp(m_owner, fd, remote);
         logger::Log(
@@ -307,7 +307,7 @@ ams::Result BsdMitmService::Connect(
             );
             if (R_FAILED(anchor_rc) || anchor_connect.result != 0 || anchor_connect.error != 0 || !CaptureVisibleLocalEndpoint(*socket)) {
                 GetTunnelFlowWorker().Close(m_owner, fd);
-                socket->route = BsdSocketRouteState::Failed;
+                socket->route = AdvanceBsdSocketRoute(socket->route, BsdSocketRouteEvent::TunnelFailed);
                 out_result.SetValue(-1);
                 out_errno.SetValue(R_SUCCEEDED(anchor_rc) && anchor_connect.error != 0 ? anchor_connect.error : EIO);
                 logger::Log(
@@ -322,7 +322,7 @@ ams::Result BsdMitmService::Connect(
             }
             std::memcpy(socket->remote.address.data(), remote.address, socket->remote.address.size());
             socket->remote.port = remote.port;
-            socket->route = BsdSocketRouteState::Tunneled;
+            socket->route = AdvanceBsdSocketRoute(socket->route, BsdSocketRouteEvent::TunnelOpened);
             out_result.SetValue(0);
             out_errno.SetValue(0);
             logger::Log(
@@ -343,12 +343,15 @@ ams::Result BsdMitmService::Connect(
             R_SUCCEED();
         }
         if (tunnel_result != TunnelFlowResult::RouteNotCovered && tunnel_result != TunnelFlowResult::TunnelUnavailable) {
-            socket->route = tunnel_result == TunnelFlowResult::BlockedByPolicy ? BsdSocketRouteState::Created : BsdSocketRouteState::Failed;
+            socket->route = AdvanceBsdSocketRoute(
+                socket->route,
+                tunnel_result == TunnelFlowResult::BlockedByPolicy ? BsdSocketRouteEvent::TunnelBypassed : BsdSocketRouteEvent::TunnelFailed
+            );
             out_result.SetValue(-1);
             out_errno.SetValue(ErrnoForResult(tunnel_result));
             R_SUCCEED();
         }
-        socket->route = BsdSocketRouteState::Created;
+        socket->route = AdvanceBsdSocketRoute(socket->route, BsdSocketRouteEvent::TunnelBypassed);
     }
 
     if (!eligible) {
@@ -385,7 +388,7 @@ ams::Result BsdMitmService::Connect(
     out_result.SetValue(output.result);
     out_errno.SetValue(output.error);
     if (socket != nullptr && socket->route == BsdSocketRouteState::Created && R_SUCCEEDED(rc) && output.result == 0 && output.error == 0) {
-        socket->route = BsdSocketRouteState::Direct;
+        socket->route = AdvanceBsdSocketRoute(socket->route, BsdSocketRouteEvent::DirectConnected);
     }
     logger::Log("bsd:s connect direct owner=%llu fd=%d rc=0x%08X", static_cast<unsigned long long>(m_owner), fd, static_cast<unsigned>(rc));
     return rc;

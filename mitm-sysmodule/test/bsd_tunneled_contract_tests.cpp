@@ -32,6 +32,15 @@ bool RunBsdTunneledContractTests() {
            Check(TunneledPollErrno(TunnelFlowResult::Closed) == 0, "poll closure returned an errno") &&
            Check(TunneledPollErrno(TunnelFlowResult::QueueFull) == EAGAIN, "poll queue rejection did not return EAGAIN") &&
            Check(TunneledPollErrno(TunnelFlowResult::SocketError) == EIO, "poll worker failure did not return EIO") &&
+           Check(ErrnoForResult(TunnelFlowResult::Opened) == 0, "successful tunnel result returned an errno") &&
+           Check(ErrnoForResult(TunnelFlowResult::RouteNotCovered) == 0, "uncovered route returned an errno") &&
+           Check(ErrnoForResult(TunnelFlowResult::TunnelUnavailable) == 0, "unavailable tunnel returned an errno") &&
+           Check(ErrnoForResult(TunnelFlowResult::BlockedByPolicy) == ENETUNREACH, "blocked route did not return ENETUNREACH") &&
+           Check(ErrnoForResult(TunnelFlowResult::SocketError) == EIO, "socket error did not return EIO") &&
+           Check(ErrnoForResult(TunnelFlowResult::MessageTooLarge) == EMSGSIZE, "oversized message did not return EMSGSIZE") &&
+           Check(ErrnoForResult(TunnelFlowResult::QueueFull) == EAGAIN, "queue rejection did not return EAGAIN") &&
+           Check(ErrnoForResult(TunnelFlowResult::WouldBlock) == EAGAIN, "would-block did not return EAGAIN") &&
+           Check(ErrnoForResult(TunnelFlowResult::Closed) == ECONNABORTED, "closed flow did not return ECONNABORTED") &&
            Check(SupportsTunneledFcntl(BsdFcntlGetFl, 0), "F_GETFL was rejected") &&
            Check(BsdFcntlNonBlock == 0x800, "BSD:S O_NONBLOCK wire value changed") &&
            Check(TunneledFcntlResult(BsdFcntlGetFl) == BsdFcntlNonBlock, "F_GETFL did not report BSD:S O_NONBLOCK") &&
