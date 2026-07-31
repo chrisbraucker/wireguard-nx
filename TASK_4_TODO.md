@@ -42,10 +42,10 @@ Implementation note: zero-flags UDP receive must preserve datagram atomicity eve
 
 ### Completion response validation
 
-- [ ] Reject a returned completion count larger than the local completion array.
-- [ ] Validate payload offset arithmetic and the aggregate IPC payload range without integer overflow.
-- [ ] Reject a completion payload larger than one `InboundDatagram::payload` before allocating or copying it.
-- [ ] Add malformed-response tests for count, offset, range, and per-datagram capacity failures.
+- [x] Reject a returned completion count larger than the local completion array.
+- [x] Validate payload offset arithmetic and the aggregate IPC payload range without integer overflow.
+- [x] Reject a completion payload larger than one `InboundDatagram::payload` before allocating or copying it.
+- [x] Add malformed-response tests for count, offset, range, and per-datagram capacity failures.
 
 Implementation note: treat the private service boundary as untrusted even though both processes are maintained in this repository.
 

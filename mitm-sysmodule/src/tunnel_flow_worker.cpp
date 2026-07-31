@@ -2,6 +2,7 @@
 
 #include "logger.hpp"
 #include "tunnel_discovery_service.hpp"
+#include "tunnel_completion_validation.hpp"
 #include "tunnel_datagram_receive.hpp"
 #include "tunnel_flow_readiness.hpp"
 #include "tunnel_flow_submission_state.hpp"
@@ -306,6 +307,18 @@ void DrainCompletions(FlowEntry& flow, TunnelFlowWorkerMetrics& metrics) {
             DiscardQueuedOutbound(flow, std::addressof(metrics));
             return;
         }
+        if (!ValidateTunnelCompletionDrain(count, g_completions.size(), g_completions, g_completion_payload.size())) {
+            logger::Log(
+                "tunnel completion drain rejected malformed response owner=%llu fd=%d count=%u",
+                static_cast<unsigned long long>(flow.owner),
+                flow.descriptor,
+                count
+            );
+            flow.submission.Close();
+            DiscardQueuedOutbound(flow, std::addressof(metrics));
+            GetTunnelDiscoveryService().ReportTunnelClientFailure();
+            return;
+        }
 
         metrics.completion_records += count;
 
@@ -336,10 +349,7 @@ void DrainCompletions(FlowEntry& flow, TunnelFlowWorkerMetrics& metrics) {
                 ++metrics.writable_notifications;
                 continue;
             }
-            if (completion.type != wgnx::tunnel::CompletionType::InboundDatagram ||
-                completion.payload_offset > g_completion_payload.size() ||
-                completion.payload_size > g_completion_payload.size() - completion.payload_offset ||
-                !SameEndpoint(completion.remote, flow.remote)) {
+            if (completion.type != wgnx::tunnel::CompletionType::InboundDatagram || !SameEndpoint(completion.remote, flow.remote)) {
                 continue;
             }
             InboundDatagram* datagram = AllocateInbound(flow);
