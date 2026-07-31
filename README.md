@@ -106,4 +106,6 @@ Plutonium SDL2 GUI library: https://github.com/XorTroll/Plutonium
 
 ## Open questions
 
-- Biggest question is how to get the OS to use the tunnel, e.g. via MITM, module replacement or even a custom kernel driver.
+- The selected first transparent path uses the separate BSD MITM sysmodule to choose once between retained Horizon BSD handling and delegation through the private WireGuard flow service.
+- The WireGuard sysmodule owns the userspace IP stack, Layer 3 packet processing, fragmentation, reassembly, and tunnel-facing transport state behind a boundary separate from the WireGuard protocol core.
+- Native Horizon interface or routing integration remains a parallel reversing question rather than a dependency for the MITM path.
