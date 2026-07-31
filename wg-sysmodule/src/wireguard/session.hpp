@@ -156,9 +156,15 @@ class noise_keypair {
     noise_keypair(noise_keypair&& other) noexcept;
     noise_keypair& operator=(noise_keypair&& other) noexcept;
 
-    void Establish(std::uint32_t local_index, std::uint32_t remote_index, MonotonicTimePoint birth_time,
-                   const noise_symmetric_key& sending_key, const noise_symmetric_key& receiving_key, std::uint64_t send_counter = 0,
-                   bool is_initiator = true);
+    void Establish(
+        std::uint32_t local_index,
+        std::uint32_t remote_index,
+        MonotonicTimePoint birth_time,
+        const noise_symmetric_key& sending_key,
+        const noise_symmetric_key& receiving_key,
+        std::uint64_t send_counter = 0,
+        bool is_initiator = true
+    );
     void Reset();
 
     bool IsValid() const;
@@ -228,10 +234,18 @@ bool noise_public_key_to_text(std::span<char> out_text, const noise_public_key* 
 bool noise_derive_public_key(noise_public_key* out_key, const noise_private_key* private_key);
 bool noise_derive_public_key_text(std::span<char> out_text, const noise_private_key* private_key);
 bool noise_derive_public_key_text(std::span<char> out_text, std::string_view private_key_text);
-bool noise_static_identity_init(noise_static_identity* identity, std::string_view private_key_text, std::string_view peer_public_key_text,
-                                std::string_view preshared_key_text);
-bool noise_static_identity_init_from_keys(noise_static_identity* identity, const noise_private_key* private_key,
-                                          std::string_view peer_public_key_text, const noise_symmetric_key* preshared_key);
+bool noise_static_identity_init(
+    noise_static_identity* identity,
+    std::string_view private_key_text,
+    std::string_view peer_public_key_text,
+    std::string_view preshared_key_text
+);
+bool noise_static_identity_init_from_keys(
+    noise_static_identity* identity,
+    const noise_private_key* private_key,
+    std::string_view peer_public_key_text,
+    const noise_symmetric_key* preshared_key
+);
 bool noise_precompute_static_static(noise_handshake_material* material, const noise_static_identity* identity);
 
 } // namespace wgnx::wireguard

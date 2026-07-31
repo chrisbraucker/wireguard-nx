@@ -141,11 +141,12 @@ class PeerRuntime {
     bool IsTimerCurrent(const wgnx::wireguard::TimerToken& token, const wgnx::wireguard::TimerOwner& owner) const;
     wgnx::wireguard::TimerOwner CurrentTimerOwner(wgnx::wireguard::TimerHook hook) const;
     wgnx::PeerInfo BuildInfo(wgnx::platform::ktime_t now, bool is_active, bool is_auto_start) const;
-    bool SnapshotPendingDatagram(ActivationGeneration activation_generation, DatagramGeneration datagram_generation,
-                                 PendingDatagramSnapshot& out) const;
+    bool SnapshotPendingDatagram(
+        ActivationGeneration activation_generation, DatagramGeneration datagram_generation, PendingDatagramSnapshot& out
+    ) const;
     bool HasPendingDatagram(ActivationGeneration activation_generation, DatagramGeneration datagram_generation) const;
-    bool ViewDecryptedPacket(ActivationGeneration activation_generation, PacketGeneration packet_generation,
-                             DecryptedPacketView& out) const;
+    bool
+    ViewDecryptedPacket(ActivationGeneration activation_generation, PacketGeneration packet_generation, DecryptedPacketView& out) const;
     bool CanStageInnerPacket() const;
     std::size_t StagedInnerPacketCount() const;
 
@@ -172,11 +173,15 @@ class PeerRuntime {
     const wgnx::wireguard::wg_peer* ProtocolPeer() const;
     bool PrepareHandshakeInitiation(PendingDatagramKind kind);
     bool PrepareHandshakeResponse();
-    bool PrepareTransportDatagram(std::span<const std::uint8_t> payload, PendingDatagramKind kind, PacketId inner_packet_id,
-                                  wgnx::wireguard::TransportDataError& out_error);
+    bool PrepareTransportDatagram(
+        std::span<const std::uint8_t> payload,
+        PendingDatagramKind kind,
+        PacketId inner_packet_id,
+        wgnx::wireguard::TransportDataError& out_error
+    );
     bool StartHandshake(const PeerIdentity& identity, const TimerFacts& timer_facts, EffectBatch& effects, bool retry);
-    void ProcessOutboundQueue(const PeerIdentity& identity, const TimerFacts& timer_facts, wgnx::platform::ktime_t now,
-                              EffectBatch& effects);
+    void
+    ProcessOutboundQueue(const PeerIdentity& identity, const TimerFacts& timer_facts, wgnx::platform::ktime_t now, EffectBatch& effects);
     void HandlePendingDatagramCompletion(const PendingDatagramSentEvent& event, EffectBatch& effects);
     void HandleEncryptedDatagram(const EncryptedDatagramReceivedEvent& event, EffectBatch& effects);
     void CompleteInitiatorSession(const EncryptedDatagramReceivedEvent& event, EffectBatch& effects);
@@ -266,8 +271,12 @@ class PeerRegistry {
         return m_auto_start_peer_index;
     }
 
-    [[nodiscard]] bool Configure(std::span<const wgnx::PeerConfigEntry> configured_peers, std::span<PeerConfigDerivedInfo> derived,
-                                 std::int32_t auto_start_peer_index, wgnx::platform::ktime_t now);
+    [[nodiscard]] bool Configure(
+        std::span<const wgnx::PeerConfigEntry> configured_peers,
+        std::span<PeerConfigDerivedInfo> derived,
+        std::int32_t auto_start_peer_index,
+        wgnx::platform::ktime_t now
+    );
     [[nodiscard]] EffectBatch ClearConfiguration(wgnx::platform::ktime_t now);
     [[nodiscard]] bool SetActivePeerIndex(std::int32_t peer_index);
     [[nodiscard]] bool SetAutoStartPeerIndex(std::int32_t peer_index);

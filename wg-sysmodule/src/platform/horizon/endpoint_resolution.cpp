@@ -113,8 +113,13 @@ endpoint_resolution_result resolve_endpoint(std::string_view configured_endpoint
     hints.ai_flags = AI_NUMERICSERV;
 
     resolver_serialization::HorizonAddrInfoHints hints_buffer{};
-    if (!resolver_serialization::serialize_horizon_addrinfo_hints(hints_buffer, hints.ai_flags, hints.ai_family, hints.ai_socktype,
-                                                                  hints.ai_protocol)) {
+    if (!resolver_serialization::serialize_horizon_addrinfo_hints(
+            hints_buffer,
+            hints.ai_flags,
+            hints.ai_family,
+            hints.ai_socktype,
+            hints.ai_protocol
+        )) {
         result.error_stage = wgnx::PeerErrorStage::ResolveEndpoint;
         result.error_code = wgnx::PeerErrorCode::EndpointResolutionFailed;
         return result;
@@ -123,30 +128,52 @@ endpoint_resolution_result resolve_endpoint(std::string_view configured_endpoint
     std::uint32_t remote_errno = 0;
     std::uint32_t serialized_size = 0;
     s32 remote_ret = 0;
-    const Result resolver_rc =
-        sfdnsresGetAddrInfoRequest(resolverGetCancelHandle(), resolverGetEnableServiceDiscovery(), parts.host.data(), parts.service.data(),
-                                   hints_buffer.data(), hints_buffer.size(), g_resolver_addrinfo_buffer, sizeof(g_resolver_addrinfo_buffer),
-                                   std::addressof(remote_errno), std::addressof(remote_ret), std::addressof(serialized_size));
+    const Result resolver_rc = sfdnsresGetAddrInfoRequest(
+        resolverGetCancelHandle(),
+        resolverGetEnableServiceDiscovery(),
+        parts.host.data(),
+        parts.service.data(),
+        hints_buffer.data(),
+        hints_buffer.size(),
+        g_resolver_addrinfo_buffer,
+        sizeof(g_resolver_addrinfo_buffer),
+        std::addressof(remote_errno),
+        std::addressof(remote_ret),
+        std::addressof(serialized_size)
+    );
 
     if (R_FAILED(resolver_rc) || remote_ret != 0) {
-        wgnx::sysmodule::logger::Log("sfdnsresGetAddrInfoRequest failed for '%s:%s': resolver_rc=0x%08x ret=%d errno=%u serialized_size=%u",
-                                     parts.host.data(), parts.service.data(), static_cast<u32>(resolver_rc), remote_ret, remote_errno,
-                                     serialized_size);
+        wgnx::sysmodule::logger::Log(
+            "sfdnsresGetAddrInfoRequest failed for '%s:%s': resolver_rc=0x%08x ret=%d errno=%u serialized_size=%u",
+            parts.host.data(),
+            parts.service.data(),
+            static_cast<u32>(resolver_rc),
+            remote_ret,
+            remote_errno,
+            serialized_size
+        );
         result.error_stage = wgnx::PeerErrorStage::ResolveEndpoint;
         result.error_code = wgnx::PeerErrorCode::EndpointResolutionFailed;
         return result;
     }
 
     if (serialized_size == 0 || serialized_size > sizeof(g_resolver_addrinfo_buffer)) {
-        wgnx::sysmodule::logger::Log("resolver returned invalid serialized size for '%s:%s': size=%u capacity=%zu", parts.host.data(),
-                                     parts.service.data(), serialized_size, sizeof(g_resolver_addrinfo_buffer));
+        wgnx::sysmodule::logger::Log(
+            "resolver returned invalid serialized size for '%s:%s': size=%u capacity=%zu",
+            parts.host.data(),
+            parts.service.data(),
+            serialized_size,
+            sizeof(g_resolver_addrinfo_buffer)
+        );
         result.error_stage = wgnx::PeerErrorStage::ResolveEndpoint;
         result.error_code = wgnx::PeerErrorCode::EndpointResolutionFailed;
         return result;
     }
 
-    if (resolver_serialization::parse_horizon_addrinfo_result(std::span{g_resolver_addrinfo_buffer}.first(serialized_size),
-                                                              result.resolved) &&
+    if (resolver_serialization::parse_horizon_addrinfo_result(
+            std::span{g_resolver_addrinfo_buffer}.first(serialized_size),
+            result.resolved
+        ) &&
         StoreResolvedText(std::addressof(result))) {
         result.success = true;
         result.error_stage = wgnx::PeerErrorStage::None;
@@ -154,8 +181,11 @@ endpoint_resolution_result resolve_endpoint(std::string_view configured_endpoint
     }
 
     if (!result.success) {
-        wgnx::sysmodule::logger::Log("resolver returned no usable AF_INET/AF_INET6 result for '%s:%s'", parts.host.data(),
-                                     parts.service.data());
+        wgnx::sysmodule::logger::Log(
+            "resolver returned no usable AF_INET/AF_INET6 result for '%s:%s'",
+            parts.host.data(),
+            parts.service.data()
+        );
         result.error_stage = wgnx::PeerErrorStage::ResolveEndpoint;
         result.error_code = wgnx::PeerErrorCode::EndpointResolutionFailed;
     }

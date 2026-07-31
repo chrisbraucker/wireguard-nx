@@ -50,8 +50,8 @@ const char* GetTransportDataErrorName(TransportDataError error) {
     return "unknown";
 }
 
-TransportDataCreateResult noise_create_transport_data_packet(std::span<std::uint8_t> output, noise_keypair& keypair,
-                                                             std::span<const std::uint8_t> payload) {
+TransportDataCreateResult
+noise_create_transport_data_packet(std::span<std::uint8_t> output, noise_keypair& keypair, std::span<const std::uint8_t> payload) {
     if (payload.size() > std::numeric_limits<std::size_t>::max() - (TransportDataPaddingBlockSize - 1)) {
         return CreateFailure(TransportDataError::InsufficientCapacity);
     }
@@ -107,8 +107,12 @@ TransportDataCreateResult noise_create_keepalive_packet(std::span<std::uint8_t> 
     return noise_create_transport_data_packet(output, keypair, {});
 }
 
-TransportDataError noise_consume_transport_data_packet(std::span<const std::uint8_t> packet, noise_keypair& keypair,
-                                                       std::span<std::uint8_t> out_payload, TransportDataDecryptResult& out_result) {
+TransportDataError noise_consume_transport_data_packet(
+    std::span<const std::uint8_t> packet,
+    noise_keypair& keypair,
+    std::span<std::uint8_t> out_payload,
+    TransportDataDecryptResult& out_result
+) {
     out_result = {};
     if (!keypair.IsValid()) {
         return TransportDataError::InvalidKeypair;
@@ -155,9 +159,13 @@ TransportDataError noise_consume_transport_data_packet(std::span<const std::uint
     return TransportDataError::None;
 }
 
-TransportDataError noise_consume_incoming_transport_data_packet(std::span<const std::uint8_t> packet, wg_device& device, wg_peer& peer,
-                                                                std::span<std::uint8_t> out_payload,
-                                                                IncomingTransportDataResult& out_result) {
+TransportDataError noise_consume_incoming_transport_data_packet(
+    std::span<const std::uint8_t> packet,
+    wg_device& device,
+    wg_peer& peer,
+    std::span<std::uint8_t> out_payload,
+    IncomingTransportDataResult& out_result
+) {
     out_result = {};
     message_transport_data header{};
     if (!ParseTransportDataHeader(packet, header).success) {

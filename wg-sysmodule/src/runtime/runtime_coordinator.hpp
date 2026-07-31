@@ -28,8 +28,12 @@ class RuntimeCoordinator {
   public:
     explicit constexpr RuntimeCoordinator(PeerRegistry& peers) : m_peers(peers) {}
 
-    [[nodiscard]] bool Configure(std::span<const wgnx::PeerConfigEntry> configured_peers, std::span<PeerConfigDerivedInfo> derived,
-                                 std::int32_t auto_start_peer_index, wgnx::platform::ktime_t now);
+    [[nodiscard]] bool Configure(
+        std::span<const wgnx::PeerConfigEntry> configured_peers,
+        std::span<PeerConfigDerivedInfo> derived,
+        std::int32_t auto_start_peer_index,
+        wgnx::platform::ktime_t now
+    );
     [[nodiscard]] EffectBatch ClearConfiguration(wgnx::platform::ktime_t now);
     [[nodiscard]] bool SetActivePeerIndex(std::int32_t peer_index);
     [[nodiscard]] bool SetAutoStartPeerIndex(std::int32_t peer_index);
@@ -62,8 +66,8 @@ class RuntimeCoordinator {
     [[nodiscard]] bool SnapshotReceiveRuntime(ReceiveRuntimeSnapshot& out) const;
     [[nodiscard]] bool SnapshotDebugPeer(DebugPeerSnapshot& out) const;
     [[nodiscard]] bool SnapshotPacketState(PeerPacketStateSnapshot& out) const;
-    [[nodiscard]] bool SnapshotPendingDatagram(const PeerIdentity& peer, DatagramGeneration datagram_generation,
-                                               PendingDatagramSnapshot& out) const;
+    [[nodiscard]] bool
+    SnapshotPendingDatagram(const PeerIdentity& peer, DatagramGeneration datagram_generation, PendingDatagramSnapshot& out) const;
     [[nodiscard]] bool HasPendingDatagram(const PeerIdentity& peer, DatagramGeneration datagram_generation) const;
     [[nodiscard]] bool ViewDecryptedPacket(const PeerIdentity& peer, PacketGeneration packet_generation, DecryptedPacketView& out) const;
     bool IsCurrentTimerEffect(const ArmProtocolTimerEffect& effect) const;

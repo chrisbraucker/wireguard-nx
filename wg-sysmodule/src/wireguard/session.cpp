@@ -314,9 +314,15 @@ void ReplayWindow::Reset() {
     m_initialized = false;
 }
 
-void noise_keypair::Establish(std::uint32_t local_index, std::uint32_t remote_index, MonotonicTimePoint birth_time,
-                              const noise_symmetric_key& sending_key, const noise_symmetric_key& receiving_key, std::uint64_t send_counter,
-                              bool is_initiator) {
+void noise_keypair::Establish(
+    std::uint32_t local_index,
+    std::uint32_t remote_index,
+    MonotonicTimePoint birth_time,
+    const noise_symmetric_key& sending_key,
+    const noise_symmetric_key& receiving_key,
+    std::uint64_t send_counter,
+    bool is_initiator
+) {
     Reset();
     if (local_index == 0 || remote_index == 0 || birth_time < MonotonicTimePoint{} || !sending_key.valid || !receiving_key.valid) {
         return;
@@ -550,8 +556,12 @@ bool noise_derive_public_key_text(std::span<char> out_text, std::string_view pri
     return ok;
 }
 
-bool noise_static_identity_init_from_keys(noise_static_identity* identity, const noise_private_key* private_key,
-                                          std::string_view peer_public_key_text, const noise_symmetric_key* preshared_key) {
+bool noise_static_identity_init_from_keys(
+    noise_static_identity* identity,
+    const noise_private_key* private_key,
+    std::string_view peer_public_key_text,
+    const noise_symmetric_key* preshared_key
+) {
     if (identity == nullptr || private_key == nullptr || !private_key->valid) {
         return false;
     }
@@ -571,8 +581,12 @@ bool noise_static_identity_init_from_keys(noise_static_identity* identity, const
     return true;
 }
 
-bool noise_static_identity_init(noise_static_identity* identity, std::string_view private_key_text, std::string_view peer_public_key_text,
-                                std::string_view preshared_key_text) {
+bool noise_static_identity_init(
+    noise_static_identity* identity,
+    std::string_view private_key_text,
+    std::string_view peer_public_key_text,
+    std::string_view preshared_key_text
+) {
     if (identity == nullptr) {
         return false;
     }

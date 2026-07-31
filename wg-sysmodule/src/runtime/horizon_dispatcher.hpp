@@ -36,8 +36,8 @@ class HorizonDispatcher {
     [[nodiscard]] wgnx::platform::workqueue_statistics Statistics(DispatcherWorkLane lane) const;
 
   private:
-    [[nodiscard]] wgnx::platform::queue_work_result Queue(wgnx::platform::workqueue_struct* queue, wgnx::platform::work_struct* work,
-                                                          const char* name);
+    [[nodiscard]] wgnx::platform::queue_work_result
+    Queue(wgnx::platform::workqueue_struct* queue, wgnx::platform::work_struct* work, const char* name);
     wgnx::platform::workqueue_struct* QueueForLane(DispatcherWorkLane lane) const;
 
     HorizonDispatcherCallbacks m_callbacks{};

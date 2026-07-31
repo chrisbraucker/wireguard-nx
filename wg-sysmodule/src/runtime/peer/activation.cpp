@@ -35,9 +35,12 @@ EffectBatch PeerRuntime::HandleEvent(const ActivationRequestedEvent& event) {
     EffectBatch effects{};
     const auto config_error = ValidateConfiguration();
     if (config_error != wgnx::PeerErrorCode::None) {
-        EnterActivationError(config_error == wgnx::PeerErrorCode::ConfigInvalid ? wgnx::PeerErrorStage::Config
-                                                                                : wgnx::PeerErrorStage::ResolveEndpoint,
-                             config_error, event.occurred_at, &effects);
+        EnterActivationError(
+            config_error == wgnx::PeerErrorCode::ConfigInvalid ? wgnx::PeerErrorStage::Config : wgnx::PeerErrorStage::ResolveEndpoint,
+            config_error,
+            event.occurred_at,
+            &effects
+        );
         return effects;
     }
 
@@ -60,10 +63,12 @@ EffectBatch PeerRuntime::HandleEvent(const ActivationRequestedEvent& event) {
     m_waiting_for_local_path = true;
     m_endpoint_resolution_started = false;
     m_receive_started = false;
-    effects.Add(StartNetworkPathRequestEffect{
-        .peer = identity,
-        .path_generation = m_path_request_generation,
-    });
+    effects.Add(
+        StartNetworkPathRequestEffect{
+            .peer = identity,
+            .path_generation = m_path_request_generation,
+        }
+    );
     return effects;
 }
 
@@ -73,16 +78,20 @@ EffectBatch PeerRuntime::HandleEvent(const DeactivationRequestedEvent& event) {
         return effects;
     }
     if (!m_path_request_generation.IsZero()) {
-        effects.Add(StopNetworkPathRequestEffect{
-            .peer = event.peer,
-            .path_generation = m_path_request_generation,
-        });
+        effects.Add(
+            StopNetworkPathRequestEffect{
+                .peer = event.peer,
+                .path_generation = m_path_request_generation,
+            }
+        );
     }
     if (m_binding.IsOpen()) {
-        effects.Add(CloseUdpSocketEffect{
-            .path_generation = m_path_request_generation,
-            .socket = m_binding.ReleaseSocket(),
-        });
+        effects.Add(
+            CloseUdpSocketEffect{
+                .path_generation = m_path_request_generation,
+                .socket = m_binding.ReleaseSocket(),
+            }
+        );
     }
     if (auto* peer = ProtocolPeer()) {
         for (const auto hook : {
@@ -93,11 +102,13 @@ EffectBatch PeerRuntime::HandleEvent(const DeactivationRequestedEvent& event) {
                  wgnx::wireguard::TimerHook::PersistentKeepalive,
              }) {
             wgnx::wireguard::wg_timers_cancel(std::addressof(peer->timers), hook, peer->name);
-            effects.Add(CancelProtocolTimerEffect{
-                .peer = event.peer,
-                .hook = hook,
-                .token = m_controller.Timers().Cancel(hook),
-            });
+            effects.Add(
+                CancelProtocolTimerEffect{
+                    .peer = event.peer,
+                    .hook = hook,
+                    .token = m_controller.Timers().Cancel(hook),
+                }
+            );
         }
     }
     Deactivate(event.occurred_at);
@@ -110,8 +121,12 @@ EffectBatch PeerRuntime::HandleEvent(const NetworkPathRequestStartedEvent& event
         return effects;
     }
     if (!event.success) {
-        logger::Log("NIFM path request start failed peer=%u activation=%u path_generation=%u; waiting for peer reactivation",
-                    event.peer.peer_index.Value(), event.peer.activation_generation.Value(), event.path_generation.Value());
+        logger::Log(
+            "NIFM path request start failed peer=%u activation=%u path_generation=%u; waiting for peer reactivation",
+            event.peer.peer_index.Value(),
+            event.peer.activation_generation.Value(),
+            event.path_generation.Value()
+        );
     }
     return effects;
 }
@@ -125,9 +140,14 @@ EffectBatch PeerRuntime::HandleEvent(const NetworkPathAvailabilityChangedEvent& 
     if (!m_has_path_observation || m_last_path_observation != event.observation) {
         logger::Log(
             "NIFM path observation peer=%u activation=%u path_generation=%u availability=%s raw=%u state_rc=0x%08x operation_rc=0x%08x",
-            event.peer.peer_index.Value(), event.peer.activation_generation.Value(), event.path_generation.Value(),
+            event.peer.peer_index.Value(),
+            event.peer.activation_generation.Value(),
+            event.path_generation.Value(),
             wgnx::platform::get_network_path_availability_name(event.observation.availability),
-            static_cast<unsigned int>(event.observation.raw_state), event.observation.state_result, event.observation.operation_result);
+            static_cast<unsigned int>(event.observation.raw_state),
+            event.observation.state_result,
+            event.observation.operation_result
+        );
         m_last_path_observation = event.observation;
         m_has_path_observation = true;
     }
@@ -137,9 +157,13 @@ EffectBatch PeerRuntime::HandleEvent(const NetworkPathAvailabilityChangedEvent& 
         if (m_path_availability == wgnx::platform::network_path_availability::available && IsInTransportState() && m_binding.IsOpen() &&
             !m_rebind_on_path_confirmation) {
             m_rebind_on_path_confirmation = true;
-            logger::Log("NIFM local path became indeterminate peer=%u activation=%u path_generation=%u; retaining socket and scheduling "
-                        "one rebind on confirmed availability",
-                        event.peer.peer_index.Value(), event.peer.activation_generation.Value(), event.path_generation.Value());
+            logger::Log(
+                "NIFM local path became indeterminate peer=%u activation=%u path_generation=%u; retaining socket and scheduling "
+                "one rebind on confirmed availability",
+                event.peer.peer_index.Value(),
+                event.peer.activation_generation.Value(),
+                event.path_generation.Value()
+            );
         }
         return effects;
     }
@@ -147,23 +171,36 @@ EffectBatch PeerRuntime::HandleEvent(const NetworkPathAvailabilityChangedEvent& 
     if (next == m_path_availability) {
         if (next == wgnx::platform::network_path_availability::available && m_rebind_on_path_confirmation) {
             m_rebind_on_path_confirmation = false;
-            logger::Log("NIFM local path confirmed after indeterminate state peer=%u activation=%u path_generation=%u; requesting one "
-                        "controlled rebind",
-                        event.peer.peer_index.Value(), event.peer.activation_generation.Value(), event.path_generation.Value());
-            effects.Append(HandleEvent(UdpRebindRequestedEvent{
-                .peer = event.peer,
-                .occurred_at = event.occurred_at,
-            }));
+            logger::Log(
+                "NIFM local path confirmed after indeterminate state peer=%u activation=%u path_generation=%u; requesting one "
+                "controlled rebind",
+                event.peer.peer_index.Value(),
+                event.peer.activation_generation.Value(),
+                event.path_generation.Value()
+            );
+            effects.Append(HandleEvent(
+                UdpRebindRequestedEvent{
+                    .peer = event.peer,
+                    .occurred_at = event.occurred_at,
+                }
+            ));
         }
         return effects;
     }
 
     const auto previous = m_path_availability;
     m_path_availability = next;
-    logger::Log("NIFM local-path transition peer=%u activation=%u path_generation=%u %s->%s raw=%u state_rc=0x%08x operation_rc=0x%08x",
-                event.peer.peer_index.Value(), event.peer.activation_generation.Value(), event.path_generation.Value(),
-                wgnx::platform::get_network_path_availability_name(previous), wgnx::platform::get_network_path_availability_name(next),
-                static_cast<unsigned int>(event.observation.raw_state), event.observation.state_result, event.observation.operation_result);
+    logger::Log(
+        "NIFM local-path transition peer=%u activation=%u path_generation=%u %s->%s raw=%u state_rc=0x%08x operation_rc=0x%08x",
+        event.peer.peer_index.Value(),
+        event.peer.activation_generation.Value(),
+        event.path_generation.Value(),
+        wgnx::platform::get_network_path_availability_name(previous),
+        wgnx::platform::get_network_path_availability_name(next),
+        static_cast<unsigned int>(event.observation.raw_state),
+        event.observation.state_result,
+        event.observation.operation_result
+    );
 
     if (next == wgnx::platform::network_path_availability::unavailable) {
         m_rebind_on_path_confirmation = false;
@@ -187,10 +224,12 @@ EffectBatch PeerRuntime::HandleEvent(const NetworkPathAvailabilityChangedEvent& 
     }
 
     if (m_binding.IsSuspended() && IsInTransportState() && m_binding.HasEndpoint()) {
-        effects.Append(HandleEvent(UdpRebindRequestedEvent{
-            .peer = event.peer,
-            .occurred_at = event.occurred_at,
-        }));
+        effects.Append(HandleEvent(
+            UdpRebindRequestedEvent{
+                .peer = event.peer,
+                .occurred_at = event.occurred_at,
+            }
+        ));
     }
     return effects;
 }
@@ -207,9 +246,13 @@ EffectBatch PeerRuntime::HandleEvent(const TransportFailureEvent& event) {
     }
     if (code == wgnx::PeerErrorCode::TransportSendFailed || code == wgnx::PeerErrorCode::TransportReceiveFailed) {
         logger::Log(
-            "Nonterminal WG transport I/O failure peer=%u activation=%u state=%s operation=%s error=%s", event.peer.peer_index.Value(),
-            event.peer.activation_generation.Value(), wgnx::GetPeerRuntimeStateName(m_lifecycle.state),
-            event.operation == TransportIoOperation::Receive ? "receive worker" : "datagram send", wgnx::GetPeerErrorCodeName(code));
+            "Nonterminal WG transport I/O failure peer=%u activation=%u state=%s operation=%s error=%s",
+            event.peer.peer_index.Value(),
+            event.peer.activation_generation.Value(),
+            wgnx::GetPeerRuntimeStateName(m_lifecycle.state),
+            event.operation == TransportIoOperation::Receive ? "receive worker" : "datagram send",
+            wgnx::GetPeerErrorCodeName(code)
+        );
         return effects;
     }
     EnterActivationError(wgnx::PeerErrorStage::Transport, code, event.occurred_at, &effects);
@@ -263,8 +306,12 @@ EffectBatch PeerRuntime::HandleEvent(const UdpBindOpenedEvent& event) {
             if (event.socket != wgnx::platform::InvalidSocket) {
                 effects.Add(CloseUdpSocketEffect{.path_generation = m_path_request_generation, .socket = event.socket});
             }
-            logger::Log("UDP bind bump open failed peer=%u activation=%u error=%u; peer state preserved", event.peer.peer_index.Value(),
-                        event.peer.activation_generation.Value(), static_cast<unsigned int>(event.error));
+            logger::Log(
+                "UDP bind bump open failed peer=%u activation=%u error=%u; peer state preserved",
+                event.peer.peer_index.Value(),
+                event.peer.activation_generation.Value(),
+                static_cast<unsigned int>(event.error)
+            );
             return effects;
         }
 
@@ -273,9 +320,14 @@ EffectBatch PeerRuntime::HandleEvent(const UdpBindOpenedEvent& event) {
         if (old_socket != wgnx::platform::InvalidSocket) {
             effects.Add(CloseUdpSocketEffect{.path_generation = m_path_request_generation, .socket = old_socket});
         }
-        logger::Log("Completed UDP bind bump peer=%u activation=%u socket_generation=%u socket=%d old_socket=%d",
-                    event.peer.peer_index.Value(), event.peer.activation_generation.Value(), event.socket_generation.Value(),
-                    static_cast<int>(event.socket), static_cast<int>(old_socket));
+        logger::Log(
+            "Completed UDP bind bump peer=%u activation=%u socket_generation=%u socket=%d old_socket=%d",
+            event.peer.peer_index.Value(),
+            event.peer.activation_generation.Value(),
+            event.socket_generation.Value(),
+            static_cast<int>(event.socket),
+            static_cast<int>(old_socket)
+        );
         RecoverTransport(event.peer, event.timer_facts, event.occurred_at, effects);
         effects.Add(QueueReceiveEffect{.peer = event.peer});
         return effects;
@@ -301,10 +353,12 @@ EffectBatch PeerRuntime::HandleEvent(const UdpBindOpenedEvent& event) {
         return effects;
     }
     if (!EnterHandshaking(event.peer.activation_generation, event.occurred_at)) {
-        effects.Add(CloseUdpSocketEffect{
-            .path_generation = m_path_request_generation,
-            .socket = m_binding.ReleaseSocket(),
-        });
+        effects.Add(
+            CloseUdpSocketEffect{
+                .path_generation = m_path_request_generation,
+                .socket = m_binding.ReleaseSocket(),
+            }
+        );
         return effects;
     }
     auto* peer = ProtocolPeer();
@@ -316,10 +370,12 @@ EffectBatch PeerRuntime::HandleEvent(const UdpBindOpenedEvent& event) {
         EnterActivationError(wgnx::PeerErrorStage::Handshake, wgnx::PeerErrorCode::HandshakeInitFailed, event.occurred_at, &effects);
         return effects;
     }
-    effects.Add(SendPendingDatagramEffect{
-        .peer = event.peer,
-        .datagram_generation = m_pending_datagram.generation,
-    });
+    effects.Add(
+        SendPendingDatagramEffect{
+            .peer = event.peer,
+            .datagram_generation = m_pending_datagram.generation,
+        }
+    );
     return effects;
 }
 

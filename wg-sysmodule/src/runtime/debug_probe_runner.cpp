@@ -20,8 +20,9 @@ std::int32_t ElapsedSeconds(wgnx::platform::ktime_t timestamp, wgnx::platform::k
 
 } // namespace
 
-DebugProbeQueueResult DebugProbeRunner::Queue(const PeerIdentity& peer, std::string_view source_address, wgnx::DebugTriggerAction action,
-                                              wgnx::platform::ktime_t now) {
+DebugProbeQueueResult DebugProbeRunner::Queue(
+    const PeerIdentity& peer, std::string_view source_address, wgnx::DebugTriggerAction action, wgnx::platform::ktime_t now
+) {
     if (IsPending()) {
         return DebugProbeQueueResult::Busy;
     }
@@ -60,9 +61,14 @@ std::size_t DebugProbeRunner::BuildPacket(const DebugProbeRequest& request, std:
     if (!Matches(request) || m_status != wgnx::DebugProbeStatus::Queued) {
         return 0;
     }
-    return wgnx::wireguard::BuildDebugIcmpEchoRequest(packet, request.source_address.data(), request.action,
-                                                      request.peer.activation_generation.Value(), request.peer.peer_index.Value(),
-                                                      random_seed);
+    return wgnx::wireguard::BuildDebugIcmpEchoRequest(
+        packet,
+        request.source_address.data(),
+        request.action,
+        request.peer.activation_generation.Value(),
+        request.peer.peer_index.Value(),
+        random_seed
+    );
 }
 
 bool DebugProbeRunner::MarkSent(const DebugProbeRequest& request, wgnx::platform::ktime_t now) {
@@ -73,15 +79,20 @@ bool DebugProbeRunner::MarkFailed(const DebugProbeRequest& request, wgnx::DebugP
     return Matches(request) && Transition(status, now);
 }
 
-DebugProbeReplyOutcome DebugProbeRunner::HandleDecryptedPacket(const PeerIdentity& peer, std::span<const std::uint8_t> packet,
-                                                               wgnx::platform::ktime_t now) {
+DebugProbeReplyOutcome
+DebugProbeRunner::HandleDecryptedPacket(const PeerIdentity& peer, std::span<const std::uint8_t> packet, wgnx::platform::ktime_t now) {
     DebugProbeReplyOutcome outcome{};
     if (m_status != wgnx::DebugProbeStatus::Sent) {
         return outcome;
     }
 
-    outcome.validation = wgnx::wireguard::ValidateDebugIcmpEchoReply(packet, m_source_address.data(), m_peer.peer_index.Value(),
-                                                                     m_peer.activation_generation.Value(), &outcome.info);
+    outcome.validation = wgnx::wireguard::ValidateDebugIcmpEchoReply(
+        packet,
+        m_source_address.data(),
+        m_peer.peer_index.Value(),
+        m_peer.activation_generation.Value(),
+        &outcome.info
+    );
     if (outcome.validation == wgnx::wireguard::DebugProbeReplyValidation::NotDebugReply) {
         return outcome;
     }
@@ -90,10 +101,11 @@ DebugProbeReplyOutcome DebugProbeRunner::HandleDecryptedPacket(const PeerIdentit
     if (peer != m_peer) {
         outcome.validation = wgnx::wireguard::DebugProbeReplyValidation::ActivationMismatch;
     }
-    static_cast<void>(Transition(outcome.validation == wgnx::wireguard::DebugProbeReplyValidation::Valid
-                                     ? wgnx::DebugProbeStatus::ReplyValidated
-                                     : wgnx::DebugProbeStatus::ReplyRejected,
-                                 now));
+    static_cast<void>(Transition(
+        outcome.validation == wgnx::wireguard::DebugProbeReplyValidation::Valid ? wgnx::DebugProbeStatus::ReplyValidated
+                                                                                : wgnx::DebugProbeStatus::ReplyRejected,
+        now
+    ));
     return outcome;
 }
 

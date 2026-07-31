@@ -31,8 +31,8 @@ struct network_path_observation {
     constexpr bool operator==(const network_path_observation&) const = default;
 };
 
-[[nodiscard]] constexpr network_path_availability classify_network_path_state(network_path_raw_state state,
-                                                                              std::uint32_t state_result = 0) {
+[[nodiscard]] constexpr network_path_availability
+classify_network_path_state(network_path_raw_state state, std::uint32_t state_result = 0) {
     // A failed observation is indeterminate. NIFM only becomes authoritative
     // after a confirmed request state has been read successfully.
     if (state_result != 0) {

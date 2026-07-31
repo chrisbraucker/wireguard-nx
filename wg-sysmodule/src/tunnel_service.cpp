@@ -42,8 +42,9 @@ ams::Result TunnelClientService::GetCapabilities(ams::sf::Out<wgnx::tunnel::Capa
     R_SUCCEED();
 }
 
-ams::Result TunnelClientService::GetRoutingPolicySnapshot(ams::sf::Out<wgnx::tunnel::RoutingPolicySnapshot> out,
-                                                          const ams::sf::OutMapAliasArray<wgnx::tunnel::RouteRecord>& routes) {
+ams::Result TunnelClientService::GetRoutingPolicySnapshot(
+    ams::sf::Out<wgnx::tunnel::RoutingPolicySnapshot> out, const ams::sf::OutMapAliasArray<wgnx::tunnel::RouteRecord>& routes
+) {
     if (routes.GetSize() > wgnx::tunnel::MaximumPolicyRoutes) {
         R_THROW(ams::fs::ResultInvalidArgument());
     }
@@ -56,15 +57,18 @@ ams::Result TunnelClientService::GetCompletionEvent(ams::sf::OutCopyHandle out) 
     R_SUCCEED();
 }
 
-ams::Result TunnelClientService::OpenConnectedUdpFlow(ams::sf::Out<wgnx::tunnel::OpenConnectedUdpFlowResult> out,
-                                                      const wgnx::tunnel::OpenConnectedUdpFlowRequest& request) {
+ams::Result TunnelClientService::OpenConnectedUdpFlow(
+    ams::sf::Out<wgnx::tunnel::OpenConnectedUdpFlowResult> out, const wgnx::tunnel::OpenConnectedUdpFlowRequest& request
+) {
     out.SetValue(runtime::OpenTunnelConnectedUdpFlow(m_client, request));
     R_SUCCEED();
 }
 
-ams::Result TunnelClientService::SendUdpDatagram(ams::sf::Out<wgnx::tunnel::DatagramDisposition> out,
-                                                 const wgnx::tunnel::DatagramDescriptor& descriptor,
-                                                 const ams::sf::InMapAliasBuffer& payload) {
+ams::Result TunnelClientService::SendUdpDatagram(
+    ams::sf::Out<wgnx::tunnel::DatagramDisposition> out,
+    const wgnx::tunnel::DatagramDescriptor& descriptor,
+    const ams::sf::InMapAliasBuffer& payload
+) {
     wgnx::tunnel::DatagramDisposition disposition{
         .client_tag = descriptor.client_tag,
         .status = wgnx::tunnel::ProtocolStatus::MalformedInput,
@@ -73,36 +77,51 @@ ams::Result TunnelClientService::SendUdpDatagram(ams::sf::Out<wgnx::tunnel::Data
     if (IsPayloadRangeValid(descriptor, payload)) {
         const auto* bytes = static_cast<const std::uint8_t*>(payload.GetPointer());
         disposition.status = runtime::SendTunnelUdpDatagram(
-            m_client, descriptor, std::span<const std::uint8_t>(bytes + descriptor.payload_offset, descriptor.payload_size));
+            m_client,
+            descriptor,
+            std::span<const std::uint8_t>(bytes + descriptor.payload_offset, descriptor.payload_size)
+        );
     }
     out.SetValue(disposition);
     R_SUCCEED();
 }
 
-ams::Result TunnelClientService::SendUdpDatagramBatch(const ams::sf::InMapAliasArray<wgnx::tunnel::DatagramDescriptor>& descriptors,
-                                                      const ams::sf::InMapAliasBuffer& payload,
-                                                      const ams::sf::OutMapAliasArray<wgnx::tunnel::DatagramDisposition>& dispositions) {
+ams::Result TunnelClientService::SendUdpDatagramBatch(
+    const ams::sf::InMapAliasArray<wgnx::tunnel::DatagramDescriptor>& descriptors,
+    const ams::sf::InMapAliasBuffer& payload,
+    const ams::sf::OutMapAliasArray<wgnx::tunnel::DatagramDisposition>& dispositions
+) {
     if (descriptors.GetSize() > wgnx::tunnel::MaximumBatchEntries || dispositions.GetSize() < descriptors.GetSize()) {
         R_THROW(ams::fs::ResultInvalidArgument());
     }
     const auto* bytes = static_cast<const std::uint8_t*>(payload.GetPointer());
     wgnx::tunnel::DispatchUdpDatagramBatch(
-        {descriptors.GetPointer(), descriptors.GetSize()}, {bytes, payload.GetSize()}, {dispositions.GetPointer(), dispositions.GetSize()},
+        {descriptors.GetPointer(), descriptors.GetSize()},
+        {bytes, payload.GetSize()},
+        {dispositions.GetPointer(), dispositions.GetSize()},
         [this](const wgnx::tunnel::DatagramDescriptor& descriptor, std::span<const std::uint8_t> datagram) {
             return runtime::SendTunnelUdpDatagram(m_client, descriptor, datagram);
-        });
+        }
+    );
     R_SUCCEED();
 }
 
-ams::Result TunnelClientService::ReceiveCompletions(ams::sf::Out<u32> out_count, ams::sf::Out<wgnx::tunnel::ProtocolStatus> out_status,
-                                                    const ams::sf::OutMapAliasArray<wgnx::tunnel::CompletionRecord>& records,
-                                                    const ams::sf::OutMapAliasBuffer& payload) {
+ams::Result TunnelClientService::ReceiveCompletions(
+    ams::sf::Out<u32> out_count,
+    ams::sf::Out<wgnx::tunnel::ProtocolStatus> out_status,
+    const ams::sf::OutMapAliasArray<wgnx::tunnel::CompletionRecord>& records,
+    const ams::sf::OutMapAliasBuffer& payload
+) {
     if (records.GetSize() > wgnx::tunnel::MaximumBatchEntries) {
         R_THROW(ams::fs::ResultInvalidArgument());
     }
-    const auto outcome = runtime::ReceiveTunnelCompletions(m_client, {records.GetPointer(), records.GetSize()},
-                                                           {static_cast<std::uint8_t*>(payload.GetPointer()), payload.GetSize()},
-                                                           ClearCompletionEvent, this);
+    const auto outcome = runtime::ReceiveTunnelCompletions(
+        m_client,
+        {records.GetPointer(), records.GetSize()},
+        {static_cast<std::uint8_t*>(payload.GetPointer()), payload.GetSize()},
+        ClearCompletionEvent,
+        this
+    );
     out_count.SetValue(outcome.count);
     out_status.SetValue(outcome.status);
     R_SUCCEED();
@@ -130,8 +149,9 @@ void TunnelClientService::ClearCompletionEvent(void* context) {
     }
 }
 
-bool TunnelClientService::IsPayloadRangeValid(const wgnx::tunnel::DatagramDescriptor& descriptor,
-                                              const ams::sf::InMapAliasBuffer& payload) const {
+bool TunnelClientService::IsPayloadRangeValid(
+    const wgnx::tunnel::DatagramDescriptor& descriptor, const ams::sf::InMapAliasBuffer& payload
+) const {
     const std::size_t offset = descriptor.payload_offset;
     const std::size_t size = descriptor.payload_size;
     return offset <= payload.GetSize() && size <= payload.GetSize() - offset;

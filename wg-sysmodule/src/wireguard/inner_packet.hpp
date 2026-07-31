@@ -35,8 +35,8 @@ using InnerIpv4ValidationError = InnerIpValidationError;
 InnerIpv4ValidationError ValidateInnerIpv4Packet(std::span<const std::uint8_t> packet);
 InnerIpv4ValidationError ValidatePaddedInnerIpv4Packet(std::span<const std::uint8_t> payload, std::size_t* out_packet_size);
 InnerIpValidationError ValidateInnerIpPacket(std::span<const std::uint8_t> packet, InnerIpVersion* out_version = nullptr);
-InnerIpValidationError ValidatePaddedInnerIpPacket(std::span<const std::uint8_t> payload, std::size_t* out_packet_size,
-                                                   InnerIpVersion* out_version = nullptr);
+InnerIpValidationError
+ValidatePaddedInnerIpPacket(std::span<const std::uint8_t> payload, std::size_t* out_packet_size, InnerIpVersion* out_version = nullptr);
 const char* GetInnerIpValidationErrorName(InnerIpValidationError error);
 inline const char* GetInnerIpv4ValidationErrorName(InnerIpv4ValidationError error) {
     return GetInnerIpValidationErrorName(error);
@@ -184,7 +184,8 @@ template <std::size_t Capacity> class InnerPacketQueue {
     QueueStatistics m_statistics{};
 };
 
-static_assert(sizeof(InnerPacketQueue<wgnx::resource_budget::PeerOutboundStagingSlots>) <=
-              wgnx::resource_budget::MaximumPeerOutboundStagingBytes);
+static_assert(
+    sizeof(InnerPacketQueue<wgnx::resource_budget::PeerOutboundStagingSlots>) <= wgnx::resource_budget::MaximumPeerOutboundStagingBytes
+);
 
 } // namespace wgnx::wireguard

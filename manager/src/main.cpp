@@ -78,14 +78,22 @@ int main(int argc, char** argv) {
 
         wgnx::BuildInfo sysmodule_build = {};
         if (R_SUCCEEDED(wgnx::client::GetBuildInfo(&sysmodule_build))) {
-            printf("Sysmodule Version: %s-%s\n", sysmodule_build.version[0] != '\0' ? sysmodule_build.version : "unknown",
-                   sysmodule_build.build_id[0] != '\0' ? sysmodule_build.build_id : "unknown");
+            printf(
+                "Sysmodule Version: %s-%s\n",
+                sysmodule_build.version[0] != '\0' ? sysmodule_build.version : "unknown",
+                sysmodule_build.build_id[0] != '\0' ? sysmodule_build.build_id : "unknown"
+            );
         }
 
         wgnx::DaemonStatus status{};
         if (R_SUCCEEDED(wgnx::client::GetDaemonStatus(&status))) {
-            printf("WireGuard peers: %u | active=%d | autostart=%d | flags=0x%08X\n", status.peer_count, status.active_peer_index,
-                   status.auto_start_peer_index, status.flags);
+            printf(
+                "WireGuard peers: %u | active=%d | autostart=%d | flags=0x%08X\n",
+                status.peer_count,
+                status.active_peer_index,
+                status.auto_start_peer_index,
+                status.flags
+            );
         }
 
         std::array<wgnx::PeerInfo, wgnx::MaxPeers> peers{};
@@ -96,17 +104,32 @@ int main(int argc, char** argv) {
                 const char* endpoint = ((peer.flags & wgnx::PeerFlag_Active) != 0 && (peer.flags & wgnx::PeerFlag_HasResolvedEndpoint) != 0)
                                            ? peer.resolved_endpoint
                                            : peer.endpoint;
-                printf("[%u] %s | %s | endpoint=%s | local_pub=%s | state=%s stage=%s flags=0x%02X | hs=%d rx_age=%d tx_age=%d", i,
-                       peer.name, peer.address, endpoint, peer.derived_public_key[0] != '\0' ? peer.derived_public_key : "<unavailable>",
-                       wgnx::GetPeerRuntimeStateName(static_cast<wgnx::PeerRuntimeState>(peer.runtime_state)),
-                       wgnx::GetPeerErrorStageName(static_cast<wgnx::PeerErrorStage>(peer.error_stage)), peer.flags,
-                       peer.last_handshake_seconds, peer.last_rx_seconds, peer.last_tx_seconds);
-                printf(" | probe=%s/%s/%ds",
-                       wgnx::GetDebugTriggerActionName(static_cast<wgnx::DebugTriggerAction>(peer.debug_probe_action)),
-                       wgnx::GetDebugProbeStatusName(static_cast<wgnx::DebugProbeStatus>(peer.debug_probe_status)),
-                       peer.last_debug_probe_seconds);
-                printf(" | ka=%us err=%s (0x%08X)\n", peer.persistent_keepalive_interval,
-                       wgnx::GetPeerErrorCodeName(static_cast<wgnx::PeerErrorCode>(peer.last_error_code)), peer.last_error_code);
+                printf(
+                    "[%u] %s | %s | endpoint=%s | local_pub=%s | state=%s stage=%s flags=0x%02X | hs=%d rx_age=%d tx_age=%d",
+                    i,
+                    peer.name,
+                    peer.address,
+                    endpoint,
+                    peer.derived_public_key[0] != '\0' ? peer.derived_public_key : "<unavailable>",
+                    wgnx::GetPeerRuntimeStateName(static_cast<wgnx::PeerRuntimeState>(peer.runtime_state)),
+                    wgnx::GetPeerErrorStageName(static_cast<wgnx::PeerErrorStage>(peer.error_stage)),
+                    peer.flags,
+                    peer.last_handshake_seconds,
+                    peer.last_rx_seconds,
+                    peer.last_tx_seconds
+                );
+                printf(
+                    " | probe=%s/%s/%ds",
+                    wgnx::GetDebugTriggerActionName(static_cast<wgnx::DebugTriggerAction>(peer.debug_probe_action)),
+                    wgnx::GetDebugProbeStatusName(static_cast<wgnx::DebugProbeStatus>(peer.debug_probe_status)),
+                    peer.last_debug_probe_seconds
+                );
+                printf(
+                    " | ka=%us err=%s (0x%08X)\n",
+                    peer.persistent_keepalive_interval,
+                    wgnx::GetPeerErrorCodeName(static_cast<wgnx::PeerErrorCode>(peer.last_error_code)),
+                    peer.last_error_code
+                );
             }
         }
     } else {
@@ -140,8 +163,12 @@ int main(int argc, char** argv) {
                 printf("TriggerDebugPayload: IPC service is not running.\n");
             } else {
                 const Result trigger_rc = wgnx::client::TriggerDebugPayload(action);
-                printf("TriggerDebugPayload(%s): %s (0x%08X)\n", wgnx::GetDebugTriggerActionName(action),
-                       R_SUCCEEDED(trigger_rc) ? "queued" : "failed", trigger_rc);
+                printf(
+                    "TriggerDebugPayload(%s): %s (0x%08X)\n",
+                    wgnx::GetDebugTriggerActionName(action),
+                    R_SUCCEEDED(trigger_rc) ? "queued" : "failed",
+                    trigger_rc
+                );
             }
         }
 

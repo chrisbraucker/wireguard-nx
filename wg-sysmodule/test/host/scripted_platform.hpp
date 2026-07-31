@@ -67,8 +67,9 @@ class ScriptedPlatform {
     bool CaptureTimerExpiration(wgnx::wireguard::TimerHook hook);
     bool DeliverCapturedTimer(wgnx::wireguard::TimerHook hook);
     bool CancelResolution(const wgnx::sysmodule::runtime::PeerIdentity& peer);
-    bool PersistAutoStart(wgnx::sysmodule::runtime::AutoStartPersistenceState& state,
-                          const wgnx::sysmodule::runtime::AutoStartPersistenceRequest& request);
+    bool PersistAutoStart(
+        wgnx::sysmodule::runtime::AutoStartPersistenceState& state, const wgnx::sysmodule::runtime::AutoStartPersistenceRequest& request
+    );
 
     bool HasPendingResolution() const;
     bool HasPendingUdpOpen() const;

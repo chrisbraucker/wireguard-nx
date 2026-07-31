@@ -31,8 +31,8 @@ enum class queue_work_result : std::uint8_t {
     unavailable,
 };
 
-[[nodiscard]] constexpr queue_work_result classify_queue_work_request(bool available, bool already_pending, bool running,
-                                                                      std::size_t pending, std::size_t capacity) {
+[[nodiscard]] constexpr queue_work_result
+classify_queue_work_request(bool available, bool already_pending, bool running, std::size_t pending, std::size_t capacity) {
     if (!available || capacity == 0) {
         return queue_work_result::unavailable;
     }

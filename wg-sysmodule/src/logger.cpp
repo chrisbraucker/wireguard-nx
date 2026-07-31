@@ -49,8 +49,13 @@ void EmitDebugString(const char* line, size_t line_size) {
 
 void EmitFileBackendFailure(const char* operation, ams::Result rc) {
     char line[192];
-    const int written = std::snprintf(line, sizeof(line), "wgnx logger file backend failure: operation=%s rc=0x%08x; will retry\n",
-                                      operation, static_cast<u32>(rc.GetValue()));
+    const int written = std::snprintf(
+        line,
+        sizeof(line),
+        "wgnx logger file backend failure: operation=%s rc=0x%08x; will retry\n",
+        operation,
+        static_cast<u32>(rc.GetValue())
+    );
     if (written <= 0) {
         return;
     }

@@ -54,15 +54,22 @@ ams::Result ControlService::SetBsdSystemClientEnabled(std::uint32_t client, bool
     R_UNLESS(IsConfigurableBsdSystemClient(client), ams::fs::ResultInvalidArgument());
     R_UNLESS(SetBsdSystemClientEnabledForRuntime(static_cast<BsdSystemClient>(client), enabled), ams::fs::ResultInvalidArgument());
 
-    logger::Log("bsd:s client=%u requested=%u interception_installed=%u", static_cast<unsigned>(client), static_cast<unsigned>(enabled),
-                static_cast<unsigned>(IsBsdMitmServerRunning()));
+    logger::Log(
+        "bsd:s client=%u requested=%u interception_installed=%u",
+        static_cast<unsigned>(client),
+        static_cast<unsigned>(enabled),
+        static_cast<unsigned>(IsBsdMitmServerRunning())
+    );
     R_SUCCEED();
 }
 
 ams::Result ControlService::SetBsdSystemPolicyEnabled(bool enabled) {
     SetBsdSystemPolicyEnabledForRuntime(enabled);
-    logger::Log("bsd:s policy requested=%u interception_installed=%u", static_cast<unsigned>(enabled),
-                static_cast<unsigned>(IsBsdMitmServerRunning()));
+    logger::Log(
+        "bsd:s policy requested=%u interception_installed=%u",
+        static_cast<unsigned>(enabled),
+        static_cast<unsigned>(IsBsdMitmServerRunning())
+    );
     R_SUCCEED();
 }
 
@@ -92,9 +99,14 @@ bool StartControlServer() {
     }
 
     logger::Log("registered service 'wgm:ctl'");
-    const ams::Result thread_result =
-        ams::os::CreateThread(std::addressof(g_server_thread), ControlServerThreadMain, nullptr, g_server_thread_stack.data(),
-                              g_server_thread_stack.size(), ams::os::DefaultThreadPriority);
+    const ams::Result thread_result = ams::os::CreateThread(
+        std::addressof(g_server_thread),
+        ControlServerThreadMain,
+        nullptr,
+        g_server_thread_stack.data(),
+        g_server_thread_stack.size(),
+        ams::os::DefaultThreadPriority
+    );
     if (R_FAILED(thread_result)) {
         logger::Log("CreateThread(wgnx-mitm-ctl) failed rc=0x%08X", thread_result.GetValue());
         ams::util::DestroyAt(g_server_manager_storage);

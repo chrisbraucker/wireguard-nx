@@ -39,8 +39,9 @@ constexpr inline std::size_t HorizonAddrInfoHintsWireSize =
 
 using HorizonAddrInfoHints = std::array<std::uint8_t, HorizonAddrInfoHintsWireSize>;
 
-bool serialize_horizon_addrinfo_hints(HorizonAddrInfoHints& output, std::int32_t flags, std::int32_t family, std::int32_t socket_type,
-                                      std::int32_t protocol);
+bool serialize_horizon_addrinfo_hints(
+    HorizonAddrInfoHints& output, std::int32_t flags, std::int32_t family, std::int32_t socket_type, std::int32_t protocol
+);
 
 // Validates every record in the returned buffer and selects its first usable
 // AF_INET or AF_INET6 endpoint. A malformed trailing record invalidates the

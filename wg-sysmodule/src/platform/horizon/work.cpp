@@ -233,8 +233,16 @@ void EnsureTimerManagerStarted() {
         return;
     }
 
-    R_ABORT_UNLESS(ams::os::CreateThread(std::addressof(g_timer_manager.thread), TimerThreadMain, nullptr, g_timer_manager.stack,
-                                         sizeof(g_timer_manager.stack), WorkerThreadPriority));
+    R_ABORT_UNLESS(
+        ams::os::CreateThread(
+            std::addressof(g_timer_manager.thread),
+            TimerThreadMain,
+            nullptr,
+            g_timer_manager.stack,
+            sizeof(g_timer_manager.stack),
+            WorkerThreadPriority
+        )
+    );
     ams::os::SetThreadNamePointer(std::addressof(g_timer_manager.thread), "wgnx-timer");
     ams::os::StartThread(std::addressof(g_timer_manager.thread));
     g_timer_manager.started = true;
@@ -336,8 +344,13 @@ queue_work_result queue_work(workqueue_struct* wq, work_struct* work) {
     std::scoped_lock lock(wq->mutex);
     ++wq->statistics.requests;
 
-    const auto result = classify_queue_work_request(!wq->stopping && (impl->owner == nullptr || impl->owner == wq),
-                                                    impl->queued || impl->rerun, impl->running, wq->pending_count, wq->pending_capacity);
+    const auto result = classify_queue_work_request(
+        !wq->stopping && (impl->owner == nullptr || impl->owner == wq),
+        impl->queued || impl->rerun,
+        impl->running,
+        wq->pending_count,
+        wq->pending_capacity
+    );
     switch (result) {
     case queue_work_result::queued:
         EnqueueWorkLocked(wq, impl);

@@ -141,7 +141,22 @@ bool TestMonocypherBackendVectors() {
         0x01, 0x03, 0x80, 0x8a, 0xfb, 0x0d, 0xb2, 0xfd, 0x4a, 0xbf, 0xf6, 0xaf, 0x41, 0x49, 0xf5, 0x1b,
     };
     static constexpr Poly1305Tag ExpectedTag = {
-        0xa8, 0x06, 0x1d, 0xc1, 0x30, 0x51, 0x36, 0xc6, 0xc2, 0x2b, 0x8b, 0xaf, 0x0c, 0x01, 0x27, 0xa9,
+        0xa8,
+        0x06,
+        0x1d,
+        0xc1,
+        0x30,
+        0x51,
+        0x36,
+        0xc6,
+        0xc2,
+        0x2b,
+        0x8b,
+        0xaf,
+        0x0c,
+        0x01,
+        0x27,
+        0xa9,
     };
     Poly1305Tag tag{};
     const ByteSpan message = TextBytes("Cryptographic Forum Research Group");
@@ -170,7 +185,22 @@ bool TestAeadPrimitives() {
         0xbc, 0x3f, 0xf4, 0xde, 0xf0, 0x8e, 0x4b, 0x7a, 0x9d, 0xe5, 0x76, 0xd2, 0x65, 0x86, 0xce, 0xc6, 0x4b, 0x61, 0x16,
     };
     static constexpr Poly1305Tag ExpectedTag = {
-        0x1a, 0xe1, 0x0b, 0x59, 0x4f, 0x09, 0xe2, 0x6a, 0x7e, 0x90, 0x2e, 0xcb, 0xd0, 0x60, 0x06, 0x91,
+        0x1a,
+        0xe1,
+        0x0b,
+        0x59,
+        0x4f,
+        0x09,
+        0xe2,
+        0x6a,
+        0x7e,
+        0x90,
+        0x2e,
+        0xcb,
+        0xd0,
+        0x60,
+        0x06,
+        0x91,
     };
     std::array<std::uint8_t, ExpectedCiphertext.size()> ciphertext{};
     std::array<std::uint8_t, ExpectedCiphertext.size()> decrypted{};
@@ -202,11 +232,14 @@ bool TestXChaCha20Poly1305() {
     static constexpr std::string_view Plaintext =
         "Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it.";
     std::array<std::uint8_t, 130> expected{};
-    if (!DecodeHex(expected, "BD6D179D3E83D43B9576579493C0E939572A1700252BFACCBED2902C21396CBB"
-                             "731C7F1B0B4AA6440BF3A82F4EDA7E39AE64C6708C54C216CB96B72E1213B452"
-                             "2F8C9BA40DB5D945B11B69B982C1BB9E3F3FAC2BC369488F76B2383565D3FFF9"
-                             "21F9664C97637DA9768812F615C68B13B52EC0875924C1C7987947DEAFD8780A"
-                             "CF49")) {
+    if (!DecodeHex(
+            expected,
+            "BD6D179D3E83D43B9576579493C0E939572A1700252BFACCBED2902C21396CBB"
+            "731C7F1B0B4AA6440BF3A82F4EDA7E39AE64C6708C54C216CB96B72E1213B452"
+            "2F8C9BA40DB5D945B11B69B982C1BB9E3F3FAC2BC369488F76B2383565D3FFF9"
+            "21F9664C97637DA9768812F615C68B13B52EC0875924C1C7987947DEAFD8780A"
+            "CF49"
+        )) {
         return false;
     }
     std::array<std::uint8_t, 114> ciphertext{};

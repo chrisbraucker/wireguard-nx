@@ -81,29 +81,35 @@ class TunnelFlowPlane {
     [[nodiscard]] wgnx::tunnel::Capabilities GetCapabilities() const;
     [[nodiscard]] wgnx::tunnel::RoutingPolicySnapshot CopyRoutingPolicy(std::span<wgnx::tunnel::RouteRecord> out) const;
 
-    [[nodiscard]] wgnx::tunnel::OpenConnectedUdpFlowResult OpenConnectedUdpFlow(TunnelClientId client,
-                                                                                const wgnx::tunnel::OpenConnectedUdpFlowRequest& request,
-                                                                                wgnx::platform::ktime_t now,
-                                                                                TunnelTransportAvailability availability = {
-                                                                                    .protocol_available = true,
-                                                                                    .staging_available = true,
-                                                                                });
-    [[nodiscard]] PreparedTunnelDatagram PrepareSend(TunnelClientId client, const wgnx::tunnel::DatagramDescriptor& descriptor,
-                                                     std::span<const std::uint8_t> payload, TunnelTransportAvailability availability,
-                                                     wgnx::platform::ktime_t now);
+    [[nodiscard]] wgnx::tunnel::OpenConnectedUdpFlowResult OpenConnectedUdpFlow(
+        TunnelClientId client,
+        const wgnx::tunnel::OpenConnectedUdpFlowRequest& request,
+        wgnx::platform::ktime_t now,
+        TunnelTransportAvailability availability = {
+            .protocol_available = true,
+            .staging_available = true,
+        }
+    );
+    [[nodiscard]] PreparedTunnelDatagram PrepareSend(
+        TunnelClientId client,
+        const wgnx::tunnel::DatagramDescriptor& descriptor,
+        std::span<const std::uint8_t> payload,
+        TunnelTransportAvailability availability,
+        wgnx::platform::ktime_t now
+    );
     void CompleteSend(const PreparedTunnelDatagram& datagram, wgnx::tunnel::ProtocolStatus completion_status);
     void ReleasePreparedDatagram(const PreparedTunnelDatagram& datagram);
     void NotifyOutboundCapacityAvailable(const PeerIdentity& peer);
     [[nodiscard]] std::uint32_t SignalAllClientCompletionEvents() const;
 
-    [[nodiscard]] TunnelCompletionDrainOutcome ReceiveCompletions(TunnelClientId client, std::span<wgnx::tunnel::CompletionRecord> records,
-                                                                  std::span<std::uint8_t> payload);
+    [[nodiscard]] TunnelCompletionDrainOutcome
+    ReceiveCompletions(TunnelClientId client, std::span<wgnx::tunnel::CompletionRecord> records, std::span<std::uint8_t> payload);
     [[nodiscard]] bool HasCompletions(TunnelClientId client) const;
     [[nodiscard]] wgnx::tunnel::FlowStateResult GetFlowState(TunnelClientId client, wgnx::tunnel::FlowHandle flow) const;
     [[nodiscard]] wgnx::tunnel::ProtocolStatus CloseFlow(TunnelClientId client, wgnx::tunnel::FlowHandle flow, wgnx::platform::ktime_t now);
 
-    [[nodiscard]] TunnelInboundOutcome DeliverDecryptedIpv4Packet(const PeerIdentity& peer, std::span<const std::uint8_t> packet,
-                                                                  wgnx::platform::ktime_t now);
+    [[nodiscard]] TunnelInboundOutcome
+    DeliverDecryptedIpv4Packet(const PeerIdentity& peer, std::span<const std::uint8_t> packet, wgnx::platform::ktime_t now);
     void InvalidatePeerActivation(const PeerIdentity& peer, wgnx::tunnel::FlowTerminalReason reason, wgnx::platform::ktime_t now);
 
   private:
@@ -182,16 +188,25 @@ class TunnelFlowPlane {
     [[nodiscard]] FlowSlot* FindFlow(TunnelClientId client, wgnx::tunnel::FlowHandle flow);
     [[nodiscard]] const FlowSlot* FindFlow(TunnelClientId client, wgnx::tunnel::FlowHandle flow) const;
     [[nodiscard]] wgnx::tunnel::FlowHandle MakeFlowHandle(std::size_t flow_slot, const FlowSlot& flow) const;
-    [[nodiscard]] bool DecodeFlowHandle(wgnx::tunnel::FlowHandle handle, std::size_t* out_slot, std::uint32_t* out_generation,
-                                        std::uint8_t* out_client_slot, std::uint32_t* out_client_generation) const;
+    [[nodiscard]] bool DecodeFlowHandle(
+        wgnx::tunnel::FlowHandle handle,
+        std::size_t* out_slot,
+        std::uint32_t* out_generation,
+        std::uint8_t* out_client_slot,
+        std::uint32_t* out_client_generation
+    ) const;
 
     void ClearExpiredTombstones(wgnx::platform::ktime_t now);
     [[nodiscard]] bool HasTombstoneReservation(wgnx::platform::ktime_t now);
     [[nodiscard]] std::uint32_t AllocateFlowGeneration();
     [[nodiscard]] bool AllocateVirtualTuple(const wgnx::tunnel::Ipv4Endpoint& remote, std::uint16_t* out_port, wgnx::platform::ktime_t now);
     void QuarantineTuple(const FlowSlot& flow, wgnx::platform::ktime_t now);
-    [[nodiscard]] bool IsTombstoned(const std::array<std::uint8_t, 4>& tunnel_destination, std::uint16_t tunnel_destination_port,
-                                    const wgnx::tunnel::Ipv4Endpoint& remote, wgnx::platform::ktime_t now) const;
+    [[nodiscard]] bool IsTombstoned(
+        const std::array<std::uint8_t, 4>& tunnel_destination,
+        std::uint16_t tunnel_destination_port,
+        const wgnx::tunnel::Ipv4Endpoint& remote,
+        wgnx::platform::ktime_t now
+    ) const;
 
     [[nodiscard]] std::uint8_t AllocateOutboundSlab();
     [[nodiscard]] std::uint8_t AllocateInboundSlab();
@@ -209,14 +224,19 @@ class TunnelFlowPlane {
 
     [[nodiscard]] bool ParseAndNormalizePolicy(const TunnelPolicyInput& input);
     [[nodiscard]] static bool ParseIpv4Cidr(const char* text, std::array<std::uint8_t, 4>* out_address, std::uint8_t* out_prefix);
-    [[nodiscard]] static bool ParseIpv4Endpoint(std::span<const std::uint8_t> packet, std::size_t ipv4_header_size,
-                                                wgnx::tunnel::Ipv4Endpoint* out_source, std::array<std::uint8_t, 4>* out_destination,
-                                                std::uint16_t* out_destination_port, std::span<const std::uint8_t>* out_payload);
+    [[nodiscard]] static bool ParseIpv4Endpoint(
+        std::span<const std::uint8_t> packet,
+        std::size_t ipv4_header_size,
+        wgnx::tunnel::Ipv4Endpoint* out_source,
+        std::array<std::uint8_t, 4>* out_destination,
+        std::uint16_t* out_destination_port,
+        std::span<const std::uint8_t>* out_payload
+    );
     [[nodiscard]] static bool RouteMatches(const NormalizedRoute& route, const std::uint8_t address[4]);
     [[nodiscard]] const NormalizedRoute* SelectRoute(const wgnx::tunnel::Ipv4Endpoint& remote) const;
     [[nodiscard]] static std::uint16_t ComputeInternetChecksum(std::span<const std::uint8_t> bytes);
-    [[nodiscard]] static std::uint16_t ComputeUdpChecksum(const std::uint8_t source[4], const std::uint8_t destination[4],
-                                                          std::span<const std::uint8_t> udp);
+    [[nodiscard]] static std::uint16_t
+    ComputeUdpChecksum(const std::uint8_t source[4], const std::uint8_t destination[4], std::span<const std::uint8_t> udp);
     [[nodiscard]] bool BuildUdpPacket(FlowSlot& flow, std::span<const std::uint8_t> payload, OutboundSlab& out, std::size_t* out_size);
 
     std::array<ClientSlot, wgnx::tunnel::MaximumClientContexts> m_clients{};

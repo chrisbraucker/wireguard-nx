@@ -38,9 +38,10 @@ bool RunBsdEndpointTests() {
     zero_initialized_requester_endpoint.address[3] = 2;
 
     BsdIpv4Endpoint decoded{};
-    const auto zero_length_input =
-        std::span<const std::uint8_t>{reinterpret_cast<const std::uint8_t*>(std::addressof(zero_initialized_requester_endpoint)),
-                                      sizeof(zero_initialized_requester_endpoint)};
+    const auto zero_length_input = std::span<const std::uint8_t>{
+        reinterpret_cast<const std::uint8_t*>(std::addressof(zero_initialized_requester_endpoint)),
+        sizeof(zero_initialized_requester_endpoint)
+    };
     const bool accepts_zero_initialized_requester_endpoint = DecodeBsdIpv4Endpoint(zero_length_input, std::addressof(decoded)) &&
                                                              decoded.address == std::array<std::uint8_t, 4>{10, 251, 0, 2} &&
                                                              decoded.port == 29000;
@@ -48,25 +49,33 @@ bool RunBsdEndpointTests() {
     BsdSockAddrIn explicit_length_endpoint = zero_initialized_requester_endpoint;
     explicit_length_endpoint.length = sizeof(explicit_length_endpoint);
     const auto explicit_length_input = std::span<const std::uint8_t>{
-        reinterpret_cast<const std::uint8_t*>(std::addressof(explicit_length_endpoint)), sizeof(explicit_length_endpoint)};
+        reinterpret_cast<const std::uint8_t*>(std::addressof(explicit_length_endpoint)),
+        sizeof(explicit_length_endpoint)
+    };
     const bool accepts_explicit_length_endpoint = DecodeBsdIpv4Endpoint(explicit_length_input, std::addressof(decoded));
 
     BsdSockAddrIn malformed_length_endpoint = explicit_length_endpoint;
     malformed_length_endpoint.length = sizeof(malformed_length_endpoint) - 1;
     const auto malformed_length_input = std::span<const std::uint8_t>{
-        reinterpret_cast<const std::uint8_t*>(std::addressof(malformed_length_endpoint)), sizeof(malformed_length_endpoint)};
+        reinterpret_cast<const std::uint8_t*>(std::addressof(malformed_length_endpoint)),
+        sizeof(malformed_length_endpoint)
+    };
     const bool rejects_short_nonzero_length = !DecodeBsdIpv4Endpoint(malformed_length_input, std::addressof(decoded));
 
     BsdSockAddrIn malformed_family_endpoint = explicit_length_endpoint;
     malformed_family_endpoint.family = 0;
     const auto malformed_family_input = std::span<const std::uint8_t>{
-        reinterpret_cast<const std::uint8_t*>(std::addressof(malformed_family_endpoint)), sizeof(malformed_family_endpoint)};
+        reinterpret_cast<const std::uint8_t*>(std::addressof(malformed_family_endpoint)),
+        sizeof(malformed_family_endpoint)
+    };
     const bool rejects_non_ipv4_family = !DecodeBsdIpv4Endpoint(malformed_family_input, std::addressof(decoded));
 
     BsdSockAddrIn zero_port_endpoint = explicit_length_endpoint;
     zero_port_endpoint.port = 0;
-    const auto zero_port_input = std::span<const std::uint8_t>{reinterpret_cast<const std::uint8_t*>(std::addressof(zero_port_endpoint)),
-                                                               sizeof(zero_port_endpoint)};
+    const auto zero_port_input = std::span<const std::uint8_t>{
+        reinterpret_cast<const std::uint8_t*>(std::addressof(zero_port_endpoint)),
+        sizeof(zero_port_endpoint)
+    };
     const bool rejects_zero_port = !DecodeBsdIpv4Endpoint(zero_port_input, std::addressof(decoded));
 
     const auto short_input = std::span<const std::uint8_t>{zero_length_input.data(), zero_length_input.size() - 1};
@@ -94,37 +103,50 @@ bool RunBsdResponseLayoutTests() {
 
     return Check(success_words == std::array<std::int32_t, 2>{48, 0}, "BSD success response did not encode result before errno") &&
            Check(failure_words == std::array<std::int32_t, 2>{-1, EAGAIN}, "BSD failure response did not encode result before errno") &&
-           Check(address_words == std::array<std::int32_t, 3>{0, 0, 16},
-                 "BSD address response did not encode result, errno, and address length in order");
+           Check(
+               address_words == std::array<std::int32_t, 3>{0, 0, 16},
+               "BSD address response did not encode result, errno, and address length in order"
+           );
 }
 
 bool RunTunnelOpenDispositionTests() {
     using namespace wgnx::mitm;
     using wgnx::tunnel::ProtocolStatus;
 
-    return Check(ClassifyTunnelOpenStatus(ProtocolStatus::Success) == TunnelOpenDisposition::Tunnel,
-                 "successful tunnel flow open was not classified as tunneled") &&
-           Check(ClassifyTunnelOpenStatus(ProtocolStatus::RouteNotCovered) == TunnelOpenDisposition::Direct,
-                 "uncovered route was not classified as direct") &&
-           Check(ClassifyTunnelOpenStatus(ProtocolStatus::PeerUnavailable) == TunnelOpenDisposition::Direct &&
-                     ClassifyTunnelOpenStatus(ProtocolStatus::TransportUnavailable) == TunnelOpenDisposition::Direct,
-                 "temporary tunnel unavailability was not classified as direct") &&
-           Check(ClassifyTunnelOpenStatus(ProtocolStatus::TunnelBlockedByPolicy) == TunnelOpenDisposition::Blocked,
-                 "leak-protection block was not classified as blocked") &&
-           Check(ClassifyTunnelOpenStatus(ProtocolStatus::QueueFull) == TunnelOpenDisposition::Error,
-                 "unexpected tunnel status was not classified as an error");
+    return Check(
+               ClassifyTunnelOpenStatus(ProtocolStatus::Success) == TunnelOpenDisposition::Tunnel,
+               "successful tunnel flow open was not classified as tunneled"
+           ) &&
+           Check(
+               ClassifyTunnelOpenStatus(ProtocolStatus::RouteNotCovered) == TunnelOpenDisposition::Direct,
+               "uncovered route was not classified as direct"
+           ) &&
+           Check(
+               ClassifyTunnelOpenStatus(ProtocolStatus::PeerUnavailable) == TunnelOpenDisposition::Direct &&
+                   ClassifyTunnelOpenStatus(ProtocolStatus::TransportUnavailable) == TunnelOpenDisposition::Direct,
+               "temporary tunnel unavailability was not classified as direct"
+           ) &&
+           Check(
+               ClassifyTunnelOpenStatus(ProtocolStatus::TunnelBlockedByPolicy) == TunnelOpenDisposition::Blocked,
+               "leak-protection block was not classified as blocked"
+           ) &&
+           Check(
+               ClassifyTunnelOpenStatus(ProtocolStatus::QueueFull) == TunnelOpenDisposition::Error,
+               "unexpected tunnel status was not classified as an error"
+           );
 }
 
 bool RunTerminalServerLifecycleTests() {
     using namespace wgnx::mitm;
 
     TerminalServerLifecycle lifecycle{};
-    return Check(lifecycle.Phase() == TerminalServerLifecyclePhase::Idle && !lifecycle.BeginStopping() &&
-                     !lifecycle.MarkServerThreadJoined() && !lifecycle.RetainForProcessExit() && lifecycle.BeginServing() &&
-                     !lifecycle.BeginServing() && lifecycle.BeginStopping() && !lifecycle.RetainForProcessExit() &&
-                     lifecycle.MarkServerThreadJoined() && lifecycle.RetainForProcessExit() &&
-                     lifecycle.Phase() == TerminalServerLifecyclePhase::RetainedForProcessExit,
-                 "terminal server lifecycle retained state before its server thread joined");
+    return Check(
+        lifecycle.Phase() == TerminalServerLifecyclePhase::Idle && !lifecycle.BeginStopping() && !lifecycle.MarkServerThreadJoined() &&
+            !lifecycle.RetainForProcessExit() && lifecycle.BeginServing() && !lifecycle.BeginServing() && lifecycle.BeginStopping() &&
+            !lifecycle.RetainForProcessExit() && lifecycle.MarkServerThreadJoined() && lifecycle.RetainForProcessExit() &&
+            lifecycle.Phase() == TerminalServerLifecyclePhase::RetainedForProcessExit,
+        "terminal server lifecycle retained state before its server thread joined"
+    );
 }
 
 } // namespace
@@ -142,7 +164,8 @@ int main() {
     BsdSystemPolicy configurable_clients{.enabled = true};
     bool all_configurable_clients_are_individually_toggleable = true;
     for (std::uint32_t client = static_cast<std::uint32_t>(BsdSystemClient::Npns);
-         client <= static_cast<std::uint32_t>(BsdSystemClient::RequesterForwarder); ++client) {
+         client <= static_cast<std::uint32_t>(BsdSystemClient::RequesterForwarder);
+         ++client) {
         const auto system_client = static_cast<BsdSystemClient>(client);
         all_configurable_clients_are_individually_toggleable =
             all_configurable_clients_are_individually_toggleable && SetBsdSystemClientEnabled(configurable_clients, system_client, true) &&
@@ -159,9 +182,10 @@ int main() {
         Check(IsRequesterForwarderProgram(RequesterForwarderProgramId), "requester forwarder title ID was not recognized") &&
         Check(!IsRequesterForwarderProgram(WireGuardProgramId), "WireGuard title ID was mistaken for requester") &&
         Check(ShouldInterceptRequesterBsdSession(), "requester BSD session was rejected") &&
-        Check(requester_enabled &&
-                  ShouldInterceptBsdSystem(requester_only, RequesterForwarderProgramId, BsdSystemClient::RequesterForwarder),
-              "enabled requester forwarder was rejected") &&
+        Check(
+            requester_enabled && ShouldInterceptBsdSystem(requester_only, RequesterForwarderProgramId, BsdSystemClient::RequesterForwarder),
+            "enabled requester forwarder was rejected"
+        ) &&
         Check(all_configurable_clients_are_individually_toggleable, "system-client policy flags were not independently toggleable") &&
         Check(!SetBsdSystemClientEnabled(requester_only, BsdSystemClient::Unknown, true), "unknown system client was configurable") &&
         Check(!IsConfigurableBsdSystemClient(99), "out-of-range system client was configurable") &&

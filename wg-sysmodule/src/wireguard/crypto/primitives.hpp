@@ -134,14 +134,23 @@ template <std::size_t DigestSize> bool Blake2sHash(std::array<std::uint8_t, Dige
 
 bool Blake2sHmac(Blake2sDigest& output, ByteSpan key, ByteSpan data);
 
-bool chacha20poly1305_encrypt(MutableByteSpan ciphertext, Poly1305Tag& tag, ByteSpan plaintext, ByteSpan aad, const ChaCha20Key& key,
-                              const ChaCha20Nonce& nonce);
-bool chacha20poly1305_decrypt(MutableByteSpan plaintext, ByteSpan ciphertext, const Poly1305Tag& tag, ByteSpan aad, const ChaCha20Key& key,
-                              const ChaCha20Nonce& nonce);
-bool xchacha20poly1305_encrypt(MutableByteSpan ciphertext, Poly1305Tag& tag, ByteSpan plaintext, ByteSpan aad, const ChaCha20Key& key,
-                               const XChaCha20Nonce& nonce);
-bool xchacha20poly1305_decrypt(MutableByteSpan plaintext, ByteSpan ciphertext, const Poly1305Tag& tag, ByteSpan aad, const ChaCha20Key& key,
-                               const XChaCha20Nonce& nonce);
+bool chacha20poly1305_encrypt(
+    MutableByteSpan ciphertext, Poly1305Tag& tag, ByteSpan plaintext, ByteSpan aad, const ChaCha20Key& key, const ChaCha20Nonce& nonce
+);
+bool chacha20poly1305_decrypt(
+    MutableByteSpan plaintext, ByteSpan ciphertext, const Poly1305Tag& tag, ByteSpan aad, const ChaCha20Key& key, const ChaCha20Nonce& nonce
+);
+bool xchacha20poly1305_encrypt(
+    MutableByteSpan ciphertext, Poly1305Tag& tag, ByteSpan plaintext, ByteSpan aad, const ChaCha20Key& key, const XChaCha20Nonce& nonce
+);
+bool xchacha20poly1305_decrypt(
+    MutableByteSpan plaintext,
+    ByteSpan ciphertext,
+    const Poly1305Tag& tag,
+    ByteSpan aad,
+    const ChaCha20Key& key,
+    const XChaCha20Nonce& nonce
+);
 
 bool x25519(X25519Key& out, const X25519Key& scalar, const X25519Key& point);
 bool x25519_public_key(X25519Key& out, const X25519Key& private_key);

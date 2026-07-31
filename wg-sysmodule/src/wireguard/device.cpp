@@ -66,8 +66,12 @@ bool wg_device_init_from_config_entry(wg_device* device, const wgnx::PeerConfigE
     return wg_device_init_from_parsed_config(device, config, private_key, preshared_key_ptr);
 }
 
-bool wg_device_init_from_parsed_config(wg_device* device, const wgnx::PeerConfigEntry& config, const noise_private_key& local_private_key,
-                                       const noise_symmetric_key* preshared_key) {
+bool wg_device_init_from_parsed_config(
+    wg_device* device,
+    const wgnx::PeerConfigEntry& config,
+    const noise_private_key& local_private_key,
+    const noise_symmetric_key* preshared_key
+) {
     if (device == nullptr || !local_private_key.valid) {
         return false;
     }
@@ -76,13 +80,16 @@ bool wg_device_init_from_parsed_config(wg_device* device, const wgnx::PeerConfig
     wg_index_allocator_init(&device->index_allocator);
     wg_device_clear_index_registry(device);
 
-    if (!wg_peer_initialize(&device->peer, {
-                                               .name = config.name.data(),
-                                               .local_private_key = std::addressof(local_private_key),
-                                               .remote_public_key = config.public_key.data(),
-                                               .preshared_key = preshared_key,
-                                               .persistent_keepalive_interval = config.persistent_keepalive,
-                                           })) {
+    if (!wg_peer_initialize(
+            &device->peer,
+            {
+                .name = config.name.data(),
+                .local_private_key = std::addressof(local_private_key),
+                .remote_public_key = config.public_key.data(),
+                .preshared_key = preshared_key,
+                .persistent_keepalive_interval = config.persistent_keepalive,
+            }
+        )) {
         wg_device_reset(device);
         return false;
     }
@@ -163,12 +170,21 @@ void wg_device_refresh_keypair_indices(wg_device* device, const wg_peer* peer) {
     }
 
     SetRegistryEntry(device, wg_index_slot::Handshake, 0);
-    SetRegistryEntry(device, wg_index_slot::CurrentKeypair,
-                     peer != nullptr && peer->current_keypair.IsValid() ? peer->current_keypair.LocalIndex() : 0);
-    SetRegistryEntry(device, wg_index_slot::NextKeypair,
-                     peer != nullptr && peer->next_keypair.IsValid() ? peer->next_keypair.LocalIndex() : 0);
-    SetRegistryEntry(device, wg_index_slot::PreviousKeypair,
-                     peer != nullptr && peer->previous_keypair.IsValid() ? peer->previous_keypair.LocalIndex() : 0);
+    SetRegistryEntry(
+        device,
+        wg_index_slot::CurrentKeypair,
+        peer != nullptr && peer->current_keypair.IsValid() ? peer->current_keypair.LocalIndex() : 0
+    );
+    SetRegistryEntry(
+        device,
+        wg_index_slot::NextKeypair,
+        peer != nullptr && peer->next_keypair.IsValid() ? peer->next_keypair.LocalIndex() : 0
+    );
+    SetRegistryEntry(
+        device,
+        wg_index_slot::PreviousKeypair,
+        peer != nullptr && peer->previous_keypair.IsValid() ? peer->previous_keypair.LocalIndex() : 0
+    );
 }
 
 wg_index_slot wg_device_lookup_index_slot(const wg_device* device, std::uint32_t index) {

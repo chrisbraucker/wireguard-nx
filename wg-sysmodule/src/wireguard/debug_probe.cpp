@@ -127,8 +127,15 @@ void FormatIpv4Text(std::span<const std::uint8_t, 4> address, char* out, std::si
         return;
     }
 
-    std::snprintf(out, out_size, "%u.%u.%u.%u", static_cast<unsigned int>(address[0]), static_cast<unsigned int>(address[1]),
-                  static_cast<unsigned int>(address[2]), static_cast<unsigned int>(address[3]));
+    std::snprintf(
+        out,
+        out_size,
+        "%u.%u.%u.%u",
+        static_cast<unsigned int>(address[0]),
+        static_cast<unsigned int>(address[1]),
+        static_cast<unsigned int>(address[2]),
+        static_cast<unsigned int>(address[3])
+    );
 }
 
 const char* GetDebugProbeReplyValidationName(DebugProbeReplyValidation validation) {
@@ -156,9 +163,14 @@ const char* GetDebugProbeReplyValidationName(DebugProbeReplyValidation validatio
     return "unknown";
 }
 
-std::size_t BuildDebugIcmpEchoRequest(std::span<std::uint8_t> payload, std::string_view source_address_text,
-                                      wgnx::DebugTriggerAction action, std::uint32_t activation_generation, std::size_t peer_index,
-                                      std::uint32_t random_seed) {
+std::size_t BuildDebugIcmpEchoRequest(
+    std::span<std::uint8_t> payload,
+    std::string_view source_address_text,
+    wgnx::DebugTriggerAction action,
+    std::uint32_t activation_generation,
+    std::size_t peer_index,
+    std::uint32_t random_seed
+) {
     if (payload.size() < DebugProbePacketSize || !IsSupportedDebugTriggerAction(action)) {
         return 0;
     }
@@ -203,9 +215,13 @@ std::size_t BuildDebugIcmpEchoRequest(std::span<std::uint8_t> payload, std::stri
     return DebugProbePacketSize;
 }
 
-DebugProbeReplyValidation ValidateDebugIcmpEchoReply(std::span<const std::uint8_t> payload, std::string_view local_address_text,
-                                                     std::size_t expected_peer_index, std::uint32_t expected_activation_generation,
-                                                     DebugProbeReplyInfo* out_info) {
+DebugProbeReplyValidation ValidateDebugIcmpEchoReply(
+    std::span<const std::uint8_t> payload,
+    std::string_view local_address_text,
+    std::size_t expected_peer_index,
+    std::uint32_t expected_activation_generation,
+    DebugProbeReplyInfo* out_info
+) {
     if (out_info != nullptr) {
         *out_info = {};
     }

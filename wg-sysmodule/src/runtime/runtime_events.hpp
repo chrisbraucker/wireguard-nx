@@ -152,10 +152,20 @@ struct ProtocolTimerExpiredEvent {
     wgnx::platform::ktime_t occurred_at{0};
 };
 
-using PeerEvent =
-    std::variant<ActivationRequestedEvent, DeactivationRequestedEvent, NetworkPathRequestStartedEvent, NetworkPathAvailabilityChangedEvent,
-                 TransportFailureEvent, EndpointResolvedEvent, UdpBindOpenedEvent, UdpRebindRequestedEvent, EncryptedDatagramReceivedEvent,
-                 PendingDatagramSentEvent, InnerPacketStagedEvent, ProcessOutboundQueueEvent, ProtocolTimerExpiredEvent>;
+using PeerEvent = std::variant<
+    ActivationRequestedEvent,
+    DeactivationRequestedEvent,
+    NetworkPathRequestStartedEvent,
+    NetworkPathAvailabilityChangedEvent,
+    TransportFailureEvent,
+    EndpointResolvedEvent,
+    UdpBindOpenedEvent,
+    UdpRebindRequestedEvent,
+    EncryptedDatagramReceivedEvent,
+    PendingDatagramSentEvent,
+    InnerPacketStagedEvent,
+    ProcessOutboundQueueEvent,
+    ProtocolTimerExpiredEvent>;
 
 template <typename Event> consteval std::size_t MaxEffectsForEvent() {
     if constexpr (std::is_same_v<Event, ActivationRequestedEvent> || std::is_same_v<Event, NetworkPathRequestStartedEvent> ||
@@ -246,10 +256,20 @@ struct ArmDebugProbeTimeoutEffect {
 
 struct CancelDebugProbeTimeoutEffect {};
 
-using RuntimeEffect =
-    std::variant<ResolveEndpointEffect, StartNetworkPathRequestEffect, StopNetworkPathRequestEffect, OpenUdpBindEffect,
-                 CloseUdpSocketEffect, SendPendingDatagramEffect, QueueReceiveEffect, ArmProtocolTimerEffect, CancelProtocolTimerEffect,
-                 QueueInnerPacketSubmissionEffect, PublishDecryptedPacketEffect, ArmDebugProbeTimeoutEffect, CancelDebugProbeTimeoutEffect>;
+using RuntimeEffect = std::variant<
+    ResolveEndpointEffect,
+    StartNetworkPathRequestEffect,
+    StopNetworkPathRequestEffect,
+    OpenUdpBindEffect,
+    CloseUdpSocketEffect,
+    SendPendingDatagramEffect,
+    QueueReceiveEffect,
+    ArmProtocolTimerEffect,
+    CancelProtocolTimerEffect,
+    QueueInnerPacketSubmissionEffect,
+    PublishDecryptedPacketEffect,
+    ArmDebugProbeTimeoutEffect,
+    CancelDebugProbeTimeoutEffect>;
 
 class EffectBatch {
   public:
@@ -340,7 +360,8 @@ inline std::size_t GetEventEffectBudget(const PeerEvent& event) {
             using Event = std::remove_cvref_t<decltype(value)>;
             return MaxEffectsForEvent<Event>();
         },
-        event);
+        event
+    );
 }
 
 inline PeerIdentity GetPeerIdentity(const PeerEvent& event) {
@@ -353,7 +374,8 @@ inline PeerIdentity GetPeerIdentity(const PeerEvent& event) {
                 return value.peer;
             }
         },
-        event);
+        event
+    );
 }
 
 } // namespace wgnx::sysmodule::runtime

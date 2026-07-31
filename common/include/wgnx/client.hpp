@@ -110,9 +110,13 @@ inline Result ListPeers(PeerInfo* out_peers, std::uint32_t max_peers, std::uint3
         return rc;
     }
 
-    return serviceDispatchOut(service.get(), static_cast<std::uint32_t>(CommandId::ListPeers), *out_count,
-                              .buffer_attrs = {SfBufferAttr_HipcMapAlias | SfBufferAttr_Out},
-                              .buffers = {{out_peers, max_peers * sizeof(PeerInfo)}}, );
+    return serviceDispatchOut(
+        service.get(),
+        static_cast<std::uint32_t>(CommandId::ListPeers),
+        *out_count,
+        .buffer_attrs = {SfBufferAttr_HipcMapAlias | SfBufferAttr_Out},
+        .buffers = {{out_peers, max_peers * sizeof(PeerInfo)}},
+    );
 }
 
 inline Result SetActivePeer(std::int32_t peer_index) {
@@ -180,17 +184,23 @@ inline Result Shutdown() {
     return serviceDispatch(service.get(), static_cast<std::uint32_t>(CommandId::Shutdown));
 }
 
-inline Result SubmitInnerIpv4Packet(ScopedService& service, const void* packet, std::size_t packet_size,
-                                    PacketSubmissionResult* out_result) {
+inline Result
+SubmitInnerIpv4Packet(ScopedService& service, const void* packet, std::size_t packet_size, PacketSubmissionResult* out_result) {
     if (!service.isOpen()) {
         return MAKERESULT(Module_Libnx, LibnxError_NotInitialized);
     }
 
     const std::uint64_t pid_placeholder = 0;
 
-    return serviceDispatchInOut(service.get(), static_cast<std::uint32_t>(CommandId::SubmitInnerIpv4Packet), pid_placeholder, *out_result,
-                                .buffer_attrs = {SfBufferAttr_HipcMapAlias | SfBufferAttr_In}, .buffers = {{packet, packet_size}},
-                                .in_send_pid = true);
+    return serviceDispatchInOut(
+        service.get(),
+        static_cast<std::uint32_t>(CommandId::SubmitInnerIpv4Packet),
+        pid_placeholder,
+        *out_result,
+        .buffer_attrs = {SfBufferAttr_HipcMapAlias | SfBufferAttr_In},
+        .buffers = {{packet, packet_size}},
+        .in_send_pid = true
+    );
 }
 
 inline Result ReceiveInnerIpv4Packet(ScopedService& service, void* packet, std::size_t packet_capacity, PacketReceiveResult* out_result) {
@@ -200,9 +210,15 @@ inline Result ReceiveInnerIpv4Packet(ScopedService& service, void* packet, std::
 
     const std::uint64_t pid_placeholder = 0;
 
-    return serviceDispatchInOut(service.get(), static_cast<std::uint32_t>(CommandId::ReceiveInnerIpv4Packet), pid_placeholder, *out_result,
-                                .buffer_attrs = {SfBufferAttr_HipcMapAlias | SfBufferAttr_Out}, .buffers = {{packet, packet_capacity}},
-                                .in_send_pid = true);
+    return serviceDispatchInOut(
+        service.get(),
+        static_cast<std::uint32_t>(CommandId::ReceiveInnerIpv4Packet),
+        pid_placeholder,
+        *out_result,
+        .buffer_attrs = {SfBufferAttr_HipcMapAlias | SfBufferAttr_Out},
+        .buffers = {{packet, packet_capacity}},
+        .in_send_pid = true
+    );
 }
 
 inline Result SubmitInnerIpv4Packet(const void* packet, std::size_t packet_size, PacketSubmissionResult* out_result) {

@@ -71,12 +71,14 @@ bool ParseSockaddr(std::span<const std::uint8_t> address, std::uint32_t header_f
 
 } // namespace
 
-bool serialize_horizon_addrinfo_hints(HorizonAddrInfoHints& output, std::int32_t flags, std::int32_t family, std::int32_t socket_type,
-                                      std::int32_t protocol) {
+bool serialize_horizon_addrinfo_hints(
+    HorizonAddrInfoHints& output, std::int32_t flags, std::int32_t family, std::int32_t socket_type, std::int32_t protocol
+) {
     constexpr std::size_t EmptyAddrSize = sizeof(std::uint32_t);
     constexpr std::size_t EmptyCanonicalNameSize = 1;
-    static_assert(HorizonAddrInfoHintsWireSize ==
-                  AddrInfoWireHeaderSize + EmptyAddrSize + EmptyCanonicalNameSize + AddrInfoListTerminatorWireSize);
+    static_assert(
+        HorizonAddrInfoHintsWireSize == AddrInfoWireHeaderSize + EmptyAddrSize + EmptyCanonicalNameSize + AddrInfoListTerminatorWireSize
+    );
     std::fill(output.begin(), output.end(), 0);
     if (!WriteBe32(output, 0, AddrInfoWireMagic) || !WriteBe32(output, 4, static_cast<std::uint32_t>(flags)) ||
         !WriteBe32(output, 8, static_cast<std::uint32_t>(family)) || !WriteBe32(output, 12, static_cast<std::uint32_t>(socket_type)) ||

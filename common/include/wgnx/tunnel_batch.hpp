@@ -9,8 +9,12 @@
 namespace wgnx::tunnel {
 
 template <typename Send>
-void DispatchUdpDatagramBatch(std::span<const DatagramDescriptor> descriptors, std::span<const std::uint8_t> payload,
-                              std::span<DatagramDisposition> dispositions, Send&& send) {
+void DispatchUdpDatagramBatch(
+    std::span<const DatagramDescriptor> descriptors,
+    std::span<const std::uint8_t> payload,
+    std::span<DatagramDisposition> dispositions,
+    Send&& send
+) {
     for (std::size_t index = 0; index < descriptors.size(); ++index) {
         const DatagramDescriptor& descriptor = descriptors[index];
         DatagramDisposition& disposition = dispositions[index];

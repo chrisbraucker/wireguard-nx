@@ -46,8 +46,12 @@ struct wg_device {
 };
 
 bool wg_device_init_from_config_entry(wg_device* device, const wgnx::PeerConfigEntry& config);
-bool wg_device_init_from_parsed_config(wg_device* device, const wgnx::PeerConfigEntry& config, const noise_private_key& local_private_key,
-                                       const noise_symmetric_key* preshared_key);
+bool wg_device_init_from_parsed_config(
+    wg_device* device,
+    const wgnx::PeerConfigEntry& config,
+    const noise_private_key& local_private_key,
+    const noise_symmetric_key* preshared_key
+);
 void wg_device_reset(wg_device* device);
 std::uint32_t wg_device_allocate_index(wg_device* device);
 void wg_device_clear_index_registry(wg_device* device);

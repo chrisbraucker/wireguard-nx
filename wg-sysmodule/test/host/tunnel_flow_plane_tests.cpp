@@ -176,7 +176,8 @@ void TestTunnelFlowPlane(TestContext& context) {
             configured_mtu_capabilities.effective_inner_mtu == 1280 && configured_mtu_capabilities.maximum_udp_payload_bytes == 1252 &&
             configured_mtu_send.status == ProtocolStatus::Success && configured_mtu_send.packet.size() == 1280 &&
             oversized_configured_mtu_send.status == ProtocolStatus::DatagramTooLarge,
-        "flow plane did not enforce the effective inner MTU at default and configured boundaries");
+        "flow plane did not enforce the effective inner MTU at default and configured boundaries"
+    );
     config.mtu = 1420;
 
     TunnelFlowPlane plane{};
@@ -186,10 +187,12 @@ void TestTunnelFlowPlane(TestContext& context) {
 
     std::array<RouteRecord, MaximumPolicyRoutes> routes{};
     const RoutingPolicySnapshot snapshot = plane.CopyRoutingPolicy(routes);
-    WGNX_TEST_REQUIRE(context,
-                      client.IsValid() && snapshot.route_count == 2 && routes[0].prefix_length == 16 && routes[1].prefix_length == 8 &&
-                          routes[0].network_address[0] == 10 && routes[0].network_address[1] == 251 && notifications.count == 1,
-                      "flow plane did not create a client context or normalize longest-prefix routes");
+    WGNX_TEST_REQUIRE(
+        context,
+        client.IsValid() && snapshot.route_count == 2 && routes[0].prefix_length == 16 && routes[1].prefix_length == 8 &&
+            routes[0].network_address[0] == 10 && routes[0].network_address[1] == 251 && notifications.count == 1,
+        "flow plane did not create a client context or normalize longest-prefix routes"
+    );
 
     const OpenConnectedUdpFlowRequest uncovered{
         .remote = {.address = {192, 0, 2, 1}, .port = 29000, .reserved = 0},
@@ -202,11 +205,13 @@ void TestTunnelFlowPlane(TestContext& context) {
     const auto uncovered_result = plane.OpenConnectedUdpFlow(client, uncovered, 110);
     const auto opened = plane.OpenConnectedUdpFlow(client, open, 120);
     const auto unavailable_result = plane.OpenConnectedUdpFlow(client, open, 125, TransportUnavailable);
-    WGNX_TEST_REQUIRE(context,
-                      uncovered_result.status == ProtocolStatus::RouteNotCovered && opened.status == ProtocolStatus::Success &&
-                          unavailable_result.status == ProtocolStatus::TransportUnavailable &&
-                          opened.peer_activation_generation == first_peer.activation_generation.Value(),
-                      "flow opening did not distinguish route coverage, availability, or peer activation");
+    WGNX_TEST_REQUIRE(
+        context,
+        uncovered_result.status == ProtocolStatus::RouteNotCovered && opened.status == ProtocolStatus::Success &&
+            unavailable_result.status == ProtocolStatus::TransportUnavailable &&
+            opened.peer_activation_generation == first_peer.activation_generation.Value(),
+        "flow opening did not distinguish route coverage, availability, or peer activation"
+    );
 
     config.leak_protection = true;
     TunnelFlowPlane protected_plane{};
@@ -214,8 +219,11 @@ void TestTunnelFlowPlane(TestContext& context) {
     const TunnelClientId protected_client = protected_plane.CreateClient(Notify, &protected_notifications);
     protected_plane.RefreshPolicy({.configuration = &config, .peer = first_peer, .selected = true}, 126);
     const auto blocked_result = protected_plane.OpenConnectedUdpFlow(protected_client, open, 127, TransportUnavailable);
-    WGNX_TEST_REQUIRE(context, blocked_result.status == ProtocolStatus::TunnelBlockedByPolicy,
-                      "leak protection did not block a covered route with unavailable tunnel transport");
+    WGNX_TEST_REQUIRE(
+        context,
+        blocked_result.status == ProtocolStatus::TunnelBlockedByPolicy,
+        "leak protection did not block a covered route with unavailable tunnel transport"
+    );
     config.leak_protection = false;
 
     constexpr std::array<std::uint8_t, 5> Payload = {'h', 'e', 'l', 'l', 'o'};
@@ -227,18 +235,22 @@ void TestTunnelFlowPlane(TestContext& context) {
     };
     const auto not_ready = plane.PrepareSend(client, descriptor, Payload, TransportUnavailable, 130);
     const auto sent = plane.PrepareSend(client, descriptor, Payload, TransportReady, 140);
-    WGNX_TEST_REQUIRE(context,
-                      not_ready.status == ProtocolStatus::TransportUnavailable && sent.status == ProtocolStatus::Success &&
-                          sent.HasPacket() && sent.packet.size() == Ipv4HeaderSize + UdpHeaderSize + Payload.size() &&
-                          sent.packet[9] == UdpProtocol &&
-                          std::equal(Payload.begin(), Payload.end(), sent.packet.begin() + Ipv4HeaderSize + UdpHeaderSize),
-                      "flow send did not enforce transport availability or construct the requested UDP payload");
+    WGNX_TEST_REQUIRE(
+        context,
+        not_ready.status == ProtocolStatus::TransportUnavailable && sent.status == ProtocolStatus::Success && sent.HasPacket() &&
+            sent.packet.size() == Ipv4HeaderSize + UdpHeaderSize + Payload.size() && sent.packet[9] == UdpProtocol &&
+            std::equal(Payload.begin(), Payload.end(), sent.packet.begin() + Ipv4HeaderSize + UdpHeaderSize),
+        "flow send did not enforce transport availability or construct the requested UDP payload"
+    );
 
     std::array<std::uint8_t, wgnx::MaxInnerIpv4PacketSize> reply{};
     const std::size_t reply_size = BuildReply(reply, sent.packet, Payload);
     plane.ReleasePreparedDatagram(sent);
-    const auto foreign = plane.DeliverDecryptedIpv4Packet({.peer_index = PeerIndex{0}, .activation_generation = ActivationGeneration{8}},
-                                                          std::span<const std::uint8_t>(reply.data(), reply_size), 149);
+    const auto foreign = plane.DeliverDecryptedIpv4Packet(
+        {.peer_index = PeerIndex{0}, .activation_generation = ActivationGeneration{8}},
+        std::span<const std::uint8_t>(reply.data(), reply_size),
+        149
+    );
     reply[Ipv4HeaderSize + 6] ^= 0xFFU;
     const auto malformed = plane.DeliverDecryptedIpv4Packet(first_peer, std::span<const std::uint8_t>(reply.data(), reply_size), 149);
     reply[Ipv4HeaderSize + 6] ^= 0xFFU;
@@ -246,15 +258,16 @@ void TestTunnelFlowPlane(TestContext& context) {
     std::array<CompletionRecord, MaximumBatchEntries> completions{};
     std::array<std::uint8_t, MaximumUdpPayloadStorageBytes> received_payload{};
     const auto received = plane.ReceiveCompletions(client, completions, received_payload);
-    WGNX_TEST_REQUIRE(context,
-                      reply_size != 0 && foreign.disposition == TunnelInboundDisposition::NotClaimed &&
-                          malformed.disposition == TunnelInboundDisposition::DroppedMalformed &&
-                          delivered.disposition == TunnelInboundDisposition::Delivered && received.status == ProtocolStatus::Success &&
-                          received.count >= 1 && completions[0].type == CompletionType::PolicyChanged &&
-                          completions[1].type == CompletionType::InboundDatagram && completions[1].flow.value == opened.flow.value &&
-                          completions[1].payload_size == Payload.size() &&
-                          std::equal(Payload.begin(), Payload.end(), received_payload.begin()),
-                      "flow receive did not retain the policy edge and matching UDP reply in completion order");
+    WGNX_TEST_REQUIRE(
+        context,
+        reply_size != 0 && foreign.disposition == TunnelInboundDisposition::NotClaimed &&
+            malformed.disposition == TunnelInboundDisposition::DroppedMalformed &&
+            delivered.disposition == TunnelInboundDisposition::Delivered && received.status == ProtocolStatus::Success &&
+            received.count >= 1 && completions[0].type == CompletionType::PolicyChanged &&
+            completions[1].type == CompletionType::InboundDatagram && completions[1].flow.value == opened.flow.value &&
+            completions[1].payload_size == Payload.size() && std::equal(Payload.begin(), Payload.end(), received_payload.begin()),
+        "flow receive did not retain the policy edge and matching UDP reply in completion order"
+    );
 
     const auto second_send = plane.PrepareSend(client, descriptor, Payload, TransportReady, 160);
     const std::size_t second_reply_size = BuildReply(reply, second_send.packet, Payload);
@@ -263,10 +276,12 @@ void TestTunnelFlowPlane(TestContext& context) {
     std::array<std::uint8_t, 1> too_small{};
     const auto insufficient = plane.ReceiveCompletions(client, completions, too_small);
     const auto after_insufficient = plane.ReceiveCompletions(client, completions, received_payload);
-    WGNX_TEST_REQUIRE(context,
-                      insufficient.status == ProtocolStatus::OutputBufferTooSmall && after_insufficient.status == ProtocolStatus::Success &&
-                          after_insufficient.count == 1 && completions[0].type == CompletionType::InboundDatagram,
-                      "completion draining emitted a partial datagram or lost it after an undersized buffer");
+    WGNX_TEST_REQUIRE(
+        context,
+        insufficient.status == ProtocolStatus::OutputBufferTooSmall && after_insufficient.status == ProtocolStatus::Success &&
+            after_insufficient.count == 1 && completions[0].type == CompletionType::InboundDatagram,
+        "completion draining emitted a partial datagram or lost it after an undersized buffer"
+    );
 
     const auto staging_full = plane.PrepareSend(client, descriptor, Payload, StagingFull, 175);
     plane.NotifyOutboundCapacityAvailable(first_peer);
@@ -275,29 +290,36 @@ void TestTunnelFlowPlane(TestContext& context) {
     const auto retried_send = plane.PrepareSend(client, descriptor, Payload, TransportReady, 176);
     plane.CompleteSend(retried_send, ProtocolStatus::Success);
     plane.ReleasePreparedDatagram(retried_send);
-    WGNX_TEST_REQUIRE(context,
-                      staging_full.status == ProtocolStatus::QueueFull && writable.status == ProtocolStatus::Success &&
-                          writable.count == 1 && completions[0].type == CompletionType::Writable &&
-                          completions[0].flow.value == opened.flow.value && retried_send.status == ProtocolStatus::Success &&
-                          notifications.count == 3,
-                      "staging pressure did not report one coalesced writable transition and a successful retry without packet loss");
+    WGNX_TEST_REQUIRE(
+        context,
+        staging_full.status == ProtocolStatus::QueueFull && writable.status == ProtocolStatus::Success && writable.count == 1 &&
+            completions[0].type == CompletionType::Writable && completions[0].flow.value == opened.flow.value &&
+            retried_send.status == ProtocolStatus::Success && notifications.count == 3,
+        "staging pressure did not report one coalesced writable transition and a successful retry without packet loss"
+    );
 
     const auto close_status = plane.CloseFlow(client, opened.flow, 180);
     const auto delayed = plane.DeliverDecryptedIpv4Packet(first_peer, std::span<const std::uint8_t>(reply.data(), second_reply_size), 181);
     const auto replacement = plane.OpenConnectedUdpFlow(client, open, 182);
-    WGNX_TEST_REQUIRE(context,
-                      close_status == ProtocolStatus::Success && delayed.disposition == TunnelInboundDisposition::DroppedStale &&
-                          replacement.status == ProtocolStatus::Success && replacement.flow.value != opened.flow.value,
-                      "released reverse tuples were not quarantined before flow reuse");
+    WGNX_TEST_REQUIRE(
+        context,
+        close_status == ProtocolStatus::Success && delayed.disposition == TunnelInboundDisposition::DroppedStale &&
+            replacement.status == ProtocolStatus::Success && replacement.flow.value != opened.flow.value,
+        "released reverse tuples were not quarantined before flow reuse"
+    );
 
-    plane.RefreshPolicy({.configuration = &config,
-                         .peer = {.peer_index = PeerIndex{0}, .activation_generation = ActivationGeneration{8}},
-                         .selected = true},
-                        190);
+    plane.RefreshPolicy(
+        {.configuration = &config,
+         .peer = {.peer_index = PeerIndex{0}, .activation_generation = ActivationGeneration{8}},
+         .selected = true},
+        190
+    );
     const auto stale_state = plane.GetFlowState(client, replacement.flow);
     WGNX_TEST_REQUIRE(
-        context, stale_state.status == ProtocolStatus::FlowClosed && stale_state.terminal_reason == FlowTerminalReason::PolicyInvalidated,
-        "peer activation transition did not close the old flow with a terminal state");
+        context,
+        stale_state.status == ProtocolStatus::FlowClosed && stale_state.terminal_reason == FlowTerminalReason::PolicyInvalidated,
+        "peer activation transition did not close the old flow with a terminal state"
+    );
 
     TunnelFlowPlane client_reuse_plane{};
     const TunnelClientId first_reuse_client = client_reuse_plane.CreateClient(nullptr, nullptr);
@@ -329,18 +351,22 @@ void TestTunnelFlowPlane(TestContext& context) {
     const std::size_t second_reuse_reply_size = BuildReply(reply, second_reuse_send.packet, Payload);
     client_reuse_plane.ReleasePreparedDatagram(second_reuse_send);
     const auto second_reuse_delivery = client_reuse_plane.DeliverDecryptedIpv4Packet(
-        first_peer, std::span<const std::uint8_t>(reply.data(), second_reuse_reply_size), 206);
+        first_peer,
+        std::span<const std::uint8_t>(reply.data(), second_reuse_reply_size),
+        206
+    );
     const auto second_reuse_received = client_reuse_plane.ReceiveCompletions(second_reuse_client, completions, received_payload);
-    WGNX_TEST_REQUIRE(context,
-                      first_reuse_flow.status == ProtocolStatus::Success && first_reuse_send.status == ProtocolStatus::Success &&
-                          first_reuse_close == ProtocolStatus::Success && second_reuse_flow.status == ProtocolStatus::Success &&
-                          second_reuse_send.status == ProtocolStatus::Success && first_reuse_port != second_reuse_port &&
-                          second_reuse_delivery.disposition == TunnelInboundDisposition::Delivered &&
-                          second_reuse_received.status == ProtocolStatus::Success && second_reuse_received.count == 1 &&
-                          completions[0].type == CompletionType::InboundDatagram &&
-                          completions[0].flow.value == second_reuse_flow.flow.value &&
-                          std::equal(Payload.begin(), Payload.end(), received_payload.begin()),
-                      "a fresh client flow did not receive its reply after a prior client closed the same remote tuple");
+    WGNX_TEST_REQUIRE(
+        context,
+        first_reuse_flow.status == ProtocolStatus::Success && first_reuse_send.status == ProtocolStatus::Success &&
+            first_reuse_close == ProtocolStatus::Success && second_reuse_flow.status == ProtocolStatus::Success &&
+            second_reuse_send.status == ProtocolStatus::Success && first_reuse_port != second_reuse_port &&
+            second_reuse_delivery.disposition == TunnelInboundDisposition::Delivered &&
+            second_reuse_received.status == ProtocolStatus::Success && second_reuse_received.count == 1 &&
+            completions[0].type == CompletionType::InboundDatagram && completions[0].flow.value == second_reuse_flow.flow.value &&
+            std::equal(Payload.begin(), Payload.end(), received_payload.begin()),
+        "a fresh client flow did not receive its reply after a prior client closed the same remote tuple"
+    );
 
     std::array<TunnelClientId, MaximumClientContexts - 1> extra_clients{};
     bool all_extra_created = true;
@@ -348,16 +374,21 @@ void TestTunnelFlowPlane(TestContext& context) {
         extra = plane.CreateClient(nullptr, nullptr);
         all_extra_created = all_extra_created && extra.IsValid();
     }
-    WGNX_TEST_REQUIRE(context, all_extra_created && !plane.CreateClient(nullptr, nullptr).IsValid(),
-                      "logical client contexts exceeded the fixed global limit");
+    WGNX_TEST_REQUIRE(
+        context,
+        all_extra_created && !plane.CreateClient(nullptr, nullptr).IsValid(),
+        "logical client contexts exceeded the fixed global limit"
+    );
 
     const TunnelClientId released_client = extra_clients.front();
     plane.DestroyClient(released_client, 195);
     const TunnelClientId recycled_client = plane.CreateClient(nullptr, nullptr);
-    WGNX_TEST_REQUIRE(context,
-                      recycled_client.IsValid() && recycled_client.slot == released_client.slot &&
-                          recycled_client.generation != released_client.generation,
-                      "destroyed tunnel client contexts were not returned with a stale-safe generation");
+    WGNX_TEST_REQUIRE(
+        context,
+        recycled_client.IsValid() && recycled_client.slot == released_client.slot &&
+            recycled_client.generation != released_client.generation,
+        "destroyed tunnel client contexts were not returned with a stale-safe generation"
+    );
 
     TunnelFlowPlane shutdown_plane{};
     NotificationCounter first_shutdown_notification{};
@@ -367,12 +398,13 @@ void TestTunnelFlowPlane(TestContext& context) {
     const std::uint32_t shutdown_signaled = shutdown_plane.SignalAllClientCompletionEvents();
     const auto first_shutdown_drain = shutdown_plane.ReceiveCompletions(first_shutdown_client, completions, received_payload);
     const auto second_shutdown_drain = shutdown_plane.ReceiveCompletions(second_shutdown_client, completions, received_payload);
-    WGNX_TEST_REQUIRE(context,
-                      first_shutdown_client.IsValid() && second_shutdown_client.IsValid() && shutdown_signaled == 2 &&
-                          first_shutdown_notification.count == 1 && second_shutdown_notification.count == 1 &&
-                          first_shutdown_drain.status == ProtocolStatus::QueueEmpty &&
-                          second_shutdown_drain.status == ProtocolStatus::QueueEmpty,
-                      "sysmodule shutdown did not wake every tunnel client without fabricating completion records");
+    WGNX_TEST_REQUIRE(
+        context,
+        first_shutdown_client.IsValid() && second_shutdown_client.IsValid() && shutdown_signaled == 2 &&
+            first_shutdown_notification.count == 1 && second_shutdown_notification.count == 1 &&
+            first_shutdown_drain.status == ProtocolStatus::QueueEmpty && second_shutdown_drain.status == ProtocolStatus::QueueEmpty,
+        "sysmodule shutdown did not wake every tunnel client without fabricating completion records"
+    );
 
     TunnelFlowPlane bounded_plane{};
     const TunnelClientId bounded_client = bounded_plane.CreateClient(nullptr, nullptr);
@@ -406,14 +438,19 @@ void TestTunnelFlowPlane(TestContext& context) {
         const std::size_t bounded_reply_size = BuildReply(reply, outbound.packet, Payload);
         bounded_plane.ReleasePreparedDatagram(outbound);
         const auto inbound = bounded_plane.DeliverDecryptedIpv4Packet(
-            first_peer, std::span<const std::uint8_t>(reply.data(), bounded_reply_size), 220 + sequence);
+            first_peer,
+            std::span<const std::uint8_t>(reply.data(), bounded_reply_size),
+            220 + sequence
+        );
         delivered_count += inbound.disposition == TunnelInboundDisposition::Delivered ? 1U : 0U;
         dropped_count += inbound.disposition == TunnelInboundDisposition::DroppedQueueFull ? 1U : 0U;
     }
-    bounded_plane.RefreshPolicy({.configuration = &config,
-                                 .peer = {.peer_index = PeerIndex{0}, .activation_generation = ActivationGeneration{9}},
-                                 .selected = true},
-                                230);
+    bounded_plane.RefreshPolicy(
+        {.configuration = &config,
+         .peer = {.peer_index = PeerIndex{0}, .activation_generation = ActivationGeneration{9}},
+         .selected = true},
+        230
+    );
     const auto bounded_drain = bounded_plane.ReceiveCompletions(bounded_client, completions, received_payload);
     bool terminal_seen = false;
     for (std::uint32_t index = 0; index < bounded_drain.count; ++index) {
@@ -423,7 +460,8 @@ void TestTunnelFlowPlane(TestContext& context) {
         context,
         invalid_port_result.status == ProtocolStatus::MalformedInput && all_bounded_flows_opened && delivered_count == 7 &&
             dropped_count == 1 && bounded_drain.status == ProtocolStatus::Success && terminal_seen,
-        "flow plane did not enforce invalid ports, bounded inbound completion pressure, or terminal notification reservation");
+        "flow plane did not enforce invalid ports, bounded inbound completion pressure, or terminal notification reservation"
+    );
 
     TunnelFlowPlane quarantine_plane{};
     std::array<TunnelClientId, MaximumClientContexts> quarantine_clients{};
@@ -441,15 +479,17 @@ void TestTunnelFlowPlane(TestContext& context) {
     }
     for (std::size_t index = 0; index < quarantine_flows.size(); ++index) {
         static_cast<void>(
-            quarantine_plane.CloseFlow(quarantine_clients[index / MaximumFlowsPerClient], quarantine_flows[index], 400 + index));
+            quarantine_plane.CloseFlow(quarantine_clients[index / MaximumFlowsPerClient], quarantine_flows[index], 400 + index)
+        );
     }
     const auto exhausted = quarantine_plane.OpenConnectedUdpFlow(quarantine_clients[0], open, 500);
     const auto after_expiry =
         quarantine_plane.OpenConnectedUdpFlow(quarantine_clients[0], open, 500 + TunnelFlowPlane::ReverseTupleQuarantineNs + 1);
-    WGNX_TEST_REQUIRE(context,
-                      all_tuples_opened && exhausted.status == ProtocolStatus::ReverseTupleExhausted &&
-                          after_expiry.status == ProtocolStatus::Success,
-                      "tuple tombstones did not reserve close capacity or reject reuse until their fixed quarantine expired");
+    WGNX_TEST_REQUIRE(
+        context,
+        all_tuples_opened && exhausted.status == ProtocolStatus::ReverseTupleExhausted && after_expiry.status == ProtocolStatus::Success,
+        "tuple tombstones did not reserve close capacity or reject reuse until their fixed quarantine expired"
+    );
 }
 
 } // namespace wgnx::test

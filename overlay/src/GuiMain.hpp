@@ -45,8 +45,9 @@ class GuiMain : public tsl::Gui {
 
     virtual tsl::elm::Element* createUI();
     virtual void update() override;
-    virtual bool handleInput(u64 keysDown, u64 keysHeld, const HidTouchState& touchPos, HidAnalogStickState leftJoyStick,
-                             HidAnalogStickState rightJoyStick) override;
+    virtual bool handleInput(
+        u64 keysDown, u64 keysHeld, const HidTouchState& touchPos, HidAnalogStickState leftJoyStick, HidAnalogStickState rightJoyStick
+    ) override;
 
   private:
     bool smIsRunning();

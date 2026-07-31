@@ -13,11 +13,15 @@ int main() {
     using wgnx::test::TestCase;
 
     const std::array tests = {
-        TestCase{"legacy.message-boundaries",
-                 [](wgnx::test::TestContext& context) { WGNX_TEST_CHECK(context, wgnx::wireguard::RunMessageSelfTest()); }},
+        TestCase{
+            "legacy.message-boundaries",
+            [](wgnx::test::TestContext& context) { WGNX_TEST_CHECK(context, wgnx::wireguard::RunMessageSelfTest()); }
+        },
         TestCase{"crypto.primitives", wgnx::test::TestCryptoPrimitives},
-        TestCase{"legacy.core-smoke",
-                 [](wgnx::test::TestContext& context) { WGNX_TEST_CHECK(context, wgnx::wireguard::RunCoreSelfTest()); }},
+        TestCase{
+            "legacy.core-smoke",
+            [](wgnx::test::TestContext& context) { WGNX_TEST_CHECK(context, wgnx::wireguard::RunCoreSelfTest()); }
+        },
         TestCase{"platform.network-path-classification", wgnx::test::TestNetworkPathClassification},
         TestCase{"platform.udp-receive-classification", wgnx::test::TestUdpReceiveClassification},
         TestCase{"platform.workqueue-admission", wgnx::test::TestWorkqueueAdmission},

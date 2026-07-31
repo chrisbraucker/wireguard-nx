@@ -14,15 +14,17 @@ namespace wgnx::test {
 void TestNetworkPathClassification(TestContext& context) {
     using namespace wgnx::platform;
 
-    WGNX_TEST_REQUIRE(context,
-                      classify_network_path_state(network_path_raw_state::available) == network_path_availability::available &&
-                          classify_network_path_state(network_path_raw_state::on_hold) == network_path_availability::unavailable &&
-                          classify_network_path_state(network_path_raw_state::pending) == network_path_availability::unavailable &&
-                          classify_network_path_state(network_path_raw_state::invalid) == network_path_availability::unknown &&
-                          classify_network_path_state(network_path_raw_state::unknown4) == network_path_availability::unknown &&
-                          classify_network_path_state(network_path_raw_state::unknown5) == network_path_availability::unknown &&
-                          classify_network_path_state(network_path_raw_state::available, 1) == network_path_availability::unknown,
-                      "NIFM request states did not preserve the local-path authority model");
+    WGNX_TEST_REQUIRE(
+        context,
+        classify_network_path_state(network_path_raw_state::available) == network_path_availability::available &&
+            classify_network_path_state(network_path_raw_state::on_hold) == network_path_availability::unavailable &&
+            classify_network_path_state(network_path_raw_state::pending) == network_path_availability::unavailable &&
+            classify_network_path_state(network_path_raw_state::invalid) == network_path_availability::unknown &&
+            classify_network_path_state(network_path_raw_state::unknown4) == network_path_availability::unknown &&
+            classify_network_path_state(network_path_raw_state::unknown5) == network_path_availability::unknown &&
+            classify_network_path_state(network_path_raw_state::available, 1) == network_path_availability::unknown,
+        "NIFM request states did not preserve the local-path authority model"
+    );
 }
 
 void TestUdpReceiveClassification(TestContext& context) {
@@ -34,19 +36,22 @@ void TestUdpReceiveClassification(TestContext& context) {
         .address = {10, 13, 13, 1},
     };
     const auto datagram = classify_udp_receive_result(32, udp_receive_native_condition::none, 0, source);
-    WGNX_TEST_REQUIRE(context,
-                      datagram.disposition == udp_receive_disposition::datagram && datagram.bytes_received == 32 &&
-                          datagram.source.family == address_family::inet && datagram.source.port == 51820 &&
-                          datagram.source.address[0] == 10 && datagram.source.address[1] == 13 && datagram.source.address[2] == 13 &&
-                          datagram.source.address[3] == 1 && datagram.error == socket_error::none && datagram.native_result == 32 &&
-                          datagram.native_error == 0,
-                      "successful receive did not preserve datagram facts");
+    WGNX_TEST_REQUIRE(
+        context,
+        datagram.disposition == udp_receive_disposition::datagram && datagram.bytes_received == 32 &&
+            datagram.source.family == address_family::inet && datagram.source.port == 51820 && datagram.source.address[0] == 10 &&
+            datagram.source.address[1] == 13 && datagram.source.address[2] == 13 && datagram.source.address[3] == 1 &&
+            datagram.error == socket_error::none && datagram.native_result == 32 && datagram.native_error == 0,
+        "successful receive did not preserve datagram facts"
+    );
 
     const auto empty_datagram = classify_udp_receive_result(0, udp_receive_native_condition::none, 0, source);
-    WGNX_TEST_REQUIRE(context,
-                      empty_datagram.disposition == udp_receive_disposition::datagram && empty_datagram.bytes_received == 0 &&
-                          empty_datagram.source.port == 51820 && empty_datagram.error == socket_error::none,
-                      "zero-length UDP datagram was conflated with a retry");
+    WGNX_TEST_REQUIRE(
+        context,
+        empty_datagram.disposition == udp_receive_disposition::datagram && empty_datagram.bytes_received == 0 &&
+            empty_datagram.source.port == 51820 && empty_datagram.error == socket_error::none,
+        "zero-length UDP datagram was conflated with a retry"
+    );
 
     constexpr std::array RetryConditions{
         udp_receive_native_condition::would_block,
@@ -66,40 +71,46 @@ void TestUdpReceiveClassification(TestContext& context) {
                 retry.native_condition == RetryConditions[index] && retry.bytes_received == 0 &&
                 retry.source.family == address_family::unspecified && retry.error == socket_error::none && retry.native_result == -1 &&
                 retry.native_error == NativeErrors[index] && !udp_receive_retry_requires_pacing(retry),
-            "retryable receive did not preserve its closed outcome");
+            "retryable receive did not preserve its closed outcome"
+        );
     }
 
     const auto missing_errno = classify_udp_receive_result(-1, udp_receive_native_condition::none, 0, source);
-    WGNX_TEST_REQUIRE(context,
-                      missing_errno.disposition == udp_receive_disposition::retry &&
-                          missing_errno.retry_reason == udp_receive_retry_reason::missing_native_error &&
-                          missing_errno.native_condition == udp_receive_native_condition::none && missing_errno.bytes_received == 0 &&
-                          missing_errno.source.family == address_family::unspecified && missing_errno.error == socket_error::none &&
-                          missing_errno.native_result == -1 && missing_errno.native_error == 0 &&
-                          udp_receive_retry_requires_pacing(missing_errno),
-                      "negative receive without a native error did not become a paced retry");
+    WGNX_TEST_REQUIRE(
+        context,
+        missing_errno.disposition == udp_receive_disposition::retry &&
+            missing_errno.retry_reason == udp_receive_retry_reason::missing_native_error &&
+            missing_errno.native_condition == udp_receive_native_condition::none && missing_errno.bytes_received == 0 &&
+            missing_errno.source.family == address_family::unspecified && missing_errno.error == socket_error::none &&
+            missing_errno.native_result == -1 && missing_errno.native_error == 0 && udp_receive_retry_requires_pacing(missing_errno),
+        "negative receive without a native error did not become a paced retry"
+    );
 
     const auto failure = classify_udp_receive_result(-1, udp_receive_native_condition::other, 54, source);
-    WGNX_TEST_REQUIRE(context,
-                      failure.disposition == udp_receive_disposition::failure && failure.retry_reason == udp_receive_retry_reason::none &&
-                          failure.native_condition == udp_receive_native_condition::other && failure.bytes_received == 0 &&
-                          failure.source.family == address_family::unspecified && failure.error == socket_error::receive_failed &&
-                          failure.native_result == -1 && failure.native_error == 54,
-                      "terminal receive did not preserve failure diagnostics");
+    WGNX_TEST_REQUIRE(
+        context,
+        failure.disposition == udp_receive_disposition::failure && failure.retry_reason == udp_receive_retry_reason::none &&
+            failure.native_condition == udp_receive_native_condition::other && failure.bytes_received == 0 &&
+            failure.source.family == address_family::unspecified && failure.error == socket_error::receive_failed &&
+            failure.native_result == -1 && failure.native_error == 54,
+        "terminal receive did not preserve failure diagnostics"
+    );
 }
 
 void TestWorkqueueAdmission(TestContext& context) {
     using wgnx::platform::classify_queue_work_request;
     using wgnx::platform::queue_work_result;
 
-    WGNX_TEST_REQUIRE(context,
-                      classify_queue_work_request(true, false, false, 0, 1) == queue_work_result::queued &&
-                          classify_queue_work_request(true, false, true, 0, 1) == queue_work_result::rerun_queued &&
-                          classify_queue_work_request(true, true, false, 1, 1) == queue_work_result::already_pending &&
-                          classify_queue_work_request(true, false, false, 1, 1) == queue_work_result::capacity_exhausted &&
-                          classify_queue_work_request(false, false, false, 0, 1) == queue_work_result::unavailable &&
-                          classify_queue_work_request(true, false, false, 0, 0) == queue_work_result::unavailable,
-                      "ordered workqueue admission did not expose its closed pressure outcomes");
+    WGNX_TEST_REQUIRE(
+        context,
+        classify_queue_work_request(true, false, false, 0, 1) == queue_work_result::queued &&
+            classify_queue_work_request(true, false, true, 0, 1) == queue_work_result::rerun_queued &&
+            classify_queue_work_request(true, true, false, 1, 1) == queue_work_result::already_pending &&
+            classify_queue_work_request(true, false, false, 1, 1) == queue_work_result::capacity_exhausted &&
+            classify_queue_work_request(false, false, false, 0, 1) == queue_work_result::unavailable &&
+            classify_queue_work_request(true, false, false, 0, 0) == queue_work_result::unavailable,
+        "ordered workqueue admission did not expose its closed pressure outcomes"
+    );
 }
 
 void TestResolverSerialization(TestContext& context) {
@@ -169,9 +180,11 @@ void TestResolverSerialization(TestContext& context) {
         !parse_horizon_addrinfo_result(malformed_family, parsed) && !parse_horizon_addrinfo_result(malformed_trailing_record, parsed) &&
         !parse_horizon_addrinfo_result(std::span<const std::uint8_t>{ipv4_record}.first(12), parsed);
 
-    WGNX_TEST_REQUIRE(context,
-                      hints_ok && ipv4_ok && zero_length_ipv4_ok && ipv6_ok && multiple_records_ok && terminator_ok && malformed_rejected,
-                      "resolver serialization did not preserve the documented Horizon ABI or reject malformed records");
+    WGNX_TEST_REQUIRE(
+        context,
+        hints_ok && ipv4_ok && zero_length_ipv4_ok && ipv6_ok && multiple_records_ok && terminator_ok && malformed_rejected,
+        "resolver serialization did not preserve the documented Horizon ABI or reject malformed records"
+    );
 }
 
 } // namespace wgnx::test

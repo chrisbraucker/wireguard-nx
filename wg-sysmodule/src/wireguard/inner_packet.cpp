@@ -174,8 +174,8 @@ InnerIpv4ValidationError ValidatePaddedInnerIpv4Packet(std::span<const std::uint
     return InnerIpv4ValidationError::None;
 }
 
-InnerIpValidationError ValidatePaddedInnerIpPacket(std::span<const std::uint8_t> payload, std::size_t* out_packet_size,
-                                                   InnerIpVersion* out_version) {
+InnerIpValidationError
+ValidatePaddedInnerIpPacket(std::span<const std::uint8_t> payload, std::size_t* out_packet_size, InnerIpVersion* out_version) {
     if (out_packet_size == nullptr) {
         return InnerIpv4ValidationError::LengthMismatch;
     }

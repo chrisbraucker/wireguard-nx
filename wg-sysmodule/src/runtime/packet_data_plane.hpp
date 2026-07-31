@@ -80,24 +80,38 @@ class PacketDataPlane {
   public:
     PacketDataPlane(RuntimeCoordinator& coordinator, PacketTransport& transport) : m_coordinator(coordinator), m_transport(transport) {}
 
-    [[nodiscard]] PacketSubmissionOutcome SubmitIpPacket(std::span<const std::uint8_t> packet, ProcessId consumer_id,
-                                                         const TimerFacts& timer_facts, wgnx::platform::ktime_t occurred_at,
-                                                         EffectBatch& out_effects);
-    [[nodiscard]] PacketSubmissionOutcome SubmitIpv4Packet(std::span<const std::uint8_t> packet, ProcessId consumer_id,
-                                                           const TimerFacts& timer_facts, wgnx::platform::ktime_t occurred_at,
-                                                           EffectBatch& out_effects);
-    [[nodiscard]] PacketSubmissionOutcome SubmitInternalIpPacket(std::span<const std::uint8_t> packet, const TimerFacts& timer_facts,
-                                                                 wgnx::platform::ktime_t occurred_at, EffectBatch& out_effects);
+    [[nodiscard]] PacketSubmissionOutcome SubmitIpPacket(
+        std::span<const std::uint8_t> packet,
+        ProcessId consumer_id,
+        const TimerFacts& timer_facts,
+        wgnx::platform::ktime_t occurred_at,
+        EffectBatch& out_effects
+    );
+    [[nodiscard]] PacketSubmissionOutcome SubmitIpv4Packet(
+        std::span<const std::uint8_t> packet,
+        ProcessId consumer_id,
+        const TimerFacts& timer_facts,
+        wgnx::platform::ktime_t occurred_at,
+        EffectBatch& out_effects
+    );
+    [[nodiscard]] PacketSubmissionOutcome SubmitInternalIpPacket(
+        std::span<const std::uint8_t> packet, const TimerFacts& timer_facts, wgnx::platform::ktime_t occurred_at, EffectBatch& out_effects
+    );
 
     [[nodiscard]] PacketDeliveryOutcome DeliverDecryptedPacket(const PeerIdentity& peer, std::span<const std::uint8_t> packet);
     [[nodiscard]] PacketReceiveOutcome ReceivePacket(std::span<std::uint8_t> packet, ProcessId consumer_id);
     [[nodiscard]] PacketClearOutcome Clear();
 
   private:
-    PacketSubmissionOutcome SubmitValidatedPacket(std::span<const std::uint8_t> packet, ProcessId consumer_id,
-                                                  const TimerFacts& timer_facts, wgnx::platform::ktime_t occurred_at,
-                                                  wireguard::InnerIpValidationError validation, bool claim_transport,
-                                                  EffectBatch& out_effects);
+    PacketSubmissionOutcome SubmitValidatedPacket(
+        std::span<const std::uint8_t> packet,
+        ProcessId consumer_id,
+        const TimerFacts& timer_facts,
+        wgnx::platform::ktime_t occurred_at,
+        wireguard::InnerIpValidationError validation,
+        bool claim_transport,
+        EffectBatch& out_effects
+    );
     PacketId AllocatePacketId();
 
     RuntimeCoordinator& m_coordinator;

@@ -27,13 +27,17 @@ void DestroyTunnelClient(TunnelClientId client);
 std::uint32_t SignalTunnelClientShutdown();
 wgnx::tunnel::Capabilities GetTunnelCapabilities();
 wgnx::tunnel::RoutingPolicySnapshot CopyTunnelRoutingPolicy(std::span<wgnx::tunnel::RouteRecord> out);
-wgnx::tunnel::OpenConnectedUdpFlowResult OpenTunnelConnectedUdpFlow(TunnelClientId client,
-                                                                    const wgnx::tunnel::OpenConnectedUdpFlowRequest& request);
-wgnx::tunnel::ProtocolStatus SendTunnelUdpDatagram(TunnelClientId client, const wgnx::tunnel::DatagramDescriptor& descriptor,
-                                                   std::span<const std::uint8_t> payload);
-TunnelCompletionDrainOutcome ReceiveTunnelCompletions(TunnelClientId client, std::span<wgnx::tunnel::CompletionRecord> records,
-                                                      std::span<std::uint8_t> payload, TunnelFlowPlane::CompletionNotifier clear_notifier,
-                                                      void* clear_context);
+wgnx::tunnel::OpenConnectedUdpFlowResult
+OpenTunnelConnectedUdpFlow(TunnelClientId client, const wgnx::tunnel::OpenConnectedUdpFlowRequest& request);
+wgnx::tunnel::ProtocolStatus
+SendTunnelUdpDatagram(TunnelClientId client, const wgnx::tunnel::DatagramDescriptor& descriptor, std::span<const std::uint8_t> payload);
+TunnelCompletionDrainOutcome ReceiveTunnelCompletions(
+    TunnelClientId client,
+    std::span<wgnx::tunnel::CompletionRecord> records,
+    std::span<std::uint8_t> payload,
+    TunnelFlowPlane::CompletionNotifier clear_notifier,
+    void* clear_context
+);
 wgnx::tunnel::FlowStateResult GetTunnelFlowState(TunnelClientId client, wgnx::tunnel::FlowHandle flow);
 wgnx::tunnel::ProtocolStatus CloseTunnelFlow(TunnelClientId client, wgnx::tunnel::FlowHandle flow);
 

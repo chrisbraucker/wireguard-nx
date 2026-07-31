@@ -12,7 +12,8 @@ namespace wgnx::sysmodule::platform::horizon {
 namespace {
 
 alignas(
-    ams::os::ThreadStackAlignment) constinit std::array<std::byte, wgnx::resource_budget::NifmPathThreadStackBytes> g_network_path_stack{};
+    ams::os::ThreadStackAlignment
+) constinit std::array<std::byte, wgnx::resource_budget::NifmPathThreadStackBytes> g_network_path_stack{};
 
 NifmRequest* Request(std::array<std::byte, 96>& storage) {
     static_assert(sizeof(NifmRequest) <= 96);
@@ -119,8 +120,16 @@ bool NetworkPathService::Start(std::uint32_t request_generation, ObservationCall
     m_available = false;
     m_stopping.store(false, std::memory_order_release);
     m_request_open = true;
-    R_ABORT_UNLESS(ams::os::CreateThread(std::addressof(m_thread), ThreadMain, this, g_network_path_stack.data(),
-                                         g_network_path_stack.size(), ams::os::DefaultThreadPriority));
+    R_ABORT_UNLESS(
+        ams::os::CreateThread(
+            std::addressof(m_thread),
+            ThreadMain,
+            this,
+            g_network_path_stack.data(),
+            g_network_path_stack.size(),
+            ams::os::DefaultThreadPriority
+        )
+    );
     ams::os::SetThreadNamePointer(std::addressof(m_thread), "wgnx-nifm");
     ams::os::StartThread(std::addressof(m_thread));
     m_thread_started = true;

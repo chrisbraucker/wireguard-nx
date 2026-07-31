@@ -76,9 +76,9 @@ struct udp_receive_result {
     std::uint32_t native_error{0};
 };
 
-[[nodiscard]] constexpr udp_receive_result classify_udp_receive_result(std::int64_t native_result,
-                                                                       udp_receive_native_condition native_condition,
-                                                                       std::uint32_t native_error, const endpoint& source = {}) {
+[[nodiscard]] constexpr udp_receive_result classify_udp_receive_result(
+    std::int64_t native_result, udp_receive_native_condition native_condition, std::uint32_t native_error, const endpoint& source = {}
+) {
     if (native_result >= 0) {
         return {
             .disposition = udp_receive_disposition::datagram,

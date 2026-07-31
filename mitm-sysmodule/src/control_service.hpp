@@ -14,12 +14,39 @@ struct MitmStatus {
 } // namespace wgnx::mitm
 
 #define WGNX_I_MITM_CONTROL_SERVICE_INTERFACE_INFO(C, H)                                                                                   \
-    AMS_SF_METHOD_INFO(C, H, 0, ams::Result, GetStatus, (ams::sf::Out<wgnx::mitm::MitmStatus> out), (out), ams::hos::Version_Min,          \
-                       ams::hos::Version_Max)                                                                                              \
-    AMS_SF_METHOD_INFO(C, H, 1, ams::Result, SetBsdSystemPolicyEnabled, (bool enabled), (enabled), ams::hos::Version_Min,                  \
-                       ams::hos::Version_Max)                                                                                              \
-    AMS_SF_METHOD_INFO(C, H, 2, ams::Result, SetBsdSystemClientEnabled, (std::uint32_t client, bool enabled), (client, enabled),           \
-                       ams::hos::Version_Min, ams::hos::Version_Max)                                                                       \
+    AMS_SF_METHOD_INFO(                                                                                                                    \
+        C,                                                                                                                                 \
+        H,                                                                                                                                 \
+        0,                                                                                                                                 \
+        ams::Result,                                                                                                                       \
+        GetStatus,                                                                                                                         \
+        (ams::sf::Out<wgnx::mitm::MitmStatus> out),                                                                                        \
+        (out),                                                                                                                             \
+        ams::hos::Version_Min,                                                                                                             \
+        ams::hos::Version_Max                                                                                                              \
+    )                                                                                                                                      \
+    AMS_SF_METHOD_INFO(                                                                                                                    \
+        C,                                                                                                                                 \
+        H,                                                                                                                                 \
+        1,                                                                                                                                 \
+        ams::Result,                                                                                                                       \
+        SetBsdSystemPolicyEnabled,                                                                                                         \
+        (bool enabled),                                                                                                                    \
+        (enabled),                                                                                                                         \
+        ams::hos::Version_Min,                                                                                                             \
+        ams::hos::Version_Max                                                                                                              \
+    )                                                                                                                                      \
+    AMS_SF_METHOD_INFO(                                                                                                                    \
+        C,                                                                                                                                 \
+        H,                                                                                                                                 \
+        2,                                                                                                                                 \
+        ams::Result,                                                                                                                       \
+        SetBsdSystemClientEnabled,                                                                                                         \
+        (std::uint32_t client, bool enabled),                                                                                              \
+        (client, enabled),                                                                                                                 \
+        ams::hos::Version_Min,                                                                                                             \
+        ams::hos::Version_Max                                                                                                              \
+    )                                                                                                                                      \
     AMS_SF_METHOD_INFO(C, H, 3, ams::Result, Shutdown, (), (), ams::hos::Version_Min, ams::hos::Version_Max)
 
 AMS_SF_DEFINE_INTERFACE(wgnx::mitm, IMitmControlService, WGNX_I_MITM_CONTROL_SERVICE_INTERFACE_INFO, 0x57474D43);

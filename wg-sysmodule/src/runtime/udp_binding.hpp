@@ -88,8 +88,9 @@ class UdpBinding {
 
     void SetEndpoint(const wgnx::platform::endpoint& endpoint, const char* text);
     void ClearEndpoint();
-    void AdoptOpenSocket(const wgnx::platform::endpoint& endpoint, const char* text, SocketGeneration generation,
-                         wgnx::platform::socket_handle socket);
+    void AdoptOpenSocket(
+        const wgnx::platform::endpoint& endpoint, const char* text, SocketGeneration generation, wgnx::platform::socket_handle socket
+    );
     wgnx::platform::socket_handle ReleaseAndSuspend();
     wgnx::platform::socket_handle ReleaseSocket();
 

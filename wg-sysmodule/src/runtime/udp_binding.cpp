@@ -17,8 +17,9 @@ void UdpBinding::ClearEndpoint() {
     m_has_endpoint = false;
 }
 
-void UdpBinding::AdoptOpenSocket(const wgnx::platform::endpoint& endpoint, const char* text, SocketGeneration generation,
-                                 wgnx::platform::socket_handle socket) {
+void UdpBinding::AdoptOpenSocket(
+    const wgnx::platform::endpoint& endpoint, const char* text, SocketGeneration generation, wgnx::platform::socket_handle socket
+) {
     // Callers explicitly release any prior socket into a close effect before
     // adopting a replacement. Binding state itself never performs platform I/O.
     if (m_socket != wgnx::platform::InvalidSocket) {

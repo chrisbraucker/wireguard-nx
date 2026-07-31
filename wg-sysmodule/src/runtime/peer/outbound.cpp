@@ -19,8 +19,9 @@ bool PeerRuntime::PrepareHandshakeInitiation(PendingDatagramKind kind) {
 
     PendingDatagram pending{};
     if (wgnx::wireguard::SerializeHandshakeInitiation(
-            std::span<std::uint8_t>(pending.bytes).first(wgnx::wireguard::HandshakeInitiationSize), peer->last_initiation) !=
-        wgnx::wireguard::ParseError::None) {
+            std::span<std::uint8_t>(pending.bytes).first(wgnx::wireguard::HandshakeInitiationSize),
+            peer->last_initiation
+        ) != wgnx::wireguard::ParseError::None) {
         return false;
     }
     pending.size = wgnx::wireguard::HandshakeInitiationSize;
@@ -39,8 +40,10 @@ bool PeerRuntime::PrepareHandshakeResponse() {
     wgnx::wireguard::message_handshake_response response{};
     PendingDatagram pending{};
     if (!wgnx::wireguard::noise_handshake_create_response(std::addressof(response), peer) ||
-        wgnx::wireguard::SerializeHandshakeResponse(std::span<std::uint8_t>(pending.bytes).first(wgnx::wireguard::HandshakeResponseSize),
-                                                    response) != wgnx::wireguard::ParseError::None ||
+        wgnx::wireguard::SerializeHandshakeResponse(
+            std::span<std::uint8_t>(pending.bytes).first(wgnx::wireguard::HandshakeResponseSize),
+            response
+        ) != wgnx::wireguard::ParseError::None ||
         !m_controller.DeriveResponderSession(m_protocol.device, *peer)) {
         return false;
     }
@@ -52,8 +55,12 @@ bool PeerRuntime::PrepareHandshakeResponse() {
     return true;
 }
 
-bool PeerRuntime::PrepareTransportDatagram(std::span<const std::uint8_t> payload, PendingDatagramKind kind, PacketId inner_packet_id,
-                                           wgnx::wireguard::TransportDataError& out_error) {
+bool PeerRuntime::PrepareTransportDatagram(
+    std::span<const std::uint8_t> payload,
+    PendingDatagramKind kind,
+    PacketId inner_packet_id,
+    wgnx::wireguard::TransportDataError& out_error
+) {
     auto* peer = ProtocolPeer();
     if (peer == nullptr || m_pending_datagram.IsPending()) {
         out_error = wgnx::wireguard::TransportDataError::InvalidKeypair;
@@ -79,33 +86,53 @@ bool PeerRuntime::StartHandshake(const PeerIdentity& identity, const TimerFacts&
     static_cast<void>(timer_facts);
     auto* peer = ProtocolPeer();
     if (peer == nullptr) {
-        logger::Log("WG handshake start skipped peer=%u activation=%u retry=%u reason=no_protocol_peer", identity.peer_index.Value(),
-                    identity.activation_generation.Value(), retry ? 1U : 0U);
+        logger::Log(
+            "WG handshake start skipped peer=%u activation=%u retry=%u reason=no_protocol_peer",
+            identity.peer_index.Value(),
+            identity.activation_generation.Value(),
+            retry ? 1U : 0U
+        );
         return false;
     }
     if (m_pending_datagram.IsPending()) {
-        logger::Log("WG handshake start skipped peer=%u activation=%u retry=%u reason=pending_datagram kind=%s generation=%u",
-                    identity.peer_index.Value(), identity.activation_generation.Value(), retry ? 1U : 0U,
-                    GetPendingDatagramKindName(m_pending_datagram.kind), m_pending_datagram.generation.Value());
+        logger::Log(
+            "WG handshake start skipped peer=%u activation=%u retry=%u reason=pending_datagram kind=%s generation=%u",
+            identity.peer_index.Value(),
+            identity.activation_generation.Value(),
+            retry ? 1U : 0U,
+            GetPendingDatagramKindName(m_pending_datagram.kind),
+            m_pending_datagram.generation.Value()
+        );
         return false;
     }
     const auto transition =
         retry ? m_controller.HandleHandshakeRetryTimer(m_protocol.device, *peer) : m_controller.StartHandshake(m_protocol.device, *peer);
     if (transition.action == wgnx::wireguard::HandshakeTransitionAction::Ignore) {
-        logger::Log("WG handshake start ignored peer=%u activation=%u retry=%u", identity.peer_index.Value(),
-                    identity.activation_generation.Value(), retry ? 1U : 0U);
+        logger::Log(
+            "WG handshake start ignored peer=%u activation=%u retry=%u",
+            identity.peer_index.Value(),
+            identity.activation_generation.Value(),
+            retry ? 1U : 0U
+        );
         return true;
     }
     if (transition.action != wgnx::wireguard::HandshakeTransitionAction::SendInitiation ||
         !PrepareHandshakeInitiation(PendingDatagramKind::HandshakeInitiation)) {
-        logger::Log("WG handshake start failed peer=%u activation=%u retry=%u action=%u", identity.peer_index.Value(),
-                    identity.activation_generation.Value(), retry ? 1U : 0U, static_cast<unsigned int>(transition.action));
+        logger::Log(
+            "WG handshake start failed peer=%u activation=%u retry=%u action=%u",
+            identity.peer_index.Value(),
+            identity.activation_generation.Value(),
+            retry ? 1U : 0U,
+            static_cast<unsigned int>(transition.action)
+        );
         return false;
     }
-    effects.Add(SendPendingDatagramEffect{
-        .peer = identity,
-        .datagram_generation = m_pending_datagram.generation,
-    });
+    effects.Add(
+        SendPendingDatagramEffect{
+            .peer = identity,
+            .datagram_generation = m_pending_datagram.generation,
+        }
+    );
     return true;
 }
 
@@ -124,8 +151,9 @@ std::size_t PeerRuntime::StagedInnerPacketCount() const {
     return peer != nullptr ? peer->staged_outbound_packets.Size() : 0;
 }
 
-void PeerRuntime::ProcessOutboundQueue(const PeerIdentity& identity, const TimerFacts& timer_facts, wgnx::platform::ktime_t now,
-                                       EffectBatch& effects) {
+void PeerRuntime::ProcessOutboundQueue(
+    const PeerIdentity& identity, const TimerFacts& timer_facts, wgnx::platform::ktime_t now, EffectBatch& effects
+) {
     auto* peer = ProtocolPeer();
     if (peer == nullptr || m_pending_datagram.IsPending()) {
         return;
@@ -164,12 +192,18 @@ void PeerRuntime::ProcessOutboundQueue(const PeerIdentity& identity, const Timer
         }
 
         wgnx::wireguard::TransportDataError build_error{};
-        if (PrepareTransportDatagram(std::span<const std::uint8_t>(front->bytes.data(), front->size), PendingDatagramKind::TransportData,
-                                     PacketId{front->packet_id}, build_error)) {
-            effects.Add(SendPendingDatagramEffect{
-                .peer = identity,
-                .datagram_generation = m_pending_datagram.generation,
-            });
+        if (PrepareTransportDatagram(
+                std::span<const std::uint8_t>(front->bytes.data(), front->size),
+                PendingDatagramKind::TransportData,
+                PacketId{front->packet_id},
+                build_error
+            )) {
+            effects.Add(
+                SendPendingDatagramEffect{
+                    .peer = identity,
+                    .datagram_generation = m_pending_datagram.generation,
+                }
+            );
             return;
         }
 
@@ -201,11 +235,13 @@ void PeerRuntime::HandlePendingDatagramCompletion(const PendingDatagramSentEvent
         OnAuthenticatedPacketTraversal(event.peer, event.timer_facts, effects);
         OnAuthenticatedPacketSent(event.peer, effects);
         if (kind == PendingDatagramKind::HandshakeInitiation) {
-            effects.Add(ArmProtocolTimerEffect{
-                .peer = event.peer,
-                .hook = wgnx::wireguard::TimerHook::RetransmitHandshake,
-                .deadline = HandshakeRetryDeadline(event.timer_facts),
-            });
+            effects.Add(
+                ArmProtocolTimerEffect{
+                    .peer = event.peer,
+                    .hook = wgnx::wireguard::TimerHook::RetransmitHandshake,
+                    .deadline = HandshakeRetryDeadline(event.timer_facts),
+                }
+            );
             if (!m_receive_started) {
                 // Start initial receive polling only once the initiation crossed
                 // the serialized transmit boundary.
@@ -216,13 +252,19 @@ void PeerRuntime::HandlePendingDatagramCompletion(const PendingDatagramSentEvent
         if (kind == PendingDatagramKind::TransportData && peer != nullptr) {
             static_cast<void>(m_controller.ApplyStagedSendOutcome(*peer, wgnx::wireguard::OutboundSendOutcome::Sent()));
             OnDataPacketSent(event.peer, event.timer_facts, effects);
-            effects.Add(QueueInnerPacketSubmissionEffect{
-                .peer = event.peer,
-            });
+            effects.Add(
+                QueueInnerPacketSubmissionEffect{
+                    .peer = event.peer,
+                }
+            );
             if (peer->current_keypair.NeedsRekeyAt(wgnx::wireguard::GetMonotonicTime()) &&
                 !StartHandshake(event.peer, event.timer_facts, effects, false)) {
-                EnterActivationError(wgnx::PeerErrorStage::Handshake, wgnx::PeerErrorCode::HandshakeInitFailed, event.occurred_at,
-                                     &effects);
+                EnterActivationError(
+                    wgnx::PeerErrorStage::Handshake,
+                    wgnx::PeerErrorCode::HandshakeInitFailed,
+                    event.occurred_at,
+                    &effects
+                );
             }
         }
         return;
@@ -233,24 +275,28 @@ void PeerRuntime::HandlePendingDatagramCompletion(const PendingDatagramSentEvent
     }
     if (event.error == wgnx::platform::socket_error::send_failed) {
         const auto binding = m_binding.StateSnapshot();
-        effects.Append(HandleEvent(TransportFailureEvent{
-            .peer = event.peer,
-            .operation = TransportIoOperation::Send,
-            .socket = binding.socket,
-            .socket_generation = binding.generation,
-            .error = event.error,
-            .occurred_at = event.occurred_at,
-        }));
+        effects.Append(HandleEvent(
+            TransportFailureEvent{
+                .peer = event.peer,
+                .operation = TransportIoOperation::Send,
+                .socket = binding.socket,
+                .socket_generation = binding.generation,
+                .error = event.error,
+                .occurred_at = event.occurred_at,
+            }
+        ));
 
         // A local send failure does not prove that the descriptor is stale.
         // Keep the current binding and use the ordinary bounded handshake
         // retry path instead of recursively replacing a live BSD socket.
         if (kind == PendingDatagramKind::HandshakeInitiation) {
-            effects.Add(ArmProtocolTimerEffect{
-                .peer = event.peer,
-                .hook = wgnx::wireguard::TimerHook::RetransmitHandshake,
-                .deadline = HandshakeRetryDeadline(event.timer_facts),
-            });
+            effects.Add(
+                ArmProtocolTimerEffect{
+                    .peer = event.peer,
+                    .hook = wgnx::wireguard::TimerHook::RetransmitHandshake,
+                    .deadline = HandshakeRetryDeadline(event.timer_facts),
+                }
+            );
         }
         return;
     }

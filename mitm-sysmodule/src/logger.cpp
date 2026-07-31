@@ -97,8 +97,14 @@ void Log(const char* fmt, ...) {
 
     const std::size_t message_size = static_cast<std::size_t>(written < static_cast<int>(sizeof(message)) ? written : sizeof(message) - 1);
     char line[448] = {};
-    const int line_written = std::snprintf(line, sizeof(line), "[%llu] %.*s\n", static_cast<unsigned long long>(svcGetSystemTick()),
-                                           static_cast<int>(message_size), message);
+    const int line_written = std::snprintf(
+        line,
+        sizeof(line),
+        "[%llu] %.*s\n",
+        static_cast<unsigned long long>(svcGetSystemTick()),
+        static_cast<int>(message_size),
+        message
+    );
     if (line_written <= 0) {
         return;
     }

@@ -42,12 +42,21 @@ void CopyDebugTargetIpv4(wgnx::DebugTriggerAction action, std::array<std::uint8_
 void FormatIpv4Text(std::span<const std::uint8_t, 4> address, char* out, std::size_t out_size);
 const char* GetDebugProbeReplyValidationName(DebugProbeReplyValidation validation);
 
-std::size_t BuildDebugIcmpEchoRequest(std::span<std::uint8_t> payload, std::string_view source_address_text,
-                                      wgnx::DebugTriggerAction action, std::uint32_t activation_generation, std::size_t peer_index,
-                                      std::uint32_t random_seed);
+std::size_t BuildDebugIcmpEchoRequest(
+    std::span<std::uint8_t> payload,
+    std::string_view source_address_text,
+    wgnx::DebugTriggerAction action,
+    std::uint32_t activation_generation,
+    std::size_t peer_index,
+    std::uint32_t random_seed
+);
 
-DebugProbeReplyValidation ValidateDebugIcmpEchoReply(std::span<const std::uint8_t> payload, std::string_view local_address_text,
-                                                     std::size_t expected_peer_index, std::uint32_t expected_activation_generation,
-                                                     DebugProbeReplyInfo* out_info);
+DebugProbeReplyValidation ValidateDebugIcmpEchoReply(
+    std::span<const std::uint8_t> payload,
+    std::string_view local_address_text,
+    std::size_t expected_peer_index,
+    std::uint32_t expected_activation_generation,
+    DebugProbeReplyInfo* out_info
+);
 
 } // namespace wgnx::wireguard

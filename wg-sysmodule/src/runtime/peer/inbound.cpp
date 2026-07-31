@@ -38,8 +38,11 @@ void PeerRuntime::UpdateEndpointFromAuthenticatedPacket(const EncryptedDatagramR
 void PeerRuntime::CompleteInitiatorSession(const EncryptedDatagramReceivedEvent& event, EffectBatch& effects) {
     auto* peer = ProtocolPeer();
     if (peer == nullptr || !m_controller.CompleteSession(m_protocol.device, *peer)) {
-        logger::Log("Rejected WG handshake response peer=%u activation=%u reason=session_derivation_failed", event.peer.peer_index.Value(),
-                    event.peer.activation_generation.Value());
+        logger::Log(
+            "Rejected WG handshake response peer=%u activation=%u reason=session_derivation_failed",
+            event.peer.peer_index.Value(),
+            event.peer.activation_generation.Value()
+        );
         return;
     }
 
@@ -72,10 +75,12 @@ void PeerRuntime::CompleteInitiatorSession(const EncryptedDatagramReceivedEvent&
         EnterActivationError(wgnx::PeerErrorStage::Internal, wgnx::PeerErrorCode::InternalFailure, event.occurred_at, &effects);
         return;
     }
-    effects.Add(SendPendingDatagramEffect{
-        .peer = event.peer,
-        .datagram_generation = m_pending_datagram.generation,
-    });
+    effects.Add(
+        SendPendingDatagramEffect{
+            .peer = event.peer,
+            .datagram_generation = m_pending_datagram.generation,
+        }
+    );
 }
 
 void PeerRuntime::HandleTransportData(const EncryptedDatagramReceivedEvent& event, EffectBatch& effects) {
@@ -87,12 +92,23 @@ void PeerRuntime::HandleTransportData(const EncryptedDatagramReceivedEvent& even
     wgnx::wireguard::IncomingTransportDataResult result{};
     m_decrypted_packet.size = 0;
     m_decrypted_packet.generation = PacketGeneration{};
-    const auto error = wgnx::wireguard::noise_consume_incoming_transport_data_packet(event.packet.Bytes(), m_protocol.device, *peer,
-                                                                                     m_decrypted_packet.bytes, result);
+    const auto error = wgnx::wireguard::noise_consume_incoming_transport_data_packet(
+        event.packet.Bytes(),
+        m_protocol.device,
+        *peer,
+        m_decrypted_packet.bytes,
+        result
+    );
     if (error != wgnx::wireguard::TransportDataError::None) {
-        logger::Log("Rejected WG transport data peer=%u activation=%u bytes=%zu source=%s slot=%s err=%s", event.peer.peer_index.Value(),
-                    event.peer.activation_generation.Value(), event.packet.Bytes().size(), event.source_text.data(),
-                    GetIndexSlotName(result.slot), wgnx::wireguard::GetTransportDataErrorName(error));
+        logger::Log(
+            "Rejected WG transport data peer=%u activation=%u bytes=%zu source=%s slot=%s err=%s",
+            event.peer.peer_index.Value(),
+            event.peer.activation_generation.Value(),
+            event.packet.Bytes().size(),
+            event.source_text.data(),
+            GetIndexSlotName(result.slot),
+            wgnx::wireguard::GetTransportDataErrorName(error)
+        );
         return;
     }
 
@@ -100,10 +116,17 @@ void PeerRuntime::HandleTransportData(const EncryptedDatagramReceivedEvent& even
     RecordReceivedBytes(event.packet.Bytes().size(), event.occurred_at);
     OnAuthenticatedPacketTraversal(event.peer, event.timer_facts, effects);
     OnAuthenticatedPacketReceived(event.peer, effects);
-    logger::Log("Accepted WG transport data peer=%u activation=%u bytes=%zu payload=%zu source=%s slot=%s counter=%llu promoted=%u",
-                event.peer.peer_index.Value(), event.peer.activation_generation.Value(), event.packet.Bytes().size(),
-                result.decrypt.payload_size, event.source_text.data(), GetIndexSlotName(result.slot),
-                static_cast<unsigned long long>(result.decrypt.header.counter), result.promoted_next_keypair ? 1U : 0U);
+    logger::Log(
+        "Accepted WG transport data peer=%u activation=%u bytes=%zu payload=%zu source=%s slot=%s counter=%llu promoted=%u",
+        event.peer.peer_index.Value(),
+        event.peer.activation_generation.Value(),
+        event.packet.Bytes().size(),
+        result.decrypt.payload_size,
+        event.source_text.data(),
+        GetIndexSlotName(result.slot),
+        static_cast<unsigned long long>(result.decrypt.header.counter),
+        result.promoted_next_keypair ? 1U : 0U
+    );
 
     if (result.promoted_next_keypair) {
         m_controller.ConfirmResponderSession(*peer);
@@ -118,8 +141,11 @@ void PeerRuntime::HandleTransportData(const EncryptedDatagramReceivedEvent& even
     }
 
     if (result.decrypt.payload_size == 0) {
-        logger::Log("Accepted WG keepalive payload peer=%u activation=%u", event.peer.peer_index.Value(),
-                    event.peer.activation_generation.Value());
+        logger::Log(
+            "Accepted WG keepalive payload peer=%u activation=%u",
+            event.peer.peer_index.Value(),
+            event.peer.activation_generation.Value()
+        );
         return;
     }
 
@@ -129,18 +155,24 @@ void PeerRuntime::HandleTransportData(const EncryptedDatagramReceivedEvent& even
     std::size_t inner_packet_size = 0;
     const auto validation = wgnx::wireguard::ValidatePaddedInnerIpPacket(padded_payload, std::addressof(inner_packet_size));
     if (validation != wgnx::wireguard::InnerIpValidationError::None) {
-        logger::Log("Dropped decrypted inner packet peer=%u activation=%u bytes=%zu validation=%s", event.peer.peer_index.Value(),
-                    event.peer.activation_generation.Value(), padded_payload.size(),
-                    wgnx::wireguard::GetInnerIpValidationErrorName(validation));
+        logger::Log(
+            "Dropped decrypted inner packet peer=%u activation=%u bytes=%zu validation=%s",
+            event.peer.peer_index.Value(),
+            event.peer.activation_generation.Value(),
+            padded_payload.size(),
+            wgnx::wireguard::GetInnerIpValidationErrorName(validation)
+        );
         return;
     }
 
     m_decrypted_packet.size = inner_packet_size;
     m_decrypted_packet.generation = AllocateDecryptedPacketGeneration();
-    effects.Add(PublishDecryptedPacketEffect{
-        .peer = event.peer,
-        .packet_generation = m_decrypted_packet.generation,
-    });
+    effects.Add(
+        PublishDecryptedPacketEffect{
+            .peer = event.peer,
+            .packet_generation = m_decrypted_packet.generation,
+        }
+    );
 }
 
 void PeerRuntime::HandleEncryptedDatagram(const EncryptedDatagramReceivedEvent& event, EffectBatch& effects) {
@@ -152,9 +184,14 @@ void PeerRuntime::HandleEncryptedDatagram(const EncryptedDatagramReceivedEvent& 
 
     const auto type = wgnx::wireguard::InspectMessageType(packet);
     if (!type.success) {
-        logger::Log("Rejected WG datagram peer=%u activation=%u bytes=%zu source=%s inspect_err=%s", event.peer.peer_index.Value(),
-                    event.peer.activation_generation.Value(), packet.size(), event.source_text.data(),
-                    wgnx::wireguard::GetParseErrorName(type.error));
+        logger::Log(
+            "Rejected WG datagram peer=%u activation=%u bytes=%zu source=%s inspect_err=%s",
+            event.peer.peer_index.Value(),
+            event.peer.activation_generation.Value(),
+            packet.size(),
+            event.source_text.data(),
+            wgnx::wireguard::GetParseErrorName(type.error)
+        );
         return;
     }
     if (type.type == wgnx::wireguard::MessageType::TransportData) {
@@ -162,15 +199,24 @@ void PeerRuntime::HandleEncryptedDatagram(const EncryptedDatagramReceivedEvent& 
         return;
     }
     if (m_pending_datagram.IsPending()) {
-        logger::Log("Dropped WG handshake datagram peer=%u activation=%u type=%s reason=send_pending", event.peer.peer_index.Value(),
-                    event.peer.activation_generation.Value(), wgnx::wireguard::GetMessageTypeName(type.type));
+        logger::Log(
+            "Dropped WG handshake datagram peer=%u activation=%u type=%s reason=send_pending",
+            event.peer.peer_index.Value(),
+            event.peer.activation_generation.Value(),
+            wgnx::wireguard::GetMessageTypeName(type.type)
+        );
         return;
     }
 
     const auto outcome = wgnx::wireguard::noise_handshake_consume_incoming_packet(packet, std::addressof(m_protocol.device), peer);
-    logger::Log("Processed WG handshake datagram peer=%u activation=%u bytes=%zu source=%s outcome=%s", event.peer.peer_index.Value(),
-                event.peer.activation_generation.Value(), packet.size(), event.source_text.data(),
-                wgnx::wireguard::GetHandshakePacketOutcomeName(outcome));
+    logger::Log(
+        "Processed WG handshake datagram peer=%u activation=%u bytes=%zu source=%s outcome=%s",
+        event.peer.peer_index.Value(),
+        event.peer.activation_generation.Value(),
+        packet.size(),
+        event.source_text.data(),
+        wgnx::wireguard::GetHandshakePacketOutcomeName(outcome)
+    );
     switch (outcome) {
     case wgnx::wireguard::HandshakePacketOutcome::Invalid:
         return;
@@ -184,17 +230,22 @@ void PeerRuntime::HandleEncryptedDatagram(const EncryptedDatagramReceivedEvent& 
         OnAuthenticatedPacketTraversal(event.peer, event.timer_facts, effects);
         OnAuthenticatedPacketReceived(event.peer, effects);
         if (!PrepareHandshakeResponse()) {
-            logger::Log("Failed WG handshake response peer=%u activation=%u reason=response_or_session_build",
-                        event.peer.peer_index.Value(), event.peer.activation_generation.Value());
+            logger::Log(
+                "Failed WG handshake response peer=%u activation=%u reason=response_or_session_build",
+                event.peer.peer_index.Value(),
+                event.peer.activation_generation.Value()
+            );
             return;
         }
         UpdateEndpointFromAuthenticatedPacket(event);
         RecordReceivedBytes(packet.size(), event.occurred_at);
         OnSessionDerived(event.peer, event.timer_facts, effects);
-        effects.Add(SendPendingDatagramEffect{
-            .peer = event.peer,
-            .datagram_generation = m_pending_datagram.generation,
-        });
+        effects.Add(
+            SendPendingDatagramEffect{
+                .peer = event.peer,
+                .datagram_generation = m_pending_datagram.generation,
+            }
+        );
         return;
     }
 }

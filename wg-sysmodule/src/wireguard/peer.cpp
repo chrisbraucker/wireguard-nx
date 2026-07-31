@@ -26,8 +26,12 @@ bool wg_peer_initialize(wg_peer* peer, const PeerInitializationView& config) {
     wg_peer_reset_keypairs(peer);
     wg_peer_clear_last_initiation(peer);
     peer->handshake_retry = {};
-    if (!noise_static_identity_init_from_keys(&peer->static_identity, config.local_private_key,
-                                              config.remote_public_key != nullptr ? config.remote_public_key : "", config.preshared_key)) {
+    if (!noise_static_identity_init_from_keys(
+            &peer->static_identity,
+            config.local_private_key,
+            config.remote_public_key != nullptr ? config.remote_public_key : "",
+            config.preshared_key
+        )) {
         wgnx::sysmodule::logger::Log("WG peer '%s': invalid static identity or peer keys", peer->name);
         return false;
     }
@@ -69,11 +73,19 @@ std::size_t wg_peer_clear_staged_outbound_packets(wg_peer* peer, QueueDispositio
         wgnx::sysmodule::logger::Log(
             "WG staging peer='%s' removed=%zu disposition=%s pushed=%llu popped=%llu sent=%llu send_failed=%llu retry_exhausted=%llu "
             "stale=%llu unavailable=%llu cleared=%llu high_watermark=%zu",
-            peer->name, count, GetQueueDispositionName(disposition), static_cast<unsigned long long>(statistics.pushed),
-            static_cast<unsigned long long>(statistics.popped), static_cast<unsigned long long>(statistics.sent),
-            static_cast<unsigned long long>(statistics.send_failed), static_cast<unsigned long long>(statistics.retry_exhausted),
-            static_cast<unsigned long long>(statistics.stale), static_cast<unsigned long long>(statistics.unavailable),
-            static_cast<unsigned long long>(statistics.cleared), statistics.high_watermark);
+            peer->name,
+            count,
+            GetQueueDispositionName(disposition),
+            static_cast<unsigned long long>(statistics.pushed),
+            static_cast<unsigned long long>(statistics.popped),
+            static_cast<unsigned long long>(statistics.sent),
+            static_cast<unsigned long long>(statistics.send_failed),
+            static_cast<unsigned long long>(statistics.retry_exhausted),
+            static_cast<unsigned long long>(statistics.stale),
+            static_cast<unsigned long long>(statistics.unavailable),
+            static_cast<unsigned long long>(statistics.cleared),
+            statistics.high_watermark
+        );
     }
     return count;
 }

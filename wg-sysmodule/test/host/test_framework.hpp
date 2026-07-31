@@ -11,8 +11,16 @@ class TestContext {
 
     void Fail(const char* expression, const char* file, int line, const char* detail = nullptr) {
         ++m_failure_count;
-        std::fprintf(stderr, "  %s:%d: check failed: %s%s%s%s\n", file, line, expression, detail != nullptr ? " (" : "",
-                     detail != nullptr ? detail : "", detail != nullptr ? ")" : "");
+        std::fprintf(
+            stderr,
+            "  %s:%d: check failed: %s%s%s%s\n",
+            file,
+            line,
+            expression,
+            detail != nullptr ? " (" : "",
+            detail != nullptr ? detail : "",
+            detail != nullptr ? ")" : ""
+        );
     }
 
     bool Passed() const {

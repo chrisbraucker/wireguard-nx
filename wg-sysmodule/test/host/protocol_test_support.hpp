@@ -35,8 +35,9 @@
 namespace wgnx::test {
 
 template <typename Binding>
-concept HasLegacyUdpPlatformIo = requires(Binding& binding, wgnx::sysmodule::runtime::SocketGeneration generation,
-                                          std::span<const std::uint8_t> packet, std::size_t* sent) {
+concept HasLegacyUdpPlatformIo = requires(
+    Binding& binding, wgnx::sysmodule::runtime::SocketGeneration generation, std::span<const std::uint8_t> packet, std::size_t* sent
+) {
     binding.Open(generation);
     binding.Close();
     binding.Send(packet, sent);
@@ -117,8 +118,8 @@ class InMemoryDatagramLink {
     std::size_t m_total_sent{0};
 };
 
-inline void FillConfig(wgnx::PeerConfigEntry* config, const char* name, const char* address, const char* private_key,
-                       const char* remote_public_key) {
+inline void
+FillConfig(wgnx::PeerConfigEntry* config, const char* name, const char* address, const char* private_key, const char* remote_public_key) {
     *config = {};
     std::snprintf(config->name.data(), config->name.size(), "%s", name);
     std::snprintf(config->address.data(), config->address.size(), "%s", address);
@@ -144,9 +145,13 @@ inline wgnx::sysmodule::runtime::PeerConfigDerivedInfo DeriveTestSecrets(const w
 }
 
 template <std::size_t Size>
-bool ConfigureTestPeers(wgnx::sysmodule::runtime::RuntimeCoordinator& coordinator,
-                        const std::array<wgnx::PeerConfigEntry, Size>& configured, std::int32_t active_peer_index = -1,
-                        std::int32_t auto_start_peer_index = -1, wgnx::platform::ktime_t now = 0) {
+bool ConfigureTestPeers(
+    wgnx::sysmodule::runtime::RuntimeCoordinator& coordinator,
+    const std::array<wgnx::PeerConfigEntry, Size>& configured,
+    std::int32_t active_peer_index = -1,
+    std::int32_t auto_start_peer_index = -1,
+    wgnx::platform::ktime_t now = 0
+) {
     std::array<wgnx::sysmodule::runtime::PeerConfigDerivedInfo, Size> derived{};
     for (std::size_t index = 0; index < Size; ++index) {
         derived[index] = DeriveTestSecrets(configured[index]);
@@ -154,90 +159,118 @@ bool ConfigureTestPeers(wgnx::sysmodule::runtime::RuntimeCoordinator& coordinato
     return coordinator.Configure(configured, derived, auto_start_peer_index, now) && coordinator.SetActivePeerIndex(active_peer_index);
 }
 
-inline wgnx::sysmodule::runtime::EffectBatch CompleteTestPeerActivation(wgnx::sysmodule::runtime::RuntimeCoordinator& coordinator,
-                                                                        const wgnx::sysmodule::runtime::ResolveEndpointEffect& resolve,
-                                                                        wgnx::platform::socket_handle socket, wgnx::platform::ktime_t now) {
+inline wgnx::sysmodule::runtime::EffectBatch CompleteTestPeerActivation(
+    wgnx::sysmodule::runtime::RuntimeCoordinator& coordinator,
+    const wgnx::sysmodule::runtime::ResolveEndpointEffect& resolve,
+    wgnx::platform::socket_handle socket,
+    wgnx::platform::ktime_t now
+) {
     using namespace wgnx::sysmodule::runtime;
     using namespace wgnx::wireguard;
     wgnx::platform::endpoint_resolution_result resolved{
         .success = true,
-        .resolved =
-            {
-                .family = wgnx::platform::address_family::inet,
-                .port = 51820,
-                .address = {192, 0, 2, 1},
-            },
+        .resolved = {
+            .family = wgnx::platform::address_family::inet,
+            .port = 51820,
+            .address = {192, 0, 2, 1},
+        },
     };
     std::snprintf(resolved.text.data(), resolved.text.size(), "192.0.2.1:51820");
-    const auto resolution = coordinator.Dispatch(EndpointResolvedEvent{
-        .peer = resolve.peer,
-        .path_generation = resolve.path_generation,
-        .result = resolved,
-        .occurred_at = now + 1,
-    });
+    const auto resolution = coordinator.Dispatch(
+        EndpointResolvedEvent{
+            .peer = resolve.peer,
+            .path_generation = resolve.path_generation,
+            .result = resolved,
+            .occurred_at = now + 1,
+        }
+    );
     const auto* open = resolution.Size() == 1 ? std::get_if<OpenUdpBindEffect>(resolution.begin()) : nullptr;
     if (open == nullptr) {
         return {};
     }
-    return coordinator.Dispatch(UdpBindOpenedEvent{
-        .peer = open->peer,
-        .path_generation = open->path_generation,
-        .endpoint = open->endpoint,
-        .endpoint_text = open->endpoint_text,
-        .socket = socket,
-        .error = wgnx::platform::socket_error::none,
-        .socket_generation = open->socket_generation,
-        .purpose = open->purpose,
-        .timer_facts =
-            {
-                .now = TimerDeadlineFromJiffies(500),
-            },
-        .occurred_at = now + 2,
-    });
+    return coordinator.Dispatch(
+        UdpBindOpenedEvent{
+            .peer = open->peer,
+            .path_generation = open->path_generation,
+            .endpoint = open->endpoint,
+            .endpoint_text = open->endpoint_text,
+            .socket = socket,
+            .error = wgnx::platform::socket_error::none,
+            .socket_generation = open->socket_generation,
+            .purpose = open->purpose,
+            .timer_facts =
+                {
+                    .now = TimerDeadlineFromJiffies(500),
+                },
+            .occurred_at = now + 2,
+        }
+    );
 }
 
-inline wgnx::sysmodule::runtime::EffectBatch AllowTestLocalPath(wgnx::sysmodule::runtime::RuntimeCoordinator& coordinator,
-                                                                const wgnx::sysmodule::runtime::StartNetworkPathRequestEffect& start,
-                                                                wgnx::platform::ktime_t now) {
+inline wgnx::sysmodule::runtime::EffectBatch AllowTestLocalPath(
+    wgnx::sysmodule::runtime::RuntimeCoordinator& coordinator,
+    const wgnx::sysmodule::runtime::StartNetworkPathRequestEffect& start,
+    wgnx::platform::ktime_t now
+) {
     using namespace wgnx::sysmodule::runtime;
-    return coordinator.Dispatch(NetworkPathAvailabilityChangedEvent{
-        .peer = start.peer,
-        .path_generation = start.path_generation,
-        .observation =
-            {
-                .availability = wgnx::platform::network_path_availability::available,
-                .raw_state = wgnx::platform::network_path_raw_state::available,
-                .request_generation = start.path_generation.Value(),
-            },
-        .occurred_at = now,
-    });
+    return coordinator.Dispatch(
+        NetworkPathAvailabilityChangedEvent{
+            .peer = start.peer,
+            .path_generation = start.path_generation,
+            .observation =
+                {
+                    .availability = wgnx::platform::network_path_availability::available,
+                    .raw_state = wgnx::platform::network_path_raw_state::available,
+                    .request_generation = start.path_generation.Value(),
+                },
+            .occurred_at = now,
+        }
+    );
 }
 
-inline wgnx::sysmodule::runtime::EffectBatch ActivateTestPeer(wgnx::sysmodule::runtime::RuntimeCoordinator& coordinator,
-                                                              std::uint32_t peer_index, wgnx::platform::socket_handle socket,
-                                                              wgnx::platform::ktime_t now = 1'000) {
+inline wgnx::sysmodule::runtime::EffectBatch ActivateTestPeer(
+    wgnx::sysmodule::runtime::RuntimeCoordinator& coordinator,
+    std::uint32_t peer_index,
+    wgnx::platform::socket_handle socket,
+    wgnx::platform::ktime_t now = 1'000
+) {
     using namespace wgnx::sysmodule::runtime;
 
-    const auto activation = coordinator.Dispatch(ActivationRequestedEvent{
-        .peer_index = PeerIndex{peer_index},
-        .occurred_at = now,
-    });
+    const auto activation = coordinator.Dispatch(
+        ActivationRequestedEvent{
+            .peer_index = PeerIndex{peer_index},
+            .occurred_at = now,
+        }
+    );
     const auto* start = activation.Size() == 1 ? std::get_if<StartNetworkPathRequestEffect>(activation.begin()) : nullptr;
     const auto path_effects = start != nullptr ? AllowTestLocalPath(coordinator, *start, now + 1) : EffectBatch{};
     const auto* resolve = path_effects.Size() == 1 ? std::get_if<ResolveEndpointEffect>(path_effects.begin()) : nullptr;
     return resolve != nullptr ? CompleteTestPeerActivation(coordinator, *resolve, socket, now + 2) : EffectBatch{};
 }
 
-inline bool CheckHandshakeState(TestContext& context, const wgnx::wireguard::wg_peer& peer, wgnx::wireguard::HandshakeState expected_state,
-                                std::uint32_t expected_transitions, const char* phase) {
+inline bool CheckHandshakeState(
+    TestContext& context,
+    const wgnx::wireguard::wg_peer& peer,
+    wgnx::wireguard::HandshakeState expected_state,
+    std::uint32_t expected_transitions,
+    const char* phase
+) {
     if (peer.handshake.state == expected_state && peer.handshake.transition_count == expected_transitions) {
         return true;
     }
 
     char detail[256]{};
-    std::snprintf(detail, sizeof(detail), "peer=%s phase=%s state=%s expected=%s transitions=%u expected_transitions=%u", peer.name, phase,
-                  wgnx::wireguard::GetHandshakeStateName(peer.handshake.state), wgnx::wireguard::GetHandshakeStateName(expected_state),
-                  peer.handshake.transition_count, expected_transitions);
+    std::snprintf(
+        detail,
+        sizeof(detail),
+        "peer=%s phase=%s state=%s expected=%s transitions=%u expected_transitions=%u",
+        peer.name,
+        phase,
+        wgnx::wireguard::GetHandshakeStateName(peer.handshake.state),
+        wgnx::wireguard::GetHandshakeStateName(expected_state),
+        peer.handshake.transition_count,
+        expected_transitions
+    );
     context.Fail("handshake state", __FILE__, __LINE__, detail);
     return false;
 }
@@ -355,13 +388,19 @@ inline bool CheckSessionKeys(TestContext& context, const ProtocolPair& pair) {
         context.Fail("keypair birth time", __FILE__, __LINE__, "controlled monotonic time was not used");
         return false;
     }
-    if (std::memcmp(initiator_keypair.SendingKey().bytes.data(), responder_keypair.ReceivingKey().bytes.data(),
-                    initiator_keypair.SendingKey().bytes.size()) != 0) {
+    if (std::memcmp(
+            initiator_keypair.SendingKey().bytes.data(),
+            responder_keypair.ReceivingKey().bytes.data(),
+            initiator_keypair.SendingKey().bytes.size()
+        ) != 0) {
         context.Fail("session keys", __FILE__, __LINE__, "initiator sending key does not match responder receiving key");
         return false;
     }
-    if (std::memcmp(responder_keypair.SendingKey().bytes.data(), initiator_keypair.ReceivingKey().bytes.data(),
-                    responder_keypair.SendingKey().bytes.size()) != 0) {
+    if (std::memcmp(
+            responder_keypair.SendingKey().bytes.data(),
+            initiator_keypair.ReceivingKey().bytes.data(),
+            responder_keypair.SendingKey().bytes.size()
+        ) != 0) {
         context.Fail("session keys", __FILE__, __LINE__, "responder sending key does not match initiator receiving key");
         return false;
     }
@@ -376,9 +415,13 @@ struct TransportResult {
     std::size_t wire_packet_size{0};
 };
 
-inline TransportResult SendTransport(wgnx::wireguard::noise_keypair* sender, wgnx::wireguard::wg_device* receiver_device,
-                                     wgnx::wireguard::wg_peer* receiver, std::span<const std::uint8_t> payload,
-                                     InMemoryDatagramLink* link) {
+inline TransportResult SendTransport(
+    wgnx::wireguard::noise_keypair* sender,
+    wgnx::wireguard::wg_device* receiver_device,
+    wgnx::wireguard::wg_peer* receiver,
+    std::span<const std::uint8_t> payload,
+    InMemoryDatagramLink* link
+) {
     TransportResult result{};
     std::array<std::uint8_t, 2048> outgoing{};
     const auto create_result = wgnx::wireguard::noise_create_transport_data_packet(outgoing, *sender, payload);
@@ -401,15 +444,23 @@ inline TransportResult SendTransport(wgnx::wireguard::noise_keypair* sender, wgn
         return result;
     }
     wgnx::wireguard::IncomingTransportDataResult incoming_result{};
-    result.error = wgnx::wireguard::noise_consume_incoming_transport_data_packet(incoming, *receiver_device, *receiver, result.plaintext,
-                                                                                 incoming_result);
+    result.error = wgnx::wireguard::noise_consume_incoming_transport_data_packet(
+        incoming,
+        *receiver_device,
+        *receiver,
+        result.plaintext,
+        incoming_result
+    );
     result.decrypt = incoming_result.decrypt;
     return result;
 }
 
-inline bool BuildDeterministicInitiation(std::array<std::uint8_t, wgnx::wireguard::HandshakeInitiationSize>* out,
-                                         wgnx::wireguard::HandshakeState* out_state, std::uint32_t* out_transition_count,
-                                         wgnx::wireguard::MonotonicTimePoint* out_transition_time) {
+inline bool BuildDeterministicInitiation(
+    std::array<std::uint8_t, wgnx::wireguard::HandshakeInitiationSize>* out,
+    wgnx::wireguard::HandshakeState* out_state,
+    std::uint32_t* out_transition_count,
+    wgnx::wireguard::MonotonicTimePoint* out_transition_time
+) {
     runtime::Reset(InitialRuntimeState);
     ProtocolPair pair{};
     if (!pair.Initialize() || !pair.CreateAndSendInitiation(out)) {

@@ -3,8 +3,12 @@
 #include <memory>
 namespace wgnx::sysmodule::runtime {
 
-bool RuntimeCoordinator::Configure(std::span<const wgnx::PeerConfigEntry> configured_peers, std::span<PeerConfigDerivedInfo> derived,
-                                   std::int32_t auto_start_peer_index, wgnx::platform::ktime_t now) {
+bool RuntimeCoordinator::Configure(
+    std::span<const wgnx::PeerConfigEntry> configured_peers,
+    std::span<PeerConfigDerivedInfo> derived,
+    std::int32_t auto_start_peer_index,
+    wgnx::platform::ktime_t now
+) {
     return m_peers.Configure(configured_peers, derived, auto_start_peer_index, now);
 }
 
@@ -54,8 +58,11 @@ PeerProtocolSnapshot RuntimeCoordinator::ProtocolSnapshot(std::size_t peer_index
 
 wgnx::PeerInfo RuntimeCoordinator::BuildPeerInfo(std::size_t peer_index, wgnx::platform::ktime_t now) const {
     const auto* peer = PeerAt(PeerIndex{static_cast<std::uint32_t>(peer_index)});
-    return peer != nullptr ? peer->BuildInfo(now, static_cast<std::int32_t>(peer_index) == m_peers.ActivePeerIndex(),
-                                             static_cast<std::int32_t>(peer_index) == m_peers.AutoStartPeerIndex())
+    return peer != nullptr ? peer->BuildInfo(
+                                 now,
+                                 static_cast<std::int32_t>(peer_index) == m_peers.ActivePeerIndex(),
+                                 static_cast<std::int32_t>(peer_index) == m_peers.AutoStartPeerIndex()
+                             )
                            : wgnx::PeerInfo{};
 }
 
@@ -151,8 +158,9 @@ bool RuntimeCoordinator::SnapshotPacketState(PeerPacketStateSnapshot& out) const
     return true;
 }
 
-bool RuntimeCoordinator::SnapshotPendingDatagram(const PeerIdentity& identity, DatagramGeneration datagram_generation,
-                                                 PendingDatagramSnapshot& out) const {
+bool RuntimeCoordinator::SnapshotPendingDatagram(
+    const PeerIdentity& identity, DatagramGeneration datagram_generation, PendingDatagramSnapshot& out
+) const {
     const auto* peer = PeerAt(identity.peer_index);
     return IsActiveIdentity(identity) && peer->SnapshotPendingDatagram(identity.activation_generation, datagram_generation, out);
 }
@@ -162,8 +170,9 @@ bool RuntimeCoordinator::HasPendingDatagram(const PeerIdentity& identity, Datagr
     return IsActiveIdentity(identity) && peer != nullptr && peer->HasPendingDatagram(identity.activation_generation, datagram_generation);
 }
 
-bool RuntimeCoordinator::ViewDecryptedPacket(const PeerIdentity& identity, PacketGeneration packet_generation,
-                                             DecryptedPacketView& out) const {
+bool RuntimeCoordinator::ViewDecryptedPacket(
+    const PeerIdentity& identity, PacketGeneration packet_generation, DecryptedPacketView& out
+) const {
     const auto* peer = PeerAt(identity.peer_index);
     return IsActiveIdentity(identity) && peer->ViewDecryptedPacket(identity.activation_generation, packet_generation, out);
 }

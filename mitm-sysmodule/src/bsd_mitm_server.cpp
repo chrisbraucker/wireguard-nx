@@ -40,12 +40,18 @@ class BsdMitmServerManager final : public ams::sf::hipc::ServerManager<1, BsdMit
         std::shared_ptr<::Service> forward_service;
         ams::sm::MitmProcessInfo client_info{};
         server->AcknowledgeMitmSession(std::addressof(forward_service), std::addressof(client_info));
-        logger::Log("bsd:s MITM acknowledge pid=%llu program_id=0x%016llX", static_cast<unsigned long long>(client_info.process_id.value),
-                    static_cast<unsigned long long>(client_info.program_id.value));
+        logger::Log(
+            "bsd:s MITM acknowledge pid=%llu program_id=0x%016llX",
+            static_cast<unsigned long long>(client_info.process_id.value),
+            static_cast<unsigned long long>(client_info.program_id.value)
+        );
 
         std::shared_ptr<::Service> local_forward = forward_service;
         auto service = ams::sf::CreateSharedObjectEmplaced<IBsdSystemService, BsdMitmService>(
-            static_cast<ams::MemoryResource*>(std::addressof(g_object_memory_resource)), std::move(local_forward), client_info);
+            static_cast<ams::MemoryResource*>(std::addressof(g_object_memory_resource)),
+            std::move(local_forward),
+            client_info
+        );
         R_RETURN(this->AcceptMitmImpl(server, std::move(service), std::move(forward_service)));
     }
 };
@@ -121,9 +127,14 @@ bool StartBsdMitmServer() {
     g_bsd_mitm_registration_owned = true;
     LogMitmState("after_register");
 
-    const ams::Result thread_result =
-        ams::os::CreateThread(std::addressof(g_server_thread), ServerThreadMain, nullptr, g_server_thread_stack,
-                              sizeof(g_server_thread_stack), ams::os::DefaultThreadPriority);
+    const ams::Result thread_result = ams::os::CreateThread(
+        std::addressof(g_server_thread),
+        ServerThreadMain,
+        nullptr,
+        g_server_thread_stack,
+        sizeof(g_server_thread_stack),
+        ams::os::DefaultThreadPriority
+    );
     if (R_FAILED(thread_result)) {
         logger::Log("CreateThread(wgnx-bsd-mitm) failed rc=0x%08X", thread_result.GetValue());
         UninstallOwnedBsdMitmRegistration();

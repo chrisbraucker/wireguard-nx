@@ -190,8 +190,9 @@ bool MessageDecrypt(crypto::MutableByteSpan dst_plaintext, crypto::ByteSpan src_
     return ok && MixHash(hash, src_ciphertext);
 }
 
-bool MessageEphemeral(crypto::X25519Key& ephemeral_dst, const crypto::X25519Key& ephemeral_src, NoiseValue& chaining_key,
-                      NoiseValue& hash) {
+bool MessageEphemeral(
+    crypto::X25519Key& ephemeral_dst, const crypto::X25519Key& ephemeral_src, NoiseValue& chaining_key, NoiseValue& hash
+) {
     ephemeral_dst = ephemeral_src;
     return MixHash(hash, ephemeral_src) && Kdf(chaining_key, ephemeral_src, chaining_key);
 }
@@ -271,8 +272,12 @@ bool ComputeCookieKey(NoiseValue& key, const noise_public_key& remote_static) {
 }
 
 template <typename T, std::size_t Size>
-bool ComputeMac2(const T& message, const noise_cookie& cookie, std::array<std::uint8_t, NoiseMacSize>& out_mac2,
-                 ParseError (*serialize)(std::span<std::uint8_t>, const T&)) {
+bool ComputeMac2(
+    const T& message,
+    const noise_cookie& cookie,
+    std::array<std::uint8_t, NoiseMacSize>& out_mac2,
+    ParseError (*serialize)(std::span<std::uint8_t>, const T&)
+) {
     std::array<std::uint8_t, Size> serialized{};
     if (serialize(serialized, message) != ParseError::None) {
         return false;
@@ -283,8 +288,9 @@ bool ComputeMac2(const T& message, const noise_cookie& cookie, std::array<std::u
     return ok;
 }
 
-bool ComputeMac2(const message_handshake_initiation& message, const noise_cookie& cookie,
-                 std::array<std::uint8_t, NoiseMacSize>& out_mac2) {
+bool ComputeMac2(
+    const message_handshake_initiation& message, const noise_cookie& cookie, std::array<std::uint8_t, NoiseMacSize>& out_mac2
+) {
     return ComputeMac2<message_handshake_initiation, HandshakeInitiationSize>(message, cookie, out_mac2, SerializeHandshakeInitiation);
 }
 
@@ -442,10 +448,16 @@ bool noise_handshake_transition(noise_handshake* handshake, HandshakeState new_s
     handshake->last_transition = GetMonotonicTime();
     ++handshake->transition_count;
 
-    wgnx::sysmodule::logger::Log("WG handshake peer='%s' %s -> %s reason='%s' local=0x%08x remote=0x%08x transitions=%u",
-                                 peer_name != nullptr ? peer_name : "<unnamed>", GetHandshakeStateName(old_state),
-                                 GetHandshakeStateName(new_state), reason != nullptr ? reason : "none", handshake->local_index,
-                                 handshake->remote_index, handshake->transition_count);
+    wgnx::sysmodule::logger::Log(
+        "WG handshake peer='%s' %s -> %s reason='%s' local=0x%08x remote=0x%08x transitions=%u",
+        peer_name != nullptr ? peer_name : "<unnamed>",
+        GetHandshakeStateName(old_state),
+        GetHandshakeStateName(new_state),
+        reason != nullptr ? reason : "none",
+        handshake->local_index,
+        handshake->remote_index,
+        handshake->transition_count
+    );
     return old_state != new_state;
 }
 
@@ -480,8 +492,11 @@ bool noise_handshake_create_initiation(message_handshake_initiation* dst, wg_pee
     SetMessageType(dst->type, MessageType::HandshakeInitiation);
     dst->sender_index = peer->handshake.local_index;
 
-    if (!HandshakeInit(peer->handshake_material.chaining_key.bytes, peer->handshake_material.hash.bytes,
-                       peer->static_identity.remote_static))
+    if (!HandshakeInit(
+            peer->handshake_material.chaining_key.bytes,
+            peer->handshake_material.hash.bytes,
+            peer->static_identity.remote_static
+        ))
         return false;
     peer->handshake_material.chaining_key.valid = true;
     peer->handshake_material.hash.valid = true;
@@ -497,12 +512,20 @@ bool noise_handshake_create_initiation(message_handshake_initiation* dst, wg_pee
         return false;
     peer->handshake_material.ephemeral_public.valid = true;
 
-    if (!MessageEphemeral(dst->unencrypted_ephemeral, peer->handshake_material.ephemeral_public.bytes,
-                          peer->handshake_material.chaining_key.bytes, peer->handshake_material.hash.bytes))
+    if (!MessageEphemeral(
+            dst->unencrypted_ephemeral,
+            peer->handshake_material.ephemeral_public.bytes,
+            peer->handshake_material.chaining_key.bytes,
+            peer->handshake_material.hash.bytes
+        ))
         return false;
 
-    if (!MixDh(peer->handshake_material.chaining_key.bytes, key.bytes(), peer->handshake_material.ephemeral_private.bytes,
-               peer->static_identity.remote_static.bytes))
+    if (!MixDh(
+            peer->handshake_material.chaining_key.bytes,
+            key.bytes(),
+            peer->handshake_material.ephemeral_private.bytes,
+            peer->static_identity.remote_static.bytes
+        ))
         return false;
     if (!MessageEncrypt(dst->encrypted_static, peer->static_identity.static_public.bytes, key.bytes(), peer->handshake_material.hash.bytes))
         return false;
@@ -519,7 +542,8 @@ bool noise_handshake_create_initiation(message_handshake_initiation* dst, wg_pee
     peer->has_last_initiation = true;
 
     static_cast<void>(
-        noise_handshake_transition(&peer->handshake, HandshakeState::InitiationCreated, peer->name, "created real handshake initiation"));
+        noise_handshake_transition(&peer->handshake, HandshakeState::InitiationCreated, peer->name, "created real handshake initiation")
+    );
 
     return true;
 }
@@ -574,9 +598,12 @@ bool noise_handshake_consume_initiation(const message_handshake_initiation* src,
         goto out;
     }
 
-    if (peer->handshake.has_last_initiation_timestamp &&
-        !std::lexicographical_compare(peer->handshake.last_initiation_timestamp.begin(), peer->handshake.last_initiation_timestamp.end(),
-                                      timestamp.bytes().begin(), timestamp.bytes().end())) {
+    if (peer->handshake.has_last_initiation_timestamp && !std::lexicographical_compare(
+                                                             peer->handshake.last_initiation_timestamp.begin(),
+                                                             peer->handshake.last_initiation_timestamp.end(),
+                                                             timestamp.bytes().begin(),
+                                                             timestamp.bytes().end()
+                                                         )) {
         wgnx::sysmodule::logger::Log("WG handshake peer='%s': rejected replayed initiation", peer->name);
         goto out;
     }
@@ -599,7 +626,8 @@ bool noise_handshake_consume_initiation(const message_handshake_initiation* src,
     peer->handshake.has_last_initiation_timestamp = true;
     peer->handshake.last_initiation_consumption = now;
     static_cast<void>(
-        noise_handshake_transition(&peer->handshake, HandshakeState::InitiationReceived, peer->name, "consumed real handshake initiation"));
+        noise_handshake_transition(&peer->handshake, HandshakeState::InitiationReceived, peer->name, "consumed real handshake initiation")
+    );
     ok = true;
 
 out:
@@ -631,22 +659,36 @@ bool noise_handshake_create_response(message_handshake_response* dst, wg_peer* p
         return false;
     peer->handshake_material.ephemeral_public.valid = true;
 
-    if (!MessageEphemeral(dst->unencrypted_ephemeral, peer->handshake_material.ephemeral_public.bytes,
-                          peer->handshake_material.chaining_key.bytes, peer->handshake_material.hash.bytes))
+    if (!MessageEphemeral(
+            dst->unencrypted_ephemeral,
+            peer->handshake_material.ephemeral_public.bytes,
+            peer->handshake_material.chaining_key.bytes,
+            peer->handshake_material.hash.bytes
+        ))
         return false;
-    if (!MixDh(peer->handshake_material.chaining_key.bytes, peer->handshake_material.ephemeral_private.bytes,
-               peer->handshake_material.remote_ephemeral.bytes)) {
+    if (!MixDh(
+            peer->handshake_material.chaining_key.bytes,
+            peer->handshake_material.ephemeral_private.bytes,
+            peer->handshake_material.remote_ephemeral.bytes
+        )) {
         wgnx::sysmodule::logger::Log("WG handshake peer='%s': response ee DH failed", peer->name);
         return false;
     }
-    if (!MixDh(peer->handshake_material.chaining_key.bytes, peer->handshake_material.ephemeral_private.bytes,
-               peer->static_identity.remote_static.bytes)) {
+    if (!MixDh(
+            peer->handshake_material.chaining_key.bytes,
+            peer->handshake_material.ephemeral_private.bytes,
+            peer->static_identity.remote_static.bytes
+        )) {
         wgnx::sysmodule::logger::Log("WG handshake peer='%s': response se DH failed", peer->name);
         return false;
     }
 
-    if (!MixPsk(peer->handshake_material.chaining_key.bytes, peer->handshake_material.hash.bytes, key.bytes(),
-                peer->static_identity.preshared_key.bytes))
+    if (!MixPsk(
+            peer->handshake_material.chaining_key.bytes,
+            peer->handshake_material.hash.bytes,
+            key.bytes(),
+            peer->static_identity.preshared_key.bytes
+        ))
         return false;
     if (!MessageEncrypt(dst->encrypted_nothing, {}, key.bytes(), peer->handshake_material.hash.bytes)) {
         wgnx::sysmodule::logger::Log("WG handshake peer='%s': response payload encrypt failed", peer->name);
@@ -657,7 +699,8 @@ bool noise_handshake_create_response(message_handshake_response* dst, wg_peer* p
     if (!ApplyOutgoingMacs(dst, peer->static_identity.remote_static, peer))
         return false;
     static_cast<void>(
-        noise_handshake_transition(&peer->handshake, HandshakeState::ResponseCreated, peer->name, "created real handshake response"));
+        noise_handshake_transition(&peer->handshake, HandshakeState::ResponseCreated, peer->name, "created real handshake response")
+    );
     return true;
 }
 
@@ -690,8 +733,12 @@ bool noise_handshake_consume_response(const message_handshake_response* src, con
         goto out;
     }
     if (!::wgnx::wireguard::wg_device_index_matches_slot(device, ::wgnx::wireguard::wg_index_slot::Handshake, src->receiver_index)) {
-        wgnx::sysmodule::logger::Log("WG handshake peer='%s': response receiver index mismatch local=0x%08x got=0x%08x", peer->name,
-                                     peer->handshake.local_index, src->receiver_index);
+        wgnx::sysmodule::logger::Log(
+            "WG handshake peer='%s': response receiver index mismatch local=0x%08x got=0x%08x",
+            peer->name,
+            peer->handshake.local_index,
+            src->receiver_index
+        );
         goto out;
     }
     if (peer->current_keypair.IsValid() && src->sender_index == peer->current_keypair.RemoteIndex()) {
@@ -725,7 +772,8 @@ bool noise_handshake_consume_response(const message_handshake_response* src, con
     peer->handshake_material.chaining_key.valid = true;
     peer->handshake.remote_index = src->sender_index;
     static_cast<void>(
-        noise_handshake_transition(&peer->handshake, HandshakeState::ResponseReceived, peer->name, "consumed real handshake response"));
+        noise_handshake_transition(&peer->handshake, HandshakeState::ResponseReceived, peer->name, "consumed real handshake response")
+    );
     ok = true;
 
 out:
@@ -747,8 +795,12 @@ bool noise_handshake_consume_cookie_reply(const message_handshake_cookie* src, c
         goto out;
     }
     if (!MatchesCookieReceiverIndex(device, src->receiver_index)) {
-        wgnx::sysmodule::logger::Log("WG handshake peer='%s': rejected cookie reply receiver mismatch local=0x%08x got=0x%08x", peer->name,
-                                     peer->handshake.local_index, src->receiver_index);
+        wgnx::sysmodule::logger::Log(
+            "WG handshake peer='%s': rejected cookie reply receiver mismatch local=0x%08x got=0x%08x",
+            peer->name,
+            peer->handshake.local_index,
+            src->receiver_index
+        );
         goto out;
     }
     if (!peer->cookie.has_last_mac1) {
@@ -760,8 +812,14 @@ bool noise_handshake_consume_cookie_reply(const message_handshake_cookie* src, c
         goto out;
     }
     std::ranges::copy(std::span{src->encrypted_cookie}.last(NoiseTagSize), cookie_tag.begin());
-    if (!crypto::xchacha20poly1305_decrypt(cookie_value.mutable_span(), std::span{src->encrypted_cookie}.first(CookieValueSize), cookie_tag,
-                                           peer->cookie.last_mac1, cookie_key.bytes(), src->nonce)) {
+    if (!crypto::xchacha20poly1305_decrypt(
+            cookie_value.mutable_span(),
+            std::span{src->encrypted_cookie}.first(CookieValueSize),
+            cookie_tag,
+            peer->cookie.last_mac1,
+            cookie_key.bytes(),
+            src->nonce
+        )) {
         crypto::secure_clear(cookie_tag);
         wgnx::sysmodule::logger::Log("WG handshake peer='%s': cookie reply decrypt failed", peer->name);
         goto out;
@@ -809,8 +867,15 @@ bool noise_handshake_begin_session(wg_device* device, wg_peer* peer) {
     }
 
     noise_keypair new_keypair{};
-    new_keypair.Establish(peer->handshake.local_index, peer->handshake.remote_index, GetMonotonicTime(), sending_key, receiving_key, 0,
-                          state == HandshakeState::ResponseReceived);
+    new_keypair.Establish(
+        peer->handshake.local_index,
+        peer->handshake.remote_index,
+        GetMonotonicTime(),
+        sending_key,
+        receiving_key,
+        0,
+        state == HandshakeState::ResponseReceived
+    );
     if (!new_keypair.IsValid()) {
         return false;
     }
@@ -834,7 +899,8 @@ bool noise_handshake_begin_session(wg_device* device, wg_peer* peer) {
     new_keypair.Reset();
     ::wgnx::wireguard::wg_device_refresh_keypair_indices(device, peer);
     static_cast<void>(
-        noise_handshake_transition(&peer->handshake, HandshakeState::SessionDerived, peer->name, "derived real session keys"));
+        noise_handshake_transition(&peer->handshake, HandshakeState::SessionDerived, peer->name, "derived real session keys")
+    );
     noise_handshake_clear_transcript(peer);
     return true;
 }
@@ -846,8 +912,11 @@ HandshakePacketOutcome noise_handshake_consume_incoming_packet(std::span<const s
 
     const ParseResult type_result = InspectMessageType(packet);
     if (!type_result.success) {
-        wgnx::sysmodule::logger::Log("WG handshake peer='%s': rejected packet at type inspection err=%s", peer->name,
-                                     GetParseErrorName(type_result.error));
+        wgnx::sysmodule::logger::Log(
+            "WG handshake peer='%s': rejected packet at type inspection err=%s",
+            peer->name,
+            GetParseErrorName(type_result.error)
+        );
         return HandshakePacketOutcome::Invalid;
     }
 
@@ -856,8 +925,11 @@ HandshakePacketOutcome noise_handshake_consume_incoming_packet(std::span<const s
         message_handshake_initiation initiation{};
         const ParseResult parse_result = ParseHandshakeInitiation(packet, initiation);
         if (!parse_result.success) {
-            wgnx::sysmodule::logger::Log("WG handshake peer='%s': rejected initiation packet err=%s", peer->name,
-                                         GetParseErrorName(parse_result.error));
+            wgnx::sysmodule::logger::Log(
+                "WG handshake peer='%s': rejected initiation packet err=%s",
+                peer->name,
+                GetParseErrorName(parse_result.error)
+            );
             return HandshakePacketOutcome::Invalid;
         }
         if (!noise_handshake_consume_initiation(&initiation, peer)) {
@@ -876,8 +948,11 @@ HandshakePacketOutcome noise_handshake_consume_incoming_packet(std::span<const s
         message_handshake_response response{};
         const ParseResult parse_result = ParseHandshakeResponse(packet, response);
         if (!parse_result.success) {
-            wgnx::sysmodule::logger::Log("WG handshake peer='%s': rejected response packet err=%s", peer->name,
-                                         GetParseErrorName(parse_result.error));
+            wgnx::sysmodule::logger::Log(
+                "WG handshake peer='%s': rejected response packet err=%s",
+                peer->name,
+                GetParseErrorName(parse_result.error)
+            );
             return HandshakePacketOutcome::Invalid;
         }
         return noise_handshake_consume_response(&response, device, peer) ? HandshakePacketOutcome::ResponseConsumed
@@ -887,8 +962,11 @@ HandshakePacketOutcome noise_handshake_consume_incoming_packet(std::span<const s
         message_handshake_cookie cookie{};
         const ParseResult parse_result = ParseHandshakeCookie(packet, cookie);
         if (!parse_result.success) {
-            wgnx::sysmodule::logger::Log("WG handshake peer='%s': rejected cookie reply packet err=%s", peer->name,
-                                         GetParseErrorName(parse_result.error));
+            wgnx::sysmodule::logger::Log(
+                "WG handshake peer='%s': rejected cookie reply packet err=%s",
+                peer->name,
+                GetParseErrorName(parse_result.error)
+            );
             return HandshakePacketOutcome::Invalid;
         }
         return noise_handshake_consume_cookie_reply(&cookie, device, peer) ? HandshakePacketOutcome::CookieReplyConsumed
@@ -899,8 +977,11 @@ HandshakePacketOutcome noise_handshake_consume_incoming_packet(std::span<const s
         break;
     }
 
-    wgnx::sysmodule::logger::Log("WG handshake peer='%s': rejected unsupported incoming packet type=%s", peer->name,
-                                 GetMessageTypeName(type_result.type));
+    wgnx::sysmodule::logger::Log(
+        "WG handshake peer='%s': rejected unsupported incoming packet type=%s",
+        peer->name,
+        GetMessageTypeName(type_result.type)
+    );
     return HandshakePacketOutcome::Invalid;
 }
 

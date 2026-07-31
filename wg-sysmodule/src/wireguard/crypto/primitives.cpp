@@ -115,8 +115,9 @@ bool Blake2sHmac(Blake2sDigest& output, ByteSpan key, ByteSpan data) {
     return ok;
 }
 
-bool chacha20poly1305_encrypt(MutableByteSpan ciphertext, Poly1305Tag& tag, ByteSpan plaintext, ByteSpan aad, const ChaCha20Key& key,
-                              const ChaCha20Nonce& nonce) {
+bool chacha20poly1305_encrypt(
+    MutableByteSpan ciphertext, Poly1305Tag& tag, ByteSpan plaintext, ByteSpan aad, const ChaCha20Key& key, const ChaCha20Nonce& nonce
+) {
     if (ciphertext.size() != plaintext.size()) {
         return false;
     }
@@ -128,8 +129,9 @@ bool chacha20poly1305_encrypt(MutableByteSpan ciphertext, Poly1305Tag& tag, Byte
     return true;
 }
 
-bool chacha20poly1305_decrypt(MutableByteSpan plaintext, ByteSpan ciphertext, const Poly1305Tag& tag, ByteSpan aad, const ChaCha20Key& key,
-                              const ChaCha20Nonce& nonce) {
+bool chacha20poly1305_decrypt(
+    MutableByteSpan plaintext, ByteSpan ciphertext, const Poly1305Tag& tag, ByteSpan aad, const ChaCha20Key& key, const ChaCha20Nonce& nonce
+) {
     if (plaintext.size() != ciphertext.size()) {
         return false;
     }
@@ -143,8 +145,9 @@ bool chacha20poly1305_decrypt(MutableByteSpan plaintext, ByteSpan ciphertext, co
     return ok;
 }
 
-bool xchacha20poly1305_encrypt(MutableByteSpan ciphertext, Poly1305Tag& tag, ByteSpan plaintext, ByteSpan aad, const ChaCha20Key& key,
-                               const XChaCha20Nonce& nonce) {
+bool xchacha20poly1305_encrypt(
+    MutableByteSpan ciphertext, Poly1305Tag& tag, ByteSpan plaintext, ByteSpan aad, const ChaCha20Key& key, const XChaCha20Nonce& nonce
+) {
     if (ciphertext.size() != plaintext.size()) {
         return false;
     }
@@ -156,8 +159,14 @@ bool xchacha20poly1305_encrypt(MutableByteSpan ciphertext, Poly1305Tag& tag, Byt
     return true;
 }
 
-bool xchacha20poly1305_decrypt(MutableByteSpan plaintext, ByteSpan ciphertext, const Poly1305Tag& tag, ByteSpan aad, const ChaCha20Key& key,
-                               const XChaCha20Nonce& nonce) {
+bool xchacha20poly1305_decrypt(
+    MutableByteSpan plaintext,
+    ByteSpan ciphertext,
+    const Poly1305Tag& tag,
+    ByteSpan aad,
+    const ChaCha20Key& key,
+    const XChaCha20Nonce& nonce
+) {
     if (plaintext.size() != ciphertext.size()) {
         return false;
     }

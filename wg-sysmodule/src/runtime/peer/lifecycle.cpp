@@ -26,8 +26,9 @@ std::int32_t ComputeElapsedSeconds(wgnx::platform::ktime_t timestamp_ns, wgnx::p
 }
 
 } // namespace
-void PeerRuntime::Configure(PeerIndex peer_index, const wgnx::PeerConfigEntry& config, PeerConfigDerivedInfo derived,
-                            wgnx::platform::ktime_t now) {
+void PeerRuntime::Configure(
+    PeerIndex peer_index, const wgnx::PeerConfigEntry& config, PeerConfigDerivedInfo derived, wgnx::platform::ktime_t now
+) {
     if (m_binding.Socket() != wgnx::platform::InvalidSocket) {
         std::abort();
     }
@@ -49,8 +50,12 @@ wgnx::platform::socket_handle PeerRuntime::ClearConfiguration(wgnx::platform::kt
     return socket;
 }
 
-bool PeerRegistry::Configure(std::span<const wgnx::PeerConfigEntry> configured_peers, std::span<PeerConfigDerivedInfo> derived,
-                             std::int32_t auto_start_peer_index, wgnx::platform::ktime_t now) {
+bool PeerRegistry::Configure(
+    std::span<const wgnx::PeerConfigEntry> configured_peers,
+    std::span<PeerConfigDerivedInfo> derived,
+    std::int32_t auto_start_peer_index,
+    wgnx::platform::ktime_t now
+) {
     if (configured_peers.size() > m_peers.size() || derived.size() != configured_peers.size() ||
         !IsValidPeerSelection(auto_start_peer_index, static_cast<std::uint32_t>(configured_peers.size()))) {
         return false;
@@ -265,8 +270,11 @@ wgnx::PeerErrorCode PeerRuntime::ValidateConfiguration() const {
 bool PeerRuntime::InstantiateProtocol() {
     ResetProtocol();
     if (!m_derived.secrets_valid || !wgnx::wireguard::wg_device_init_from_parsed_config(
-                                        std::addressof(m_protocol.device), m_config, m_derived.local_private_key,
-                                        m_derived.has_preshared_key ? std::addressof(m_derived.preshared_key) : nullptr)) {
+                                        std::addressof(m_protocol.device),
+                                        m_config,
+                                        m_derived.local_private_key,
+                                        m_derived.has_preshared_key ? std::addressof(m_derived.preshared_key) : nullptr
+                                    )) {
         return false;
     }
     m_protocol.instantiated = true;
@@ -299,8 +307,9 @@ DatagramGeneration PeerRuntime::AllocateDatagramGeneration() {
 PacketGeneration PeerRuntime::AllocateDecryptedPacketGeneration() {
     return AllocateGeneration(m_next_decrypted_packet_generation);
 }
-void PeerRuntime::EnterActivationError(wgnx::PeerErrorStage stage, wgnx::PeerErrorCode code, wgnx::platform::ktime_t now,
-                                       EffectBatch* effects) {
+void PeerRuntime::EnterActivationError(
+    wgnx::PeerErrorStage stage, wgnx::PeerErrorCode code, wgnx::platform::ktime_t now, EffectBatch* effects
+) {
     m_pending_datagram = {};
     m_pending_socket_generation = SocketGeneration{};
     std::ranges::fill(m_decrypted_packet.bytes, 0);
@@ -320,10 +329,12 @@ void PeerRuntime::EnterActivationError(wgnx::PeerErrorStage stage, wgnx::PeerErr
         .activation_generation = m_lifecycle.activation_generation,
     };
     if (m_binding.IsOpen()) {
-        effects->Add(CloseUdpSocketEffect{
-            .path_generation = m_path_request_generation,
-            .socket = m_binding.ReleaseSocket(),
-        });
+        effects->Add(
+            CloseUdpSocketEffect{
+                .path_generation = m_path_request_generation,
+                .socket = m_binding.ReleaseSocket(),
+            }
+        );
     }
     if (identity.activation_generation.IsZero()) {
         return;
@@ -335,15 +346,18 @@ void PeerRuntime::EnterActivationError(wgnx::PeerErrorStage stage, wgnx::PeerErr
              wgnx::wireguard::TimerHook::ZeroKeyMaterial,
              wgnx::wireguard::TimerHook::PersistentKeepalive,
          }) {
-        effects->Add(CancelProtocolTimerEffect{
-            .peer = identity,
-            .hook = hook,
-        });
+        effects->Add(
+            CancelProtocolTimerEffect{
+                .peer = identity,
+                .hook = hook,
+            }
+        );
     }
 }
 
-bool PeerRuntime::SnapshotPendingDatagram(ActivationGeneration activation_generation, DatagramGeneration datagram_generation,
-                                          PendingDatagramSnapshot& out) const {
+bool PeerRuntime::SnapshotPendingDatagram(
+    ActivationGeneration activation_generation, DatagramGeneration datagram_generation, PendingDatagramSnapshot& out
+) const {
     if (!IsCurrentActivation(activation_generation) || !m_pending_datagram.IsPending() ||
         m_pending_datagram.generation != datagram_generation || !m_binding.SnapshotForSend(out.binding)) {
         return false;
@@ -360,8 +374,9 @@ bool PeerRuntime::HasPendingDatagram(ActivationGeneration activation_generation,
            m_pending_datagram.generation == datagram_generation;
 }
 
-bool PeerRuntime::ViewDecryptedPacket(ActivationGeneration activation_generation, PacketGeneration packet_generation,
-                                      DecryptedPacketView& out) const {
+bool PeerRuntime::ViewDecryptedPacket(
+    ActivationGeneration activation_generation, PacketGeneration packet_generation, DecryptedPacketView& out
+) const {
     if (!IsCurrentActivation(activation_generation) || packet_generation.IsZero() || m_decrypted_packet.generation != packet_generation ||
         m_decrypted_packet.size == 0) {
         return false;
@@ -388,8 +403,12 @@ wgnx::PeerInfo PeerRuntime::BuildInfo(wgnx::platform::ktime_t now, bool is_activ
     std::snprintf(peer.address, sizeof(peer.address), "%s", m_config.address.data());
     std::snprintf(peer.endpoint, sizeof(peer.endpoint), "%s", m_config.endpoint.data());
     std::snprintf(peer.resolved_endpoint, sizeof(peer.resolved_endpoint), "%s", m_binding.EndpointText());
-    std::snprintf(peer.derived_public_key, sizeof(peer.derived_public_key), "%s",
-                  m_derived.has_derived_public_key ? m_derived.derived_public_key : "");
+    std::snprintf(
+        peer.derived_public_key,
+        sizeof(peer.derived_public_key),
+        "%s",
+        m_derived.has_derived_public_key ? m_derived.derived_public_key : ""
+    );
     peer.last_handshake_seconds = ComputeElapsedSeconds(m_lifecycle.last_handshake_ns, now);
     peer.last_rx_seconds = ComputeElapsedSeconds(m_lifecycle.last_rx_ns, now);
     peer.last_tx_seconds = ComputeElapsedSeconds(m_lifecycle.last_tx_ns, now);

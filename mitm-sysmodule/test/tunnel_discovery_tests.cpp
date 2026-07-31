@@ -32,8 +32,8 @@ bool RunTunnelDiscoveryTests() {
     passed = Check(!backoff.RequestForTraffic(249'999'999ULL), "backoff allowed early retry") && passed;
     passed = Check(backoff.RequestForTraffic(250'000'000ULL), "backoff did not allow retry at deadline") && passed;
 
-    constexpr std::uint64_t ExpectedDelays[] = {500'000'000ULL,   1'000'000'000ULL, 2'000'000'000ULL,
-                                                4'000'000'000ULL, 4'000'000'000ULL, 4'000'000'000ULL};
+    constexpr std::uint64_t ExpectedDelays[] =
+        {500'000'000ULL, 1'000'000'000ULL, 2'000'000'000ULL, 4'000'000'000ULL, 4'000'000'000ULL, 4'000'000'000ULL};
     std::uint64_t now = 250'000'000ULL;
     for (const std::uint64_t expected_delay : ExpectedDelays) {
         backoff.CompleteFailure(now);

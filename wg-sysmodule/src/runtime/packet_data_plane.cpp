@@ -8,30 +8,65 @@
 
 namespace wgnx::sysmodule::runtime {
 
-PacketSubmissionOutcome PacketDataPlane::SubmitIpPacket(std::span<const std::uint8_t> packet, ProcessId consumer_id,
-                                                        const TimerFacts& timer_facts, wgnx::platform::ktime_t occurred_at,
-                                                        EffectBatch& out_effects) {
-    return SubmitValidatedPacket(packet, consumer_id, timer_facts, occurred_at, wireguard::ValidateInnerIpPacket(packet), true,
-                                 out_effects);
+PacketSubmissionOutcome PacketDataPlane::SubmitIpPacket(
+    std::span<const std::uint8_t> packet,
+    ProcessId consumer_id,
+    const TimerFacts& timer_facts,
+    wgnx::platform::ktime_t occurred_at,
+    EffectBatch& out_effects
+) {
+    return SubmitValidatedPacket(
+        packet,
+        consumer_id,
+        timer_facts,
+        occurred_at,
+        wireguard::ValidateInnerIpPacket(packet),
+        true,
+        out_effects
+    );
 }
 
-PacketSubmissionOutcome PacketDataPlane::SubmitIpv4Packet(std::span<const std::uint8_t> packet, ProcessId consumer_id,
-                                                          const TimerFacts& timer_facts, wgnx::platform::ktime_t occurred_at,
-                                                          EffectBatch& out_effects) {
-    return SubmitValidatedPacket(packet, consumer_id, timer_facts, occurred_at, wireguard::ValidateInnerIpv4Packet(packet), true,
-                                 out_effects);
+PacketSubmissionOutcome PacketDataPlane::SubmitIpv4Packet(
+    std::span<const std::uint8_t> packet,
+    ProcessId consumer_id,
+    const TimerFacts& timer_facts,
+    wgnx::platform::ktime_t occurred_at,
+    EffectBatch& out_effects
+) {
+    return SubmitValidatedPacket(
+        packet,
+        consumer_id,
+        timer_facts,
+        occurred_at,
+        wireguard::ValidateInnerIpv4Packet(packet),
+        true,
+        out_effects
+    );
 }
 
-PacketSubmissionOutcome PacketDataPlane::SubmitInternalIpPacket(std::span<const std::uint8_t> packet, const TimerFacts& timer_facts,
-                                                                wgnx::platform::ktime_t occurred_at, EffectBatch& out_effects) {
-    return SubmitValidatedPacket(packet, ProcessId{}, timer_facts, occurred_at, wireguard::ValidateInnerIpPacket(packet), false,
-                                 out_effects);
+PacketSubmissionOutcome PacketDataPlane::SubmitInternalIpPacket(
+    std::span<const std::uint8_t> packet, const TimerFacts& timer_facts, wgnx::platform::ktime_t occurred_at, EffectBatch& out_effects
+) {
+    return SubmitValidatedPacket(
+        packet,
+        ProcessId{},
+        timer_facts,
+        occurred_at,
+        wireguard::ValidateInnerIpPacket(packet),
+        false,
+        out_effects
+    );
 }
 
-PacketSubmissionOutcome PacketDataPlane::SubmitValidatedPacket(std::span<const std::uint8_t> packet, ProcessId consumer_id,
-                                                               const TimerFacts& timer_facts, wgnx::platform::ktime_t occurred_at,
-                                                               wireguard::InnerIpValidationError validation, bool claim_transport,
-                                                               EffectBatch& out_effects) {
+PacketSubmissionOutcome PacketDataPlane::SubmitValidatedPacket(
+    std::span<const std::uint8_t> packet,
+    ProcessId consumer_id,
+    const TimerFacts& timer_facts,
+    wgnx::platform::ktime_t occurred_at,
+    wireguard::InnerIpValidationError validation,
+    bool claim_transport,
+    EffectBatch& out_effects
+) {
     out_effects.Clear();
     PacketSubmissionOutcome outcome{
         .status = PacketSubmissionStatus::InternalError,
@@ -77,13 +112,15 @@ PacketSubmissionOutcome PacketDataPlane::SubmitValidatedPacket(std::span<const s
     }
 
     outcome.packet_id = AllocatePacketId();
-    out_effects = m_coordinator.Dispatch(InnerPacketStagedEvent{
-        .peer = outcome.peer,
-        .packet = SynchronousPacketView{packet},
-        .packet_id = outcome.packet_id,
-        .timer_facts = timer_facts,
-        .occurred_at = occurred_at,
-    });
+    out_effects = m_coordinator.Dispatch(
+        InnerPacketStagedEvent{
+            .peer = outcome.peer,
+            .packet = SynchronousPacketView{packet},
+            .packet_id = outcome.packet_id,
+            .timer_facts = timer_facts,
+            .occurred_at = occurred_at,
+        }
+    );
     if (m_coordinator.SnapshotPacketState(peer) && peer.identity == outcome.peer) {
         outcome.queue_depth = peer.staged_packet_count;
     }

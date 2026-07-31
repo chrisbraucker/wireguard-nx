@@ -24,8 +24,9 @@ using ServerManager = ams::sf::hipc::ServerManager<wgnx::resource_budget::IpcSer
 constinit ams::util::TypedStorage<ServerManager> g_server_manager_storage = {};
 constinit ServerManager* g_server_manager = nullptr;
 constinit ams::sf::UnmanagedServiceObject<IControlService, ControlService> g_control_service_object;
-alignas(ams::os::ThreadStackAlignment) constinit std::array<std::byte,
-                                                            wgnx::resource_budget::IpcServerThreadStackBytes> g_server_thread_stack{};
+alignas(
+    ams::os::ThreadStackAlignment
+) constinit std::array<std::byte, wgnx::resource_budget::IpcServerThreadStackBytes> g_server_thread_stack{};
 constinit ams::os::ThreadType g_server_thread{};
 constinit bool g_server_thread_started = false;
 constinit std::atomic_bool g_shutdown_requested = false;
@@ -98,17 +99,24 @@ ams::Result ControlService::Shutdown() {
     R_SUCCEED();
 }
 
-ams::Result ControlService::SubmitInnerIpv4Packet(ams::sf::Out<wgnx::PacketSubmissionResult> out, const ams::sf::InBuffer& packet,
-                                                  const ams::sf::ClientProcessId& client_pid) {
-    out.SetValue(runtime::SubmitInnerIpv4Packet({static_cast<const std::uint8_t*>(packet.GetPointer()), packet.GetSize()},
-                                                client_pid.GetValue().value));
+ams::Result ControlService::SubmitInnerIpv4Packet(
+    ams::sf::Out<wgnx::PacketSubmissionResult> out, const ams::sf::InBuffer& packet, const ams::sf::ClientProcessId& client_pid
+) {
+    out.SetValue(
+        runtime::SubmitInnerIpv4Packet(
+            {static_cast<const std::uint8_t*>(packet.GetPointer()), packet.GetSize()},
+            client_pid.GetValue().value
+        )
+    );
     R_SUCCEED();
 }
 
-ams::Result ControlService::ReceiveInnerIpv4Packet(ams::sf::Out<wgnx::PacketReceiveResult> out, const ams::sf::OutBuffer& packet,
-                                                   const ams::sf::ClientProcessId& client_pid) {
+ams::Result ControlService::ReceiveInnerIpv4Packet(
+    ams::sf::Out<wgnx::PacketReceiveResult> out, const ams::sf::OutBuffer& packet, const ams::sf::ClientProcessId& client_pid
+) {
     out.SetValue(
-        runtime::ReceiveInnerIpv4Packet({static_cast<std::uint8_t*>(packet.GetPointer()), packet.GetSize()}, client_pid.GetValue().value));
+        runtime::ReceiveInnerIpv4Packet({static_cast<std::uint8_t*>(packet.GetPointer()), packet.GetSize()}, client_pid.GetValue().value)
+    );
     R_SUCCEED();
 }
 
@@ -126,7 +134,10 @@ bool StartIpcServer() {
     ShutdownEvent().Clear();
     g_server_manager = ams::util::ConstructAt(g_server_manager_storage);
     const ams::Result control_register_result = g_server_manager->RegisterObjectForServer(
-        g_control_service_object.GetShared(), ams::sm::ServiceName::Encode(wgnx::ServiceName), wgnx::resource_budget::IpcSessions);
+        g_control_service_object.GetShared(),
+        ams::sm::ServiceName::Encode(wgnx::ServiceName),
+        wgnx::resource_budget::IpcSessions
+    );
     if (R_FAILED(control_register_result)) {
         logger::Log("RegisterObjectForServer(%s) failed rc=0x%08X", wgnx::ServiceName, control_register_result.GetValue());
         DestroyIpcServerAfterFailedStart();
@@ -134,7 +145,10 @@ bool StartIpcServer() {
     }
     logger::Log("Registered service '%s'", wgnx::ServiceName);
     const ams::Result tunnel_register_result = g_server_manager->RegisterObjectForServer(
-        GetTunnelRootServiceObject(), ams::sm::ServiceName::Encode(wgnx::tunnel::ServiceName), wgnx::resource_budget::IpcSessions);
+        GetTunnelRootServiceObject(),
+        ams::sm::ServiceName::Encode(wgnx::tunnel::ServiceName),
+        wgnx::resource_budget::IpcSessions
+    );
     if (R_FAILED(tunnel_register_result)) {
         logger::Log("RegisterObjectForServer(%s) failed rc=0x%08X", wgnx::tunnel::ServiceName, tunnel_register_result.GetValue());
         DestroyIpcServerAfterFailedStart();
@@ -142,9 +156,14 @@ bool StartIpcServer() {
     }
     logger::Log("Registered service '%s'", wgnx::tunnel::ServiceName);
 
-    const ams::Result thread_result =
-        ams::os::CreateThread(std::addressof(g_server_thread), IpcServerThreadMain, nullptr, g_server_thread_stack.data(),
-                              g_server_thread_stack.size(), ams::os::DefaultThreadPriority);
+    const ams::Result thread_result = ams::os::CreateThread(
+        std::addressof(g_server_thread),
+        IpcServerThreadMain,
+        nullptr,
+        g_server_thread_stack.data(),
+        g_server_thread_stack.size(),
+        ams::os::DefaultThreadPriority
+    );
     if (R_FAILED(thread_result)) {
         logger::Log("CreateThread(wgnx-ipc) failed rc=0x%08X", thread_result.GetValue());
         DestroyIpcServerAfterFailedStart();

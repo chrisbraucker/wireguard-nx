@@ -31,8 +31,8 @@ void HorizonDispatcher::Initialize(const HorizonDispatcherCallbacks& callbacks) 
     m_initialized = true;
 }
 
-wgnx::platform::queue_work_result HorizonDispatcher::Queue(wgnx::platform::workqueue_struct* queue, wgnx::platform::work_struct* work,
-                                                           const char* name) {
+wgnx::platform::queue_work_result
+HorizonDispatcher::Queue(wgnx::platform::workqueue_struct* queue, wgnx::platform::work_struct* work, const char* name) {
     const auto result = wgnx::platform::queue_work(queue, work);
     if (result != wgnx::platform::queue_work_result::capacity_exhausted && result != wgnx::platform::queue_work_result::unavailable) {
         return result;
@@ -41,8 +41,14 @@ wgnx::platform::queue_work_result HorizonDispatcher::Queue(wgnx::platform::workq
     const auto statistics = wgnx::platform::get_workqueue_statistics(queue);
     logger::Log(
         "Rejected runtime work lane=%s result=%u pending=%zu capacity=%zu high_water=%zu rejected_capacity=%llu rejected_unavailable=%llu",
-        name, static_cast<unsigned int>(result), statistics.pending, statistics.capacity, statistics.high_watermark,
-        static_cast<unsigned long long>(statistics.rejected_capacity), static_cast<unsigned long long>(statistics.rejected_unavailable));
+        name,
+        static_cast<unsigned int>(result),
+        statistics.pending,
+        statistics.capacity,
+        statistics.high_watermark,
+        static_cast<unsigned long long>(statistics.rejected_capacity),
+        static_cast<unsigned long long>(statistics.rejected_unavailable)
+    );
     return result;
 }
 
@@ -67,8 +73,9 @@ void HorizonDispatcher::QueueInnerPacketSubmission() {
 void HorizonDispatcher::QueuePendingDatagramTransmit() {
     if (m_transmit_queue != nullptr) {
         const auto result = Queue(m_transmit_queue, &m_transmit_work, "transmit");
-        AMS_ABORT_UNLESS(result != wgnx::platform::queue_work_result::capacity_exhausted &&
-                         result != wgnx::platform::queue_work_result::unavailable);
+        AMS_ABORT_UNLESS(
+            result != wgnx::platform::queue_work_result::capacity_exhausted && result != wgnx::platform::queue_work_result::unavailable
+        );
     }
 }
 
