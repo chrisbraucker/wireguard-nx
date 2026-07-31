@@ -3,6 +3,8 @@
 #include "wgnx/tunnel_client.hpp"
 #include "wgnx/tunnel_protocol.hpp"
 
+#include "tunnel_flow_result.hpp"
+
 #include <stratosphere.hpp>
 
 #include <atomic>
@@ -10,17 +12,6 @@
 #include <cstdint>
 
 namespace wgnx::mitm {
-
-enum class TunnelFlowResult : std::uint8_t {
-    Opened,
-    RouteNotCovered,
-    TunnelUnavailable,
-    BlockedByPolicy,
-    SocketError,
-    MessageTooLarge,
-    WouldBlock,
-    Closed,
-};
 
 struct TunnelFlowEndpoint {
     std::uint8_t address[4]{};

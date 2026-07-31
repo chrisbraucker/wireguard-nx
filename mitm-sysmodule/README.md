@@ -63,6 +63,8 @@ After a socket opens a WGNX flow, it remains tunneled until close and later tunn
 Tunneled `Send` copies payloads into a bounded MITM-owned FIFO and returns without waiting for a WGNX staging-slot retirement or outer UDP transmission.
 The worker batches FIFO entries only for their owning WGNX child client, preserving per-socket UDP submission order.
 WGNX `QueueFull` suppresses `POLLOUT` until its coalesced `Writable` completion arrives, while a full MITM adapter FIFO also returns `EAGAIN` without busy retrying.
+Tunneled `poll()` returns zero with errno zero for a timeout, a positive ready count with errno zero for readiness or `POLLHUP`, `-1/EAGAIN` when either worker poll queue is full, and `-1/EIO` for worker or private-IPC failure.
+It does not use `POLLERR` until the contract gains a defined per-flow asynchronous error state.
 Socket options and generalized process admission remain deferred work.
 
 Build and validate the skeleton with:

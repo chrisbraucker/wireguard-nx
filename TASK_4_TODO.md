@@ -82,9 +82,13 @@ Implementation note: pass the effective MTU to the common padding calculation in
 
 ### Poll error reporting
 
-- [ ] Propagate `TunnelPollResult.result` through `BsdMitmService::Poll` instead of reporting every worker failure as a successful empty poll.
-- [ ] Map queue rejection and transport failure to a documented BSD errno or terminal poll event.
-- [ ] Add focused tests distinguishing timeout, readiness, and worker failure.
+- [x] Propagate `TunnelPollResult.result` through `BsdMitmService::Poll` instead of reporting every worker failure as a successful empty poll.
+- [x] Map queue rejection and transport failure to a documented BSD errno or terminal poll event.
+- [x] Add focused tests distinguishing timeout, readiness, and worker failure.
+
+Implementation note: timeout returns `0` with errno zero, readiness returns the ready count with errno zero, terminal closure returns `POLLHUP`, worker ingress or pending-poll capacity returns `-1/EAGAIN`, and worker or CMIF failure returns `-1/EIO`.
+
+Implementation note: V1 intentionally does not expose `POLLERR` because it has no defined per-flow asynchronous error state.
 
 ### Cookie and rate-limit parity
 

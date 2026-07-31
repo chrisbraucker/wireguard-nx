@@ -325,6 +325,8 @@ The adapter owns eight fixed 1472-byte payload slots globally and limits each BS
 If WGNX reports `QueueFull`, the worker retains the unsubmitted FIFO suffix and makes the socket non-writable until it consumes a coalesced `Writable` completion.
 `Recv` and `RecvFrom` return `EAGAIN` until inbound data is available.
 `Poll` is the only V1 wait operation and reports `POLLIN`, coalesced `POLLOUT` recovery after queue pressure, timeout, or `POLLHUP` on terminal flow closure.
+Timeout and ordinary readiness return a nonnegative count with errno zero, while worker ingress or pending-poll capacity rejection returns `-1` with `EAGAIN` and worker or CMIF failure returns `-1` with `EIO`.
+V1 does not use `POLLERR` because it has no per-flow asynchronous error state.
 Blocking-mode behavior, socket-option virtualization, multi-descriptor polling, and arbitrary BSD operation support are deferred extensions.
 Typed WGNX flow statuses and dispositions map to documented BSD return values and errno values.
 Unsupported operations fail explicitly before they can create a split state between the retained BSD descriptor and the WGNX flow.

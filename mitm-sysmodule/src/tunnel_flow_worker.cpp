@@ -491,7 +491,12 @@ void TunnelFlowWorker::RequestTunnelInvalidation() {
 bool TunnelFlowWorker::EnqueueAndWait(Operation& operation) {
     {
         std::scoped_lock lock(m_mutex);
-        if (!m_started || m_stop_requested || m_operation_count == std::size(m_operations)) {
+        if (!m_started || m_stop_requested) {
+            ++m_metrics.operations_rejected;
+            return false;
+        }
+        if (m_operation_count == std::size(m_operations)) {
+            operation.result = TunnelFlowResult::QueueFull;
             ++m_metrics.operations_rejected;
             return false;
         }
@@ -527,7 +532,8 @@ TunnelFlowResult TunnelFlowWorker::Send(std::uint64_t owner, s32 descriptor, con
     operation.descriptor = descriptor;
     operation.input = payload;
     operation.input_size = payload_size;
-    return EnqueueAndWait(operation) ? operation.result : TunnelFlowResult::SocketError;
+    static_cast<void>(EnqueueAndWait(operation));
+    return operation.result;
 }
 
 TunnelReceiveResult TunnelFlowWorker::Receive(std::uint64_t owner, s32 descriptor, void* payload, std::size_t payload_size) {
@@ -536,7 +542,10 @@ TunnelReceiveResult TunnelFlowWorker::Receive(std::uint64_t owner, s32 descripto
     operation.descriptor = descriptor;
     operation.output = payload;
     operation.output_size = payload_size;
-    return EnqueueAndWait(operation) ? operation.receive : TunnelReceiveResult{.result = TunnelFlowResult::SocketError};
+    if (EnqueueAndWait(operation)) {
+        return operation.receive;
+    }
+    return {.result = operation.result};
 }
 
 TunnelPollResult TunnelFlowWorker::Poll(std::uint64_t owner, s32 descriptor, short events, std::int32_t timeout_milliseconds) {
@@ -545,8 +554,8 @@ TunnelPollResult TunnelFlowWorker::Poll(std::uint64_t owner, s32 descriptor, sho
     operation.descriptor = descriptor;
     operation.events = events;
     operation.timeout_milliseconds = timeout_milliseconds;
-    return EnqueueAndWait(operation) ? TunnelPollResult{.result = operation.result, .revents = operation.revents}
-                                     : TunnelPollResult{.result = TunnelFlowResult::SocketError};
+    static_cast<void>(EnqueueAndWait(operation));
+    return {.result = operation.result, .revents = operation.revents};
 }
 
 void TunnelFlowWorker::Close(std::uint64_t owner, s32 descriptor) {
@@ -1090,7 +1099,7 @@ bool TunnelFlowWorker::Dispatch(Operation& operation) {
         if (QueuePendingPoll(operation)) {
             return false;
         }
-        operation.result = TunnelFlowResult::WouldBlock;
+        operation.result = TunnelFlowResult::QueueFull;
         return true;
     }
 

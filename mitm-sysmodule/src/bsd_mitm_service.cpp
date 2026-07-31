@@ -55,26 +55,6 @@ void EncodeIpv4Endpoint(const BsdIpv4Endpoint& endpoint, void* out_buffer) {
     AMS_ABORT_UNLESS(written);
 }
 
-[[nodiscard]] s32 ErrnoForResult(const TunnelFlowResult result) {
-    switch (result) {
-    case TunnelFlowResult::WouldBlock:
-        return EAGAIN;
-    case TunnelFlowResult::Closed:
-        return ECONNABORTED;
-    case TunnelFlowResult::SocketError:
-        return EIO;
-    case TunnelFlowResult::MessageTooLarge:
-        return EMSGSIZE;
-    case TunnelFlowResult::BlockedByPolicy:
-        return ENETUNREACH;
-    case TunnelFlowResult::RouteNotCovered:
-    case TunnelFlowResult::TunnelUnavailable:
-    case TunnelFlowResult::Opened:
-        return 0;
-    }
-    return EIO;
-}
-
 [[nodiscard]] bool IsUdpIpv4Socket(const s32 domain, const s32 type, const s32 protocol) {
     return domain == BsdAddressFamilyInet && type == BsdSocketDatagram && (protocol == 0 || protocol == BsdProtocolUdp);
 }
@@ -93,6 +73,8 @@ void EncodeIpv4Endpoint(const BsdIpv4Endpoint& endpoint, void* out_buffer) {
         return "socket_error";
     case TunnelFlowResult::MessageTooLarge:
         return "message_too_large";
+    case TunnelFlowResult::QueueFull:
+        return "queue_full";
     case TunnelFlowResult::WouldBlock:
         return "would_block";
     case TunnelFlowResult::Closed:
@@ -808,16 +790,24 @@ ams::Result BsdMitmService::Poll(
         );
         R_SUCCEED();
     }
-    s32 ready_count = 0;
-    for (s32 index = 0; index < nfds; ++index) {
-        const TunnelPollResult result =
-            GetTunnelFlowWorker().Poll(m_owner, descriptors[index].fd, descriptors[index].events, index == 0 ? timeout : 0);
-        descriptors[index].revents = result.revents;
-        if (descriptors[index].revents != 0) {
-            ++ready_count;
-        }
+    const TunnelPollResult result = GetTunnelFlowWorker().Poll(m_owner, descriptors[0].fd, descriptors[0].events, timeout);
+    const s32 poll_errno = TunneledPollErrno(result.result);
+    if (poll_errno != 0) {
+        std::memcpy(fds_out.GetPointer(), descriptors.data(), sizeof(pollfd));
+        out_errno.SetValue(poll_errno);
+        out_count.SetValue(-1);
+        logger::Log(
+            "bsd:s poll failed owner=%llu fd=%d result=%s errno=%d",
+            static_cast<unsigned long long>(m_owner),
+            descriptors[0].fd,
+            TunnelFlowResultName(result.result),
+            poll_errno
+        );
+        R_SUCCEED();
     }
-    std::memcpy(fds_out.GetPointer(), descriptors.data(), static_cast<std::size_t>(nfds) * sizeof(pollfd));
+    descriptors[0].revents = result.revents;
+    const s32 ready_count = descriptors[0].revents != 0 ? 1 : 0;
+    std::memcpy(fds_out.GetPointer(), descriptors.data(), sizeof(pollfd));
     out_errno.SetValue(0);
     out_count.SetValue(ready_count);
     logger::LogPacket(

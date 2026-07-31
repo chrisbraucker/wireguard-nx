@@ -27,6 +27,11 @@ bool RunBsdTunneledContractTests() {
            Check(SupportsTunneledPoll(1, POLLIN | POLLOUT), "combined readiness events were rejected") &&
            Check(!SupportsTunneledPoll(2, POLLIN), "multi-descriptor tunnel poll was accepted") &&
            Check(!SupportsTunneledPoll(1, POLLPRI), "unsupported tunnel poll event was accepted") &&
+           Check(TunneledPollErrno(TunnelFlowResult::WouldBlock) == 0, "poll timeout returned an errno") &&
+           Check(TunneledPollErrno(TunnelFlowResult::Opened) == 0, "poll readiness returned an errno") &&
+           Check(TunneledPollErrno(TunnelFlowResult::Closed) == 0, "poll closure returned an errno") &&
+           Check(TunneledPollErrno(TunnelFlowResult::QueueFull) == EAGAIN, "poll queue rejection did not return EAGAIN") &&
+           Check(TunneledPollErrno(TunnelFlowResult::SocketError) == EIO, "poll worker failure did not return EIO") &&
            Check(SupportsTunneledFcntl(BsdFcntlGetFl, 0), "F_GETFL was rejected") &&
            Check(BsdFcntlNonBlock == 0x800, "BSD:S O_NONBLOCK wire value changed") &&
            Check(TunneledFcntlResult(BsdFcntlGetFl) == BsdFcntlNonBlock, "F_GETFL did not report BSD:S O_NONBLOCK") &&
