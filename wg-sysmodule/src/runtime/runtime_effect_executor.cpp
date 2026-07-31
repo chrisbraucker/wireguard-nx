@@ -381,6 +381,16 @@ void RuntimeEffectExecutor::HandleNetworkPathObservation(const wgnx::platform::n
 }
 
 bool RuntimeEffectExecutor::PublishDecryptedPacketLocked(const PeerIdentity& peer, std::span<const std::uint8_t> inner_packet) {
+    const wgnx::PeerConfigEntry* configuration = m_coordinator.Configuration(peer.peer_index.Value());
+    if (configuration == nullptr || !wgnx::wireguard::AllowedIpsContainSource(inner_packet, configuration->allowed_ips.data())) {
+        logger::Log(
+            "Dropped decrypted inner packet peer=%u activation=%u bytes=%zu reason=source_not_allowed",
+            peer.peer_index.Value(),
+            peer.activation_generation.Value(),
+            inner_packet.size()
+        );
+        return false;
+    }
     const auto probe = m_debug_probe_runner.HandleDecryptedPacket(peer, inner_packet, GetRuntimeNowNs());
     if (probe.consumed) {
         // The concrete cancellation runs after the caller releases the daemon lock.

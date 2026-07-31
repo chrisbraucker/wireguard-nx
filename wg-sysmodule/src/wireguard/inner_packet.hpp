@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <memory>
 #include <span>
+#include <string_view>
 
 namespace wgnx::wireguard {
 
@@ -37,6 +38,7 @@ InnerIpv4ValidationError ValidatePaddedInnerIpv4Packet(std::span<const std::uint
 InnerIpValidationError ValidateInnerIpPacket(std::span<const std::uint8_t> packet, InnerIpVersion* out_version = nullptr);
 InnerIpValidationError
 ValidatePaddedInnerIpPacket(std::span<const std::uint8_t> payload, std::size_t* out_packet_size, InnerIpVersion* out_version = nullptr);
+bool AllowedIpsContainSource(std::span<const std::uint8_t> packet, std::string_view allowed_ips);
 const char* GetInnerIpValidationErrorName(InnerIpValidationError error);
 inline const char* GetInnerIpv4ValidationErrorName(InnerIpv4ValidationError error) {
     return GetInnerIpValidationErrorName(error);

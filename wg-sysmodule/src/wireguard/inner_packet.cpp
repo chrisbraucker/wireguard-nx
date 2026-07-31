@@ -1,5 +1,7 @@
 #include "wireguard/inner_packet.hpp"
 
+#include <algorithm>
+
 namespace wgnx::wireguard {
 
 const char* GetQueueDispositionName(QueueDisposition disposition) {
@@ -27,6 +29,12 @@ namespace {
 constexpr std::size_t MinimumIpv4HeaderSize = 20;
 constexpr std::size_t Ipv6HeaderSize = 40;
 constexpr std::size_t MaximumPaddingSize = 15;
+
+struct AllowedIp {
+    std::array<std::uint8_t, 16> address{};
+    std::uint8_t size{};
+    std::uint8_t prefix{};
+};
 
 std::uint16_t LoadBigEndian16(const std::uint8_t* value) {
     return static_cast<std::uint16_t>((static_cast<std::uint16_t>(value[0]) << 8U) | static_cast<std::uint16_t>(value[1]));
@@ -79,6 +87,161 @@ std::size_t GetUnpaddedPacketSize(std::span<const std::uint8_t> payload) {
         return 0;
     }
     return 0;
+}
+
+std::string_view Trim(std::string_view value) {
+    while (!value.empty() && (value.front() == ' ' || value.front() == '\t')) {
+        value.remove_prefix(1);
+    }
+    while (!value.empty() && (value.back() == ' ' || value.back() == '\t')) {
+        value.remove_suffix(1);
+    }
+    return value;
+}
+
+bool ParseDecimal(std::string_view value, unsigned int maximum, unsigned int* out) {
+    if (out == nullptr || value.empty()) {
+        return false;
+    }
+    unsigned int parsed = 0;
+    for (const char character : value) {
+        if (character < '0' || character > '9') {
+            return false;
+        }
+        parsed = (parsed * 10U) + static_cast<unsigned int>(character - '0');
+        if (parsed > maximum) {
+            return false;
+        }
+    }
+    *out = parsed;
+    return true;
+}
+
+bool ParseIpv4Address(std::string_view value, std::uint8_t* out) {
+    if (out == nullptr) {
+        return false;
+    }
+    std::size_t offset = 0;
+    for (std::size_t index = 0; index < 4; ++index) {
+        const std::size_t delimiter = value.find('.', offset);
+        const std::string_view component = value.substr(offset, delimiter == std::string_view::npos ? delimiter : delimiter - offset);
+        unsigned int parsed = 0;
+        if (!ParseDecimal(component, 255, &parsed)) {
+            return false;
+        }
+        out[index] = static_cast<std::uint8_t>(parsed);
+        if (index == 3) {
+            return delimiter == std::string_view::npos;
+        }
+        if (delimiter == std::string_view::npos) {
+            return false;
+        }
+        offset = delimiter + 1;
+    }
+    return false;
+}
+
+bool ParseIpv6Address(std::string_view value, std::uint8_t* out) {
+    if (out == nullptr || value.empty()) {
+        return false;
+    }
+    std::array<std::uint16_t, 8> words{};
+    std::size_t word_count = 0;
+    std::size_t compressed_at = words.size();
+    std::size_t offset = 0;
+    if (value.front() == ':') {
+        if (value.size() < 2 || value[1] != ':') {
+            return false;
+        }
+        compressed_at = 0;
+        offset = 2;
+    }
+    while (offset < value.size()) {
+        if (word_count == words.size()) {
+            return false;
+        }
+        const std::size_t delimiter = value.find(':', offset);
+        const std::string_view component = value.substr(offset, delimiter == std::string_view::npos ? delimiter : delimiter - offset);
+        if (component.empty() || component.size() > 4) {
+            return false;
+        }
+        unsigned int parsed = 0;
+        for (const char character : component) {
+            const unsigned int digit = character >= '0' && character <= '9'   ? static_cast<unsigned int>(character - '0')
+                                       : character >= 'a' && character <= 'f' ? static_cast<unsigned int>(character - 'a' + 10)
+                                       : character >= 'A' && character <= 'F' ? static_cast<unsigned int>(character - 'A' + 10)
+                                                                             : 16U;
+            if (digit == 16U) {
+                return false;
+            }
+            parsed = (parsed << 4U) | digit;
+        }
+        words[word_count++] = static_cast<std::uint16_t>(parsed);
+        if (delimiter == std::string_view::npos) {
+            break;
+        }
+        if (delimiter + 1 < value.size() && value[delimiter + 1] == ':') {
+            if (compressed_at != words.size()) {
+                return false;
+            }
+            compressed_at = word_count;
+            offset = delimiter + 2;
+            continue;
+        }
+        offset = delimiter + 1;
+    }
+    if (compressed_at == words.size()) {
+        if (word_count != words.size()) {
+            return false;
+        }
+    } else {
+        if (word_count >= words.size()) {
+            return false;
+        }
+        std::move_backward(words.begin() + static_cast<std::ptrdiff_t>(compressed_at), words.begin() + static_cast<std::ptrdiff_t>(word_count), words.end());
+        std::fill(words.begin() + static_cast<std::ptrdiff_t>(compressed_at), words.end() - static_cast<std::ptrdiff_t>(word_count - compressed_at), 0);
+    }
+    for (std::size_t index = 0; index < words.size(); ++index) {
+        out[index * 2] = static_cast<std::uint8_t>(words[index] >> 8U);
+        out[(index * 2) + 1] = static_cast<std::uint8_t>(words[index] & 0xFFU);
+    }
+    return true;
+}
+
+bool ParseAllowedIp(std::string_view value, AllowedIp* out) {
+    if (out == nullptr) {
+        return false;
+    }
+    const std::size_t slash = value.rfind('/');
+    if (slash == std::string_view::npos || slash == 0 || slash + 1 == value.size()) {
+        return false;
+    }
+    const std::string_view address = Trim(value.substr(0, slash));
+    const bool ipv6 = address.find(':') != std::string_view::npos;
+    unsigned int prefix = 0;
+    if (!ParseDecimal(Trim(value.substr(slash + 1)), ipv6 ? 128U : 32U, &prefix)) {
+        return false;
+    }
+    *out = {};
+    out->size = static_cast<std::uint8_t>(ipv6 ? 16 : 4);
+    out->prefix = static_cast<std::uint8_t>(prefix);
+    return ipv6 ? ParseIpv6Address(address, out->address.data()) : ParseIpv4Address(address, out->address.data());
+}
+
+bool PrefixMatches(const AllowedIp& allowed, const std::uint8_t* source, std::size_t source_size) {
+    if (source == nullptr || allowed.size != source_size) {
+        return false;
+    }
+    const std::size_t full_bytes = allowed.prefix / 8U;
+    if (!std::equal(allowed.address.begin(), allowed.address.begin() + static_cast<std::ptrdiff_t>(full_bytes), source)) {
+        return false;
+    }
+    const std::size_t remaining_bits = allowed.prefix % 8U;
+    if (remaining_bits == 0) {
+        return true;
+    }
+    const std::uint8_t mask = static_cast<std::uint8_t>(0xFFU << (8U - remaining_bits));
+    return (allowed.address[full_bytes] & mask) == (source[full_bytes] & mask);
 }
 
 } // namespace
@@ -229,6 +392,28 @@ ValidatePaddedInnerIpPacket(std::span<const std::uint8_t> payload, std::size_t* 
     }
     *out_packet_size = packet_size;
     return InnerIpv4ValidationError::None;
+}
+
+bool AllowedIpsContainSource(std::span<const std::uint8_t> packet, std::string_view allowed_ips) {
+    InnerIpVersion version = InnerIpVersion::Unknown;
+    if (ValidateInnerIpPacket(packet, &version) != InnerIpValidationError::None) {
+        return false;
+    }
+    const std::uint8_t* source = version == InnerIpVersion::Ipv4 ? packet.data() + 12 : packet.data() + 8;
+    const std::size_t source_size = version == InnerIpVersion::Ipv4 ? 4 : 16;
+    while (!allowed_ips.empty()) {
+        const std::size_t delimiter = allowed_ips.find(',');
+        const std::string_view item = Trim(allowed_ips.substr(0, delimiter));
+        AllowedIp allowed{};
+        if (ParseAllowedIp(item, &allowed) && PrefixMatches(allowed, source, source_size)) {
+            return true;
+        }
+        if (delimiter == std::string_view::npos) {
+            break;
+        }
+        allowed_ips.remove_prefix(delimiter + 1);
+    }
+    return false;
 }
 
 const char* GetInnerIpValidationErrorName(InnerIpValidationError error) {

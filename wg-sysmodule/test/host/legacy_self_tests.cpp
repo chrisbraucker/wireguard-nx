@@ -596,6 +596,20 @@ bool TestInnerIpv4PacketBoundary() {
         return false;
     }
 
+    if (!AllowedIpsContainSource(packet, "10.13.13.0/24, 2001:db8::/32") ||
+        AllowedIpsContainSource(packet, "10.13.14.0/24") || AllowedIpsContainSource(packet, "invalid")) {
+        return false;
+    }
+    constexpr std::array<std::uint8_t, 40> ipv6_packet = {
+        0x60, 0x00, 0x00, 0x00, 0x00, 0x00, 0x11, 0x40, 0x20, 0x01, 0x0D, 0xB8, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x20, 0x01, 0x0D, 0xB8, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+    };
+    if (!AllowedIpsContainSource(ipv6_packet, "10.13.13.0/24, 2001:db8::/32") ||
+        AllowedIpsContainSource(ipv6_packet, "2001:db9::/32")) {
+        return false;
+    }
+
     InnerPacketQueue<2> queue;
     InnerPacketRecord first{};
     first.packet_id = 1;
