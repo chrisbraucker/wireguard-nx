@@ -7,6 +7,7 @@ class TestContext;
 void TestDeterministicHandshake(TestContext& context);
 void TestHandshakeInitiationAdmission(TestContext& context);
 void TestBidirectionalTransport(TestContext& context);
+void TestTransportPaddingMtu(TestContext& context);
 void TestFaultedDatagramLifecycle(TestContext& context);
 void TestKeyRotationDelayedDatagram(TestContext& context);
 void TestTimerIntent(TestContext& context);

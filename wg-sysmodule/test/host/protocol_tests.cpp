@@ -123,6 +123,17 @@ void TestHandshakeInitiationAdmission(TestContext& context) {
     WGNX_TEST_REQUIRE(context, !noise_handshake_consume_initiation(&second, pair.responder), "tampered initiation mac1 was admitted");
 }
 
+void TestTransportPaddingMtu(TestContext& context) {
+    using wgnx::wireguard::GetPaddedTransportPayloadSize;
+
+    WGNX_TEST_REQUIRE(
+        context,
+        GetPaddedTransportPayloadSize(1419, 1420) == 1420 && GetPaddedTransportPayloadSize(1420, 1420) == 1420 &&
+            GetPaddedTransportPayloadSize(1279, 1280) == 1280 && GetPaddedTransportPayloadSize(1280, 1280) == 1280,
+        "transport padding exceeded the active MTU"
+    );
+}
+
 void TestBidirectionalTransport(TestContext& context) {
     runtime::Reset(InitialRuntimeState);
     ProtocolPair pair{};

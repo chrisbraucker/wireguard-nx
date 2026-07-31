@@ -18,6 +18,17 @@ constexpr std::size_t GetPaddedTransportPayloadSize(std::size_t payload_size) {
                : ((payload_size + TransportDataPaddingBlockSize - 1) / TransportDataPaddingBlockSize) * TransportDataPaddingBlockSize;
 }
 
+constexpr std::size_t GetPaddedTransportPayloadSize(std::size_t payload_size, std::size_t mtu) {
+    if (mtu == 0 || payload_size == 0) {
+        return GetPaddedTransportPayloadSize(payload_size);
+    }
+
+    const std::size_t last_unit = payload_size > mtu ? payload_size % mtu : payload_size;
+    const std::size_t padded_last_unit =
+        ((last_unit + TransportDataPaddingBlockSize - 1) / TransportDataPaddingBlockSize) * TransportDataPaddingBlockSize;
+    return payload_size + (padded_last_unit > mtu ? mtu : padded_last_unit) - last_unit;
+}
+
 enum class TransportDataError : std::uint8_t {
     None = 0,
     InvalidArgument,
@@ -51,7 +62,7 @@ struct IncomingTransportDataResult {
 const char* GetTransportDataErrorName(TransportDataError error);
 
 TransportDataCreateResult
-noise_create_transport_data_packet(std::span<std::uint8_t> output, noise_keypair& keypair, std::span<const std::uint8_t> payload);
+noise_create_transport_data_packet(std::span<std::uint8_t> output, noise_keypair& keypair, std::span<const std::uint8_t> payload, std::size_t mtu = 0);
 TransportDataCreateResult noise_create_keepalive_packet(std::span<std::uint8_t> output, noise_keypair& keypair);
 TransportDataError noise_consume_transport_data_packet(
     std::span<const std::uint8_t> packet,

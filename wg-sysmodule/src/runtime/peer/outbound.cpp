@@ -2,6 +2,7 @@
 
 #include "wireguard/handshake.hpp"
 #include "wireguard/messages.hpp"
+#include "wgnx/tunnel_protocol.hpp"
 
 #include "development_config.hpp"
 #include "logger.hpp"
@@ -68,7 +69,12 @@ bool PeerRuntime::PrepareTransportDatagram(
     }
 
     PendingDatagram pending{};
-    const auto result = wgnx::wireguard::noise_create_transport_data_packet(pending.bytes, peer->current_keypair, payload);
+    const auto result = wgnx::wireguard::noise_create_transport_data_packet(
+        pending.bytes,
+        peer->current_keypair,
+        payload,
+        wgnx::tunnel::ResolveEffectiveInnerMtu(m_config.mtu)
+    );
     out_error = result.error;
     if (result.error != wgnx::wireguard::TransportDataError::None) {
         return false;

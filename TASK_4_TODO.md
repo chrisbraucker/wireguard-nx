@@ -74,8 +74,8 @@ Implementation note: remove the field only through a deliberate private API revi
 
 ### WireGuard padding and MTU
 
-- [ ] Cap transport padding at the active effective inner MTU as wireguard-go does.
-- [ ] Cover 1419-byte, 1420-byte, and configured-MTU boundaries.
+- [x] Cap transport padding at the active effective inner MTU as wireguard-go does.
+- [x] Cover 1419-byte, 1420-byte, and configured-MTU boundaries.
 - [ ] Include an outer-IPv6 case in the eventual device MTU matrix.
 
 Implementation note: pass the effective MTU to the common padding calculation instead of applying per-caller corrections.

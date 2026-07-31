@@ -29,6 +29,7 @@ int main() {
         TestCase{"protocol.deterministic-handshake", wgnx::test::TestDeterministicHandshake},
         TestCase{"protocol.handshake-initiation-admission", wgnx::test::TestHandshakeInitiationAdmission},
         TestCase{"protocol.bidirectional-transport", wgnx::test::TestBidirectionalTransport},
+        TestCase{"protocol.transport-padding-mtu", wgnx::test::TestTransportPaddingMtu},
         TestCase{"protocol.faulted-datagram-lifecycle", wgnx::test::TestFaultedDatagramLifecycle},
         TestCase{"protocol.key-rotation-delayed-datagram", wgnx::test::TestKeyRotationDelayedDatagram},
         TestCase{"protocol.timer-intent", wgnx::test::TestTimerIntent},

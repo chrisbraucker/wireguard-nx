@@ -207,6 +207,7 @@ For v1, the maximum UDP payload is the effective inner MTU minus the IPv4 and UD
 An omitted `[Interface] MTU` resolves to 1420 bytes.
 An explicit value must be in the IPv4-safe 576 to 1500-byte range.
 The 1500-byte packet slabs are storage capacity only and must not be interpreted as a client-visible transmission guarantee.
+The transport writer follows wireguard-go's 16-byte padding calculation and never pads the final active-MTU unit beyond the effective inner MTU.
 Larger payloads return `DatagramTooLarge` until an explicit fragmentation contract is designed and implemented.
 That later contract is owned by the WireGuard userspace IP adapter rather than the MITM.
 It must preserve BSD UDP send atomicity for every advertised size, apply the effective inner MTU, and expose a measured bounded maximum through capabilities.
