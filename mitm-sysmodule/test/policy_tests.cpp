@@ -6,6 +6,7 @@
 #include "terminal_server_lifecycle.hpp"
 #include "tunnel_open_disposition.hpp"
 #include "tunnel_discovery_tests.hpp"
+#include "tunnel_datagram_receive_tests.hpp"
 #include "tunnel_flow_readiness_tests.hpp"
 #include "tunnel_flow_submission_state_tests.hpp"
 
@@ -197,6 +198,7 @@ int main() {
         Check(RunTunnelOpenDispositionTests(), "tunnel open disposition mapping failed") &&
         Check(RunTerminalServerLifecycleTests(), "terminal server lifecycle failed") &&
         Check(RunTunnelDiscoveryTests(), "tunnel discovery state machine failed") &&
+        Check(RunTunnelDatagramReceiveTests(), "tunnel UDP receive contract failed") &&
         Check(RunTunnelFlowReadinessTests(), "tunnel flow readiness mapping failed") &&
         Check(RunTunnelFlowSubmissionStateTests(), "tunnel flow submission state contract failed");
 

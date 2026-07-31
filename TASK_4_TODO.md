@@ -34,8 +34,8 @@ Implementation note: keep allocation state separate from the published generatio
 
 ### UDP receive truncation
 
-- [ ] Make a short BSD receive buffer copy the fitting prefix, consume the whole queued datagram, and discard the remainder.
-- [ ] Add focused coverage proving that the truncated datagram cannot wedge every later receive.
+- [x] Make a short BSD receive buffer copy the fitting prefix, consume the whole queued datagram, and discard the remainder.
+- [x] Add focused coverage proving that the truncated datagram cannot wedge every later receive.
 - [ ] Define `MSG_TRUNC` behavior separately if nonzero receive flags are added later.
 
 Implementation note: zero-flags UDP receive must preserve datagram atomicity even before broader flag support exists.

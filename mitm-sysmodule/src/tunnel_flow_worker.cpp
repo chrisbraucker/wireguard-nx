@@ -2,6 +2,7 @@
 
 #include "logger.hpp"
 #include "tunnel_discovery_service.hpp"
+#include "tunnel_datagram_receive.hpp"
 #include "tunnel_flow_readiness.hpp"
 #include "tunnel_flow_submission_state.hpp"
 #include "tunnel_open_disposition.hpp"
@@ -1089,13 +1090,12 @@ bool TunnelFlowWorker::Dispatch(Operation& operation) {
             operation.receive.result = flow->submission.closed ? TunnelFlowResult::Closed : TunnelFlowResult::WouldBlock;
             return true;
         }
-        if (operation.output_size < datagram->size) {
-            operation.receive.result = TunnelFlowResult::SocketError;
-            return true;
-        }
-        std::memcpy(operation.output, datagram->payload.data(), datagram->size);
-        operation.receive = {.result = TunnelFlowResult::Opened, .size = datagram->size, .remote = datagram->remote};
-        datagram->occupied = false;
+        const auto received = ReceiveTunneledDatagram(
+            std::addressof(datagram->occupied),
+            {static_cast<std::uint8_t*>(operation.output), operation.output_size},
+            std::span<const std::uint8_t>(datagram->payload.data(), datagram->size)
+        );
+        operation.receive = {.result = TunnelFlowResult::Opened, .size = received.size, .remote = datagram->remote};
         return true;
     }
 
