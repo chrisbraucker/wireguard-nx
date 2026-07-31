@@ -1160,8 +1160,9 @@ bool TunnelFlowPlane::ParseIpv4Endpoint(
     }
     const std::uint8_t* udp = packet.data() + ipv4_header_size;
     const std::size_t udp_size = LoadBigEndian16(udp + 4);
-    if (udp_size < UdpHeaderSize || udp_size != packet.size() - ipv4_header_size || LoadBigEndian16(udp + 6) == 0 ||
-        ComputeUdpChecksum(packet.data() + 12, packet.data() + 16, std::span<const std::uint8_t>(udp, udp_size)) != 0) {
+    if (udp_size < UdpHeaderSize || udp_size != packet.size() - ipv4_header_size ||
+        (LoadBigEndian16(udp + 6) != 0 &&
+         ComputeUdpChecksum(packet.data() + 12, packet.data() + 16, std::span<const std::uint8_t>(udp, udp_size)) != 0)) {
         return false;
     }
     std::copy_n(packet.data() + 12, 4, out_source->address);

@@ -295,6 +295,21 @@ void TestTunnelFlowPlane(TestContext& context) {
         "completion draining emitted a partial datagram or lost it after an undersized buffer"
     );
 
+    const auto zero_checksum_send = plane.PrepareSend(client, descriptor, Payload, TransportReady, 171);
+    const std::size_t zero_checksum_reply_size = BuildReply(reply, zero_checksum_send.packet, Payload);
+    plane.ReleasePreparedDatagram(zero_checksum_send);
+    StoreBigEndian16(reply.data() + Ipv4HeaderSize + 6, 0);
+    const auto accepted_zero_checksum =
+        plane.DeliverDecryptedIpv4Packet(first_peer, std::span<const std::uint8_t>(reply.data(), zero_checksum_reply_size), 172);
+    const auto zero_checksum_completion = plane.ReceiveCompletions(client, completions, received_payload);
+    WGNX_TEST_REQUIRE(
+        context,
+        accepted_zero_checksum.disposition == TunnelInboundDisposition::Delivered && zero_checksum_completion.status == ProtocolStatus::Success &&
+            zero_checksum_completion.count == 1 && completions[0].type == CompletionType::InboundDatagram,
+        "IPv4 UDP zero checksum was not accepted while invalid nonzero checksums remained rejected"
+    );
+
+    const std::uint32_t notifications_before_writable = notifications.count;
     const auto staging_full = plane.PrepareSend(client, descriptor, Payload, StagingFull, 175);
     plane.NotifyOutboundCapacityAvailable(first_peer);
     plane.NotifyOutboundCapacityAvailable(first_peer);
@@ -306,7 +321,7 @@ void TestTunnelFlowPlane(TestContext& context) {
         context,
         staging_full.status == ProtocolStatus::QueueFull && writable.status == ProtocolStatus::Success && writable.count == 1 &&
             completions[0].type == CompletionType::Writable && completions[0].flow.value == opened.flow.value &&
-            retried_send.status == ProtocolStatus::Success && notifications.count == 3,
+            retried_send.status == ProtocolStatus::Success && notifications.count == notifications_before_writable + 1,
         "staging pressure did not report one coalesced writable transition and a successful retry without packet loss"
     );
 

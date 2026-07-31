@@ -68,9 +68,9 @@ Implementation note: remove the field only through a deliberate private API revi
 
 ### IPv4 UDP checksum semantics
 
-- [ ] Accept a zero inbound UDP checksum for IPv4.
-- [ ] Continue generating and validating nonzero outbound UDP checksums.
-- [ ] Add one accepted-zero and one rejected-invalid-nonzero checksum case.
+- [x] Accept a zero inbound UDP checksum for IPv4.
+- [x] Continue generating and validating nonzero outbound UDP checksums.
+- [x] Add one accepted-zero and one rejected-invalid-nonzero checksum case.
 
 ### WireGuard padding and MTU
 
