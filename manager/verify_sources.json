@@ -1,0 +1,13 @@
+{
+  "source_roots": [
+    "src"
+  ],
+  "exclude": [],
+  "include_dirs": [
+    "src",
+    "../common/include"
+  ],
+  "suppressions": [
+    "syntaxError:*common/include/wgnx/client.hpp"
+  ]
+}

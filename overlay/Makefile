@@ -2,13 +2,19 @@
 .SUFFIXES:
 #---------------------------------------------------------------------------------
 
+HOST_ONLY_GOALS := format-check static-check diff-check verify
+HOST_ONLY_BUILD := $(strip $(filter $(HOST_ONLY_GOALS),$(MAKECMDGOALS)))
+
+ifeq ($(HOST_ONLY_BUILD),)
 ifeq ($(strip $(DEVKITPRO)),)
 $(error "Please set DEVKITPRO in your environment. export DEVKITPRO=<path to>/devkitpro")
 endif
 
-TOPDIR ?= $(CURDIR)
 include $(DEVKITPRO)/libnx/switch_rules
 include ${TOPDIR}/lib/libultrahand/ultrahand.mk
+endif
+
+TOPDIR ?= $(CURDIR)
 
 #---------------------------------------------------------------------------------
 # TARGET is the name of the output
@@ -34,6 +40,11 @@ NO_ICON		:=	1
 #---------------------------------------------------------------------------------
 APP_VERSION		:= 0.0.1-dev
 BUILD_ID		:= $(shell git describe --always --dirty 2>/dev/null || echo "unknown")
+
+PYTHON ?= python3
+CLANG_FORMAT ?= clang-format
+CPPCHECK ?= cppcheck
+VERIFY_SOURCES := $(TOPDIR)/../tools/verify_sources.py
 
 #---------------------------------------------------------------------------------
 # options for code generation
@@ -109,7 +120,7 @@ export LIBPATHS	:=	$(foreach dir,$(LIBDIRS),-L$(dir)/lib)
 
 export BUILD_EXEFS_SRC := $(TOPDIR)/$(EXEFS_SRC)
 
-.PHONY: $(BUILD) clean all
+.PHONY: $(BUILD) clean all format-check static-check diff-check verify
 
 #---------------------------------------------------------------------------------
 all: $(BUILD)
@@ -123,6 +134,22 @@ $(BUILD):
 clean:
 	@echo clean ...
 	@rm -fr $(BUILD) $(TARGET).ovl $(TARGET).nacp $(TARGET).nso $(TARGET).elf $(OUTDIR)
+
+format-check:
+	@$(PYTHON) $(VERIFY_SOURCES) format --root $(TOPDIR) --config $(TOPDIR)/verify_sources.json --formatter $(CLANG_FORMAT)
+
+static-check:
+	@$(PYTHON) $(VERIFY_SOURCES) static --root $(TOPDIR) --config $(TOPDIR)/verify_sources.json --analyzer $(CPPCHECK)
+
+diff-check:
+	@git -C $(TOPDIR)/.. diff --check
+	@git -C $(TOPDIR)/.. diff --cached --check
+
+verify:
+	@$(MAKE) --no-print-directory format-check
+	@$(MAKE) --no-print-directory static-check
+	@$(MAKE) --no-print-directory diff-check
+	@echo "verification passed"
 
 
 #---------------------------------------------------------------------------------

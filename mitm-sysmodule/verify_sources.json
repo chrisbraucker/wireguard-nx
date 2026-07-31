@@ -1,0 +1,14 @@
+{
+  "source_roots": [
+    "src",
+    "test"
+  ],
+  "exclude": [],
+  "include_dirs": [
+    "src",
+    "../common/include"
+  ],
+  "suppressions": [
+    "unknownMacro:*common/include/wgnx/tunnel_client.hpp"
+  ]
+}

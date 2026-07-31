@@ -5,7 +5,7 @@
 TOPDIR ?= $(CURDIR)
 ATMOSPHERE_LIBS_DIR := $(abspath $(TOPDIR)/../common/lib/Atmosphere-libs)
 ATMOSPHERE_LIBS_INCLUDE_DIR := ../common/lib/Atmosphere-libs
-HOST_ONLY_GOALS := test test-sanitize format-check diff-check
+HOST_ONLY_GOALS := test test-sanitize format-check static-check diff-check verify
 HOST_ONLY_BUILD := $(strip $(filter $(HOST_ONLY_GOALS),$(MAKECMDGOALS)))
 
 ifeq ($(HOST_ONLY_BUILD),)
@@ -41,6 +41,8 @@ BUILD_ID := $(shell git -C $(TOPDIR)/.. describe --always --dirty 2>/dev/null ||
 HOST_CXX ?= g++
 PYTHON ?= python3
 CLANG_FORMAT ?= clang-format
+CPPCHECK ?= cppcheck
+VERIFY_SOURCES := $(TOPDIR)/../tools/verify_sources.py
 HOST_TEST_CXX_STANDARD ?= -std=c++2b
 HOST_TEST_CXXFLAGS := $(HOST_TEST_CXX_STANDARD) -Wall -Wextra -Wpedantic -Werror
 HOST_TEST_DIR := $(OUTDIR)/host-test
@@ -112,7 +114,7 @@ export LIBPATHS := $(foreach dir,$(LIBDIRS),-L$(dir)/lib) \
 
 export APP_JSON := $(TOPDIR)/res/module.json
 
-.PHONY: $(BUILD) all clean clean-libs clean-build libs dist test test-sanitize format-check diff-check verify
+.PHONY: $(BUILD) all clean clean-libs clean-build libs dist test test-sanitize format-check static-check diff-check verify
 
 all: $(BUILD) $(OUTDIR)/toolbox.json
 
@@ -134,7 +136,10 @@ test-sanitize: $(HOST_SANITIZE_TARGET)
 	@ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 $(HOST_SANITIZE_TARGET)
 
 format-check:
-	@$(PYTHON) $(TOPDIR)/../wg-sysmodule/tools/verify_sources.py format --root $(TOPDIR) --formatter $(CLANG_FORMAT)
+	@$(PYTHON) $(VERIFY_SOURCES) format --root $(TOPDIR) --config $(TOPDIR)/verify_sources.json --formatter $(CLANG_FORMAT)
+
+static-check:
+	@$(PYTHON) $(VERIFY_SOURCES) static --root $(TOPDIR) --config $(TOPDIR)/verify_sources.json --analyzer $(CPPCHECK)
 
 diff-check:
 	@git -C $(TOPDIR)/.. diff --check
@@ -142,6 +147,7 @@ diff-check:
 
 verify:
 	@$(MAKE) --no-print-directory format-check
+	@$(MAKE) --no-print-directory static-check
 	@$(MAKE) --no-print-directory test
 	@$(MAKE) --no-print-directory test-sanitize
 	@$(MAKE) --no-print-directory all

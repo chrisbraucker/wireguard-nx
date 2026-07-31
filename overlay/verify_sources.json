@@ -1,0 +1,15 @@
+{
+  "source_roots": [
+    "src"
+  ],
+  "exclude": [],
+  "include_dirs": [
+    "src",
+    "../common/include",
+    "lib/libultrahand/libtesla/include"
+  ],
+  "suppressions": [
+    "syntaxError:*common/include/wgnx/client.hpp",
+    "syntaxError:*overlay/lib/libultrahand/libtesla/include/tesla.hpp"
+  ]
+}

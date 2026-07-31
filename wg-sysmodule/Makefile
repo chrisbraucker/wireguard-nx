@@ -85,7 +85,7 @@ FUZZ_GENERATED_CONFIG_CORPUS_DIR := $(FUZZ_GENERATED_CORPUS_DIR)/config_endpoint
 FUZZ_SEED_WRITER := $(FUZZ_DIR)/fuzz_seed_writer
 CLANG_FORMAT ?= clang-format
 CPPCHECK ?= cppcheck
-VERIFY_SOURCES := $(TOPDIR)/tools/verify_sources.py
+VERIFY_SOURCES := $(TOPDIR)/../tools/verify_sources.py
 HOST_TEST_CPP_SOURCES := \
 	src/runtime/debug_probe_runner.cpp \
 	src/runtime/endpoint_resolver.cpp \
@@ -284,10 +284,10 @@ fuzz-seeds: $(FUZZ_SEED_WRITER)
 	@$(FUZZ_SEED_WRITER) $(FUZZ_GENERATED_CORPUS_DIR)
 
 format-check:
-	@$(PYTHON) $(VERIFY_SOURCES) format --root $(TOPDIR) --formatter $(CLANG_FORMAT)
+	@$(PYTHON) $(VERIFY_SOURCES) format --root $(TOPDIR) --config $(TOPDIR)/verify_sources.json --formatter $(CLANG_FORMAT)
 
 static-check:
-	@$(PYTHON) $(VERIFY_SOURCES) static --root $(TOPDIR) --analyzer $(CPPCHECK)
+	@$(PYTHON) $(VERIFY_SOURCES) static --root $(TOPDIR) --config $(TOPDIR)/verify_sources.json --analyzer $(CPPCHECK)
 
 diff-check:
 	@git -C $(TOPDIR) diff --check

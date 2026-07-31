@@ -1,0 +1,21 @@
+{
+  "source_roots": [
+    "src",
+    "test/host",
+    "test/fuzz"
+  ],
+  "exclude": [
+    "src/wireguard/crypto/monocypher.c",
+    "src/wireguard/crypto/monocypher.h",
+    "src/wireguard/crypto/third_party/blake2/blake2-impl.h",
+    "src/wireguard/crypto/third_party/blake2/blake2.h",
+    "src/wireguard/crypto/third_party/blake2/blake2s-ref.c"
+  ],
+  "include_dirs": [
+    "src",
+    "test/host",
+    "test/host/include",
+    "../common/include"
+  ],
+  "suppressions": []
+}
