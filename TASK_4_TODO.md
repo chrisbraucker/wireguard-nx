@@ -51,9 +51,9 @@ Implementation note: treat the private service boundary as untrusted even though
 
 ### WireGuard key freshness
 
-- [ ] Run the peer-owned key-freshness decision after every authenticated transport send, including keepalives.
-- [ ] Run the same decision after every accepted authenticated transport receive.
-- [ ] Preserve wireguard-go's deduplication behavior so last-minute traffic cannot create repeated handshake attempts.
+- [x] Run the peer-owned key-freshness decision after every authenticated transport send, including keepalives.
+- [x] Run the same decision after every accepted authenticated transport receive.
+- [x] Preserve wireguard-go's deduplication behavior so last-minute traffic cannot create repeated handshake attempts.
 
 Implementation note: use one shared peer policy decision rather than adding checks independently to individual callers.
 

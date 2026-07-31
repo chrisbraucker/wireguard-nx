@@ -116,6 +116,7 @@ void PeerRuntime::HandleTransportData(const EncryptedDatagramReceivedEvent& even
     RecordReceivedBytes(event.packet.Bytes().size(), event.occurred_at);
     OnAuthenticatedPacketTraversal(event.peer, event.timer_facts, effects);
     OnAuthenticatedPacketReceived(event.peer, effects);
+    RefreshKeyFreshness(event.peer, event.timer_facts, event.occurred_at, effects);
     logger::Log(
         "Accepted WG transport data peer=%u activation=%u bytes=%zu payload=%zu source=%s slot=%s counter=%llu promoted=%u",
         event.peer.peer_index.Value(),

@@ -59,6 +59,19 @@ void PeerRuntime::OnAuthenticatedPacketReceived(const PeerIdentity& identity, Ef
     );
 }
 
+void PeerRuntime::RefreshKeyFreshness(
+    const PeerIdentity& identity, const TimerFacts& timer_facts, wgnx::platform::ktime_t now, EffectBatch& effects
+) {
+    const auto* peer = ProtocolPeer();
+    if (peer == nullptr || !peer->current_keypair.NeedsRekeyAt(wgnx::wireguard::GetMonotonicTime()) || m_pending_datagram.IsPending() ||
+        peer->handshake_retry.active) {
+        return;
+    }
+    if (!StartHandshake(identity, timer_facts, effects, false)) {
+        EnterActivationError(wgnx::PeerErrorStage::Handshake, wgnx::PeerErrorCode::HandshakeInitFailed, now, &effects);
+    }
+}
+
 void PeerRuntime::OnDataPacketSent(const PeerIdentity& identity, const TimerFacts& timer_facts, EffectBatch& effects) {
     const auto* peer = ProtocolPeer();
     if (peer != nullptr && !peer->timers.new_handshake.pending) {

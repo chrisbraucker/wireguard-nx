@@ -200,6 +200,7 @@ class PeerRuntime {
     void OnAuthenticatedPacketTraversal(const PeerIdentity& identity, const TimerFacts& timer_facts, EffectBatch& effects);
     void OnAuthenticatedPacketSent(const PeerIdentity& identity, EffectBatch& effects);
     void OnAuthenticatedPacketReceived(const PeerIdentity& identity, EffectBatch& effects);
+    void RefreshKeyFreshness(const PeerIdentity& identity, const TimerFacts& timer_facts, wgnx::platform::ktime_t now, EffectBatch& effects);
     void OnDataPacketSent(const PeerIdentity& identity, const TimerFacts& timer_facts, EffectBatch& effects);
     void OnDataPacketReceived(const PeerIdentity& identity, const TimerFacts& timer_facts, EffectBatch& effects);
     void OnSessionDerived(const PeerIdentity& identity, const TimerFacts& timer_facts, EffectBatch& effects);

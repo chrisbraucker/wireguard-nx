@@ -257,15 +257,10 @@ void PeerRuntime::HandlePendingDatagramCompletion(const PendingDatagramSentEvent
                     .peer = event.peer,
                 }
             );
-            if (peer->current_keypair.NeedsRekeyAt(wgnx::wireguard::GetMonotonicTime()) &&
-                !StartHandshake(event.peer, event.timer_facts, effects, false)) {
-                EnterActivationError(
-                    wgnx::PeerErrorStage::Handshake,
-                    wgnx::PeerErrorCode::HandshakeInitFailed,
-                    event.occurred_at,
-                    &effects
-                );
-            }
+            RefreshKeyFreshness(event.peer, event.timer_facts, event.occurred_at, effects);
+        }
+        if (kind == PendingDatagramKind::Keepalive) {
+            RefreshKeyFreshness(event.peer, event.timer_facts, event.occurred_at, effects);
         }
         return;
     }

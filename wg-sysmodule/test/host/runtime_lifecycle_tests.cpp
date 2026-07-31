@@ -1704,6 +1704,79 @@ void TestRuntimeInitiatorSessionKeepalive(TestContext& context) {
             snapshot.kind == PendingDatagramKind::Keepalive && snapshot.size == TransportDataHeaderSize + NoiseTagSize,
         "empty staged queue did not produce exactly one initiator confirmation keepalive"
     );
+
+    std::array<std::uint8_t, GetPaddedTransportPayloadSize(wgnx::wireguard::MaxInnerIpPacketSize)> responder_plaintext{};
+    IncomingTransportDataResult responder_keepalive{};
+    WGNX_TEST_REQUIRE(
+        context,
+        noise_consume_incoming_transport_data_packet(
+            std::span<const std::uint8_t>(snapshot.bytes).first(snapshot.size),
+            responder.responder_device,
+            *responder.responder,
+            responder_plaintext,
+            responder_keepalive
+        ) == TransportDataError::None &&
+            responder_keepalive.promoted_next_keypair,
+        "responder did not confirm the initiator keepalive session"
+    );
+
+    effects = coordinator.Dispatch(
+        PendingDatagramSentEvent{
+            .peer = identity,
+            .datagram_generation = keepalive_send->datagram_generation,
+            .bytes_sent = snapshot.size,
+            .error = wgnx::platform::socket_error::none,
+            .timer_facts = {.now = TimerDeadlineFromJiffies(601)},
+            .occurred_at = SessionBirthTime + 1,
+        }
+    );
+    WGNX_TEST_REQUIRE(context, effects.Size() == 2, "initial keepalive completion did not leave a clean transport slot");
+
+    runtime::SetMonotonicTime(
+        SessionBirthTime + std::chrono::duration_cast<std::chrono::nanoseconds>(wgnx::wireguard::RekeyAfterTime).count() + 1
+    );
+    std::array<std::uint8_t, MaxEncryptedDatagramSize> remote_keepalive{};
+    const auto first_keepalive = noise_create_transport_data_packet(remote_keepalive, responder.responder->current_keypair, {});
+    WGNX_TEST_REQUIRE(context, first_keepalive.error == TransportDataError::None, "remote peer did not create the first rekey keepalive");
+    effects = coordinator.Dispatch(
+        EncryptedDatagramReceivedEvent{
+            .peer = identity,
+            .packet = std::span<const std::uint8_t>(remote_keepalive).first(first_keepalive.packet_size),
+            .source = {.family = wgnx::platform::address_family::inet, .port = 51820, .address = {192, 0, 2, 1}},
+            .source_text = {"192.0.2.1:51820"},
+            .timer_facts = {.now = TimerDeadlineFromJiffies(602)},
+            .occurred_at = SessionBirthTime + wgnx::platform::NSEC_PER_SEC,
+        }
+    );
+    const auto* rekey_send = effects.Size() == 3 ? std::get_if<SendPendingDatagramEffect>(effects.begin() + 2) : nullptr;
+    WGNX_TEST_REQUIRE(
+        context,
+        rekey_send != nullptr && coordinator.SnapshotPendingDatagram(identity, rekey_send->datagram_generation, snapshot) &&
+            snapshot.kind == PendingDatagramKind::HandshakeInitiation,
+        "accepted authenticated receive did not initiate one soft key refresh"
+    );
+    const DatagramGeneration rekey_generation = rekey_send != nullptr ? rekey_send->datagram_generation : DatagramGeneration{};
+
+    const auto second_keepalive = noise_create_transport_data_packet(remote_keepalive, responder.responder->current_keypair, {});
+    WGNX_TEST_REQUIRE(context, second_keepalive.error == TransportDataError::None, "remote peer did not create the second rekey keepalive");
+    effects = coordinator.Dispatch(
+        EncryptedDatagramReceivedEvent{
+            .peer = identity,
+            .packet = std::span<const std::uint8_t>(remote_keepalive).first(second_keepalive.packet_size),
+            .source = {.family = wgnx::platform::address_family::inet, .port = 51820, .address = {192, 0, 2, 1}},
+            .source_text = {"192.0.2.1:51820"},
+            .timer_facts = {.now = TimerDeadlineFromJiffies(603)},
+            .occurred_at = SessionBirthTime + (2 * wgnx::platform::NSEC_PER_SEC),
+        }
+    );
+    WGNX_TEST_REQUIRE(
+        context,
+        effects.Size() == 2 && !std::ranges::any_of(effects, [](const RuntimeEffect& effect) {
+            return std::holds_alternative<SendPendingDatagramEffect>(effect);
+        }) &&
+            coordinator.HasPendingDatagram(identity, rekey_generation),
+        "repeated authenticated traffic started a duplicate rekey handshake"
+    );
 }
 
 void TestAutoStartPersistenceGeneration(TestContext& context) {
