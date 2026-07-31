@@ -5,13 +5,14 @@
 #include "logger.hpp"
 #include "tunnel_discovery_service.hpp"
 #include "tunnel_flow_worker.hpp"
+#include "wgnx/build_info.hpp"
 
 namespace ams {
 
 void Main() {
     wgnx::mitm::logger::Initialize();
     wgnx::mitm::logger::Log("main entered");
-    wgnx::mitm::logger::Log("build: %s-%s", VERSION, BUILD_ID);
+    wgnx::mitm::logger::Log("build: %s", wgnx::build_info::VersionWithBuild);
     wgnx::mitm::GetTunnelFlowWorker().Start();
     wgnx::mitm::GetTunnelDiscoveryService().Start();
     if (!wgnx::mitm::StartBsdMitmServer()) {

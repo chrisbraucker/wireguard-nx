@@ -2,9 +2,10 @@
 .SUFFIXES:
 #---------------------------------------------------------------------------------
 
-HOST_ONLY_GOALS := format-check static-check diff-check verify
+HOST_ONLY_GOALS := format-check static-check tidy-check diff-check verify
 HOST_ONLY_BUILD := $(strip $(filter $(HOST_ONLY_GOALS),$(MAKECMDGOALS)))
 
+TOPDIR ?= $(CURDIR)
 ifeq ($(HOST_ONLY_BUILD),)
 ifeq ($(strip $(DEVKITPRO)),)
 $(error "Please set DEVKITPRO in your environment. export DEVKITPRO=<path to>/devkitpro")
@@ -13,8 +14,6 @@ endif
 include $(DEVKITPRO)/libnx/switch_rules
 include ${TOPDIR}/lib/libultrahand/ultrahand.mk
 endif
-
-TOPDIR ?= $(CURDIR)
 
 #---------------------------------------------------------------------------------
 # TARGET is the name of the output
@@ -39,11 +38,12 @@ NO_ICON		:=	1
 # version control constants
 #---------------------------------------------------------------------------------
 APP_VERSION		:= 0.0.1-dev
-BUILD_ID		:= $(shell git describe --always --dirty 2>/dev/null || echo "unknown")
+WGNX_BUILD_ID		:= $(shell git describe --always --dirty 2>/dev/null || echo "unknown")
 
 PYTHON ?= python3
 CLANG_FORMAT ?= clang-format
 CPPCHECK ?= cppcheck
+CLANG_TIDY ?= clang-tidy-21
 VERIFY_SOURCES := $(TOPDIR)/../tools/verify_sources.py
 
 #---------------------------------------------------------------------------------
@@ -52,8 +52,8 @@ VERIFY_SOURCES := $(TOPDIR)/../tools/verify_sources.py
 DEFINES	:=	-DDISABLE_IPC \
 	-DTARGET="\"$(TARGET)\"" \
 	-DAPP_TITLE="\"$(APP_TITLE)"\" \
-	-DVERSION="\"$(APP_VERSION)\"" \
-	-DBUILD_ID="\"$(BUILD_ID)\""
+	-DWGNX_VERSION="\"$(APP_VERSION)\"" \
+	-DWGNX_BUILD_ID="\"$(WGNX_BUILD_ID)\""
 
 ARCH	:=	-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIC
 
@@ -120,7 +120,7 @@ export LIBPATHS	:=	$(foreach dir,$(LIBDIRS),-L$(dir)/lib)
 
 export BUILD_EXEFS_SRC := $(TOPDIR)/$(EXEFS_SRC)
 
-.PHONY: $(BUILD) clean all format-check static-check diff-check verify
+.PHONY: $(BUILD) clean all format-check static-check tidy-check diff-check verify
 
 #---------------------------------------------------------------------------------
 all: $(BUILD)
@@ -141,6 +141,9 @@ format-check:
 static-check:
 	@$(PYTHON) $(VERIFY_SOURCES) static --root $(TOPDIR) --config $(TOPDIR)/verify_sources.json --analyzer $(CPPCHECK)
 
+tidy-check:
+	@$(PYTHON) $(VERIFY_SOURCES) tidy --root $(TOPDIR) --config $(TOPDIR)/verify_sources.json --tidy $(CLANG_TIDY)
+
 diff-check:
 	@git -C $(TOPDIR)/.. diff --check
 	@git -C $(TOPDIR)/.. diff --cached --check
@@ -154,7 +157,7 @@ verify:
 
 #---------------------------------------------------------------------------------
 else
-.PHONY:	all
+.PHONY:	all force-build-info
 
 DEPENDS		:= $(OFILES:.o=.d)
 
@@ -169,6 +172,10 @@ $(OUTPUT).ovl: $(OUTPUT).elf $(OUTPUT).nacp
 	@echo "built ... $(notdir $(OUTPUT).ovl)"
 
 $(OUTPUT).elf: $(OFILES)
+
+GuiMain.o: force-build-info
+
+force-build-info:
 
 #---------------------------------------------------------------------------------
 # you need a rule like this for each extension you use as binary data

@@ -17,5 +17,16 @@
     "test/host/include",
     "../common/include"
   ],
-  "suppressions": []
+  "suppressions": [],
+  "tidy_source_roots": [
+    "test/host",
+    "test/fuzz"
+  ],
+  "tidy_exclude": [
+    "test/host/host_stubs.cpp",
+    "test/host/legacy_self_tests.cpp"
+  ],
+  "tidy_arguments": [
+    "-std=c++2b"
+  ]
 }

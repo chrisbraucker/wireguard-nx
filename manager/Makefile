@@ -2,7 +2,7 @@
 .SUFFIXES:
 #---------------------------------------------------------------------------------
 
-HOST_ONLY_GOALS := format-check static-check diff-check verify
+HOST_ONLY_GOALS := format-check static-check tidy-check diff-check verify
 HOST_ONLY_BUILD := $(strip $(filter $(HOST_ONLY_GOALS),$(MAKECMDGOALS)))
 
 ifeq ($(HOST_ONLY_BUILD),)
@@ -31,11 +31,12 @@ ICON		:=	icon.png
 # version control constants
 #---------------------------------------------------------------------------------
 APP_VERSION		:= 0.0.1-dev
-BUILD_ID		:= $(shell git describe --always --dirty 2>/dev/null || echo "unknown")
+WGNX_BUILD_ID		:= $(shell git describe --always --dirty 2>/dev/null || echo "unknown")
 
 PYTHON ?= python3
 CLANG_FORMAT ?= clang-format
 CPPCHECK ?= cppcheck
+CLANG_TIDY ?= clang-tidy-21
 VERIFY_SOURCES := $(TOPDIR)/../tools/verify_sources.py
 
 #---------------------------------------------------------------------------------
@@ -44,8 +45,8 @@ VERIFY_SOURCES := $(TOPDIR)/../tools/verify_sources.py
 DEFINES	:=	-DDISABLE_IPC \
 	-DTARGET="\"$(TARGET)\"" \
 	-DAPP_TITLE="\"$(APP_TITLE)"\" \
-	-DVERSION="\"$(APP_VERSION)\"" \
-	-DBUILD_ID="\"$(BUILD_ID)\""
+	-DWGNX_VERSION="\"$(APP_VERSION)\"" \
+	-DWGNX_BUILD_ID="\"$(WGNX_BUILD_ID)\""
 
 ARCH	:=	-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 
@@ -150,7 +151,7 @@ ifneq ($(APP_TITLEID),)
 	export NACPFLAGS += --titleid=$(APP_TITLEID)
 endif
 
-.PHONY	: $(BUILD) clean all format-check static-check diff-check verify
+.PHONY	: $(BUILD) clean all format-check static-check tidy-check diff-check verify
 
 #---------------------------------------------------------------------------------
 all	: $(BUILD)
@@ -171,6 +172,9 @@ format-check:
 static-check:
 	@$(PYTHON) $(VERIFY_SOURCES) static --root $(TOPDIR) --config $(TOPDIR)/verify_sources.json --analyzer $(CPPCHECK)
 
+tidy-check:
+	@$(PYTHON) $(VERIFY_SOURCES) tidy --root $(TOPDIR) --config $(TOPDIR)/verify_sources.json --tidy $(CLANG_TIDY)
+
 diff-check:
 	@git -C $(TOPDIR)/.. diff --check
 	@git -C $(TOPDIR)/.. diff --cached --check
@@ -184,7 +188,7 @@ verify:
 
 #---------------------------------------------------------------------------------
 else
-.PHONY	:	all echo
+.PHONY	:	all echo force-build-info
 
 DEPENDS	:=	$(OFILES:.o=.d)
 
@@ -212,6 +216,10 @@ $(OUTPUT).nso	:	$(OUTPUT).elf
 endif
 
 $(OUTPUT).elf	:	$(OFILES)
+
+main.o: force-build-info
+
+force-build-info:
 
 $(OFILES_SRC)	: $(HFILES_BIN)
 

@@ -1,10 +1,10 @@
 #include "ipc_service.hpp"
 
-#include "build_id.hpp"
 #include "ipc_server_lifecycle.hpp"
 #include "logger.hpp"
 #include "runtime/daemon_runtime.hpp"
 #include "tunnel_service.hpp"
+#include "wgnx/build_info.hpp"
 #include "wgnx/resource_budget.hpp"
 
 #include <algorithm>
@@ -65,8 +65,8 @@ ams::Result ControlService::GetDaemonStatus(ams::sf::Out<wgnx::DaemonStatus> out
 
 ams::Result ControlService::GetBuildInfo(ams::sf::Out<wgnx::BuildInfo> out) {
     wgnx::BuildInfo info{};
-    std::snprintf(info.version, sizeof(info.version), "%s", VERSION);
-    std::snprintf(info.build_id, sizeof(info.build_id), "%s", wgnx::BuildId);
+    std::snprintf(info.version, sizeof(info.version), "%s", wgnx::build_info::Version);
+    std::snprintf(info.build_id, sizeof(info.build_id), "%s", wgnx::build_info::BuildId);
     out.SetValue(info);
     R_SUCCEED();
 }

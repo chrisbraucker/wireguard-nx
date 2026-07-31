@@ -6,10 +6,32 @@
   "include_dirs": [
     "src",
     "../common/include",
-    "lib/libultrahand/libtesla/include"
+    "lib/libultrahand/libtesla/include",
+    "lib/libultrahand/libultra/include",
+    "lib/libultrahand/common"
   ],
   "suppressions": [
     "syntaxError:*common/include/wgnx/client.hpp",
     "syntaxError:*overlay/lib/libultrahand/libtesla/include/tesla.hpp"
+  ],
+  "tidy_source_roots": [
+    "src"
+  ],
+  "tidy_exclude": [],
+  "tidy_arguments": [
+    "--target=aarch64-none-elf",
+    "--sysroot=${DEVKITPRO}/devkitA64/aarch64-none-elf",
+    "-std=gnu++2c",
+    "-D__SWITCH__",
+    "-DTARGET=\"wireguard-nx\"",
+    "-DAPP_TITLE=\"WireGuard-NX\"",
+    "-DWGNX_VERSION=\"0.0.1-dev\"",
+    "-DWGNX_BUILD_ID=\"tidy\"",
+    "-isystem",
+    "${DEVKITPRO}/devkitA64/aarch64-none-elf/include/c++/15.2.0",
+    "-isystem",
+    "${DEVKITPRO}/devkitA64/aarch64-none-elf/include/c++/15.2.0/aarch64-none-elf",
+    "-I${DEVKITPRO}/portlibs/switch/include",
+    "-I${DEVKITPRO}/libnx/include"
   ]
 }

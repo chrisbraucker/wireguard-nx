@@ -5,7 +5,7 @@
 TOPDIR ?= $(CURDIR)
 ATMOSPHERE_LIBS_DIR := $(abspath $(TOPDIR)/../common/lib/Atmosphere-libs)
 ATMOSPHERE_LIBS_INCLUDE_DIR := ../common/lib/Atmosphere-libs
-HOST_ONLY_GOALS := test test-sanitize test-tsan test-warnings format-check static-check diff-check fuzz fuzz-run fuzz-seeds
+HOST_ONLY_GOALS := test test-sanitize test-tsan test-warnings format-check static-check tidy-check diff-check fuzz fuzz-run fuzz-seeds
 HOST_ONLY_BUILD := $(strip $(filter $(HOST_ONLY_GOALS),$(MAKECMDGOALS)))
 
 ifeq ($(HOST_ONLY_BUILD),)
@@ -45,8 +45,7 @@ LIBNAMES	:= $(ATMOSPHERE_LIBS_DIR)/libstratosphere
 # version control constants
 #---------------------------------------------------------------------------------
 APP_VERSION		:= 0.0.1-dev
-BUILD_ID		:= $(shell git describe --always --dirty 2>/dev/null || echo "unknown")
-BUILD_ID_HEADER		:= $(TOPDIR)/$(BUILD)/build_id.hpp
+WGNX_BUILD_ID		:= $(shell git describe --always --dirty 2>/dev/null || echo "unknown")
 
 #---------------------------------------------------------------------------------
 # host test framework config
@@ -85,6 +84,7 @@ FUZZ_GENERATED_CONFIG_CORPUS_DIR := $(FUZZ_GENERATED_CORPUS_DIR)/config_endpoint
 FUZZ_SEED_WRITER := $(FUZZ_DIR)/fuzz_seed_writer
 CLANG_FORMAT ?= clang-format
 CPPCHECK ?= cppcheck
+CLANG_TIDY ?= clang-tidy-21
 VERIFY_SOURCES := $(TOPDIR)/../tools/verify_sources.py
 HOST_TEST_CPP_SOURCES := \
 	src/runtime/debug_probe_runner.cpp \
@@ -178,7 +178,8 @@ WGNX_PACKET_DIAGNOSTICS ?= 0
 DEFINES	+=	-DDISABLE_IPC -D__SWITCH__ \
 	-DWGNX_PACKET_DIAGNOSTICS=$(WGNX_PACKET_DIAGNOSTICS) \
 	-DTARGET="\"$(TARGET)\"" \
-	-DVERSION="\"$(APP_VERSION)\""
+	-DWGNX_VERSION="\"$(APP_VERSION)\"" \
+	-DWGNX_BUILD_ID="\"$(WGNX_BUILD_ID)\""
 
 CFLAGS	+= $(INCLUDE) -Wno-unused-result -fstack-usage
 CXXFLAGS	+= $(CFLAGS) -std=c++23 -Werror=frame-larger-than=8192
@@ -241,7 +242,7 @@ export APP_JSON := $(TOPDIR)/res/module.json
 
 
 .PHONY	: $(BUILD) clean clean-libs clean-build all libs dist test test-sanitize test-tsan \
-		test-warnings format-check static-check diff-check verify prepare-build-id check-stack \
+		test-warnings format-check static-check tidy-check diff-check verify check-stack \
 		report-footprint resource-report fuzz fuzz-run fuzz-seeds
 
 #---------------------------------------------------------------------------------
@@ -288,6 +289,9 @@ format-check:
 
 static-check:
 	@$(PYTHON) $(VERIFY_SOURCES) static --root $(TOPDIR) --config $(TOPDIR)/verify_sources.json --analyzer $(CPPCHECK)
+
+tidy-check:
+	@$(PYTHON) $(VERIFY_SOURCES) tidy --root $(TOPDIR) --config $(TOPDIR)/verify_sources.json --tidy $(CLANG_TIDY)
 
 diff-check:
 	@git -C $(TOPDIR) diff --check
@@ -359,19 +363,10 @@ $(FUZZ_RESOLVER_RESULT_TARGET): Makefile $(FUZZ_RESOLVER_RESULT_SOURCES) $(FUZZ_
 libs	:
 	@$(foreach lib,$(LIBNAMES),$(MAKE) --no-print-directory -C $(lib) && ) true
 
-prepare-build-id:
-	@[ -d $(dir $(BUILD_ID_HEADER)) ] || mkdir -p $(dir $(BUILD_ID_HEADER))
-	@printf '#pragma once\n\nnamespace wgnx {\ninline constexpr char BuildId[] = "$(BUILD_ID)";\n} // namespace wgnx\n' > $(BUILD_ID_HEADER).tmp
-	@if ! cmp -s $(BUILD_ID_HEADER).tmp $(BUILD_ID_HEADER); then \
-		mv $(BUILD_ID_HEADER).tmp $(BUILD_ID_HEADER); \
-	else \
-		rm $(BUILD_ID_HEADER).tmp; \
-	fi
-
 $(LIBNAMES)	:
 	@echo $@
 
-$(BUILD)	: libs prepare-build-id
+$(BUILD)	: libs
 	@[ -d $@ ] || mkdir -p $@
 	@[ -d $(OUTDIR) ] || mkdir -p $(OUTDIR)
 	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
@@ -390,7 +385,7 @@ clean	: clean-libs clean-build
 
 #---------------------------------------------------------------------------------
 else
-.PHONY	:	all
+.PHONY	:	all force-build-info
 
 DEPENDS		:=	$(OFILES:.o=.d)
 
@@ -404,6 +399,10 @@ $(OUTPUT).nsp	: $(OUTPUT).nso $(OUTPUT).npdm
 $(OUTPUT).nso :	$(OUTPUT).elf
 
 $(OUTPUT).elf	: $(OFILES)
+
+main.o ipc_service.o: force-build-info
+
+force-build-info:
 
 $(OFILES)	: $(ATMOSPHERE_LIBRARIES_DIR)/libstratosphere/$(ATMOSPHERE_LIBRARY_DIR)/libstratosphere.a
 

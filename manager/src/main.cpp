@@ -18,8 +18,7 @@
 #include <switch.h>
 
 #include "wgnx/client.hpp"
-
-#define VERSION_WITH_BUILD VERSION "-" BUILD_ID
+#include "wgnx/build_info.hpp"
 
 int main(int argc, char** argv) {
     consoleInit(NULL);
@@ -48,7 +47,7 @@ int main(int argc, char** argv) {
 
     // Display arguments sent from nxlink
     printf("%d arguments\n", argc);
-    printf("Manager Version: %s\n", VERSION_WITH_BUILD);
+    printf("Manager Version: %s\n", wgnx::build_info::VersionWithBuild);
 
     for (int i = 0; i < argc; i++) {
         printf("argv[%d] = %s\n", i, argv[i]);

@@ -5,7 +5,7 @@
 TOPDIR ?= $(CURDIR)
 ATMOSPHERE_LIBS_DIR := $(abspath $(TOPDIR)/../common/lib/Atmosphere-libs)
 ATMOSPHERE_LIBS_INCLUDE_DIR := ../common/lib/Atmosphere-libs
-HOST_ONLY_GOALS := test test-sanitize format-check static-check diff-check verify
+HOST_ONLY_GOALS := test test-sanitize format-check static-check tidy-check diff-check verify
 HOST_ONLY_BUILD := $(strip $(filter $(HOST_ONLY_GOALS),$(MAKECMDGOALS)))
 
 ifeq ($(HOST_ONLY_BUILD),)
@@ -33,7 +33,7 @@ LIBNAMES	:= $(ATMOSPHERE_LIBS_DIR)/libstratosphere
 # version control constants
 #---------------------------------------------------------------------------------
 APP_VERSION := 0.0.1-dev
-BUILD_ID := $(shell git -C $(TOPDIR)/.. describe --always --dirty 2>/dev/null || echo "unknown")
+WGNX_BUILD_ID := $(shell git -C $(TOPDIR)/.. describe --always --dirty 2>/dev/null || echo "unknown")
 
 #---------------------------------------------------------------------------------
 # host test framework config
@@ -42,6 +42,7 @@ HOST_CXX ?= g++
 PYTHON ?= python3
 CLANG_FORMAT ?= clang-format
 CPPCHECK ?= cppcheck
+CLANG_TIDY ?= clang-tidy-21
 VERIFY_SOURCES := $(TOPDIR)/../tools/verify_sources.py
 HOST_TEST_CXX_STANDARD ?= -std=c++2b
 HOST_TEST_CXXFLAGS := $(HOST_TEST_CXX_STANDARD) -Wall -Wextra -Wpedantic -Werror
@@ -69,8 +70,8 @@ MITM_PACKET_DIAGNOSTICS ?= 0
 DEFINES += -DDISABLE_IPC -D__SWITCH__ \
 	-DWGNX_MITM_PACKET_DIAGNOSTICS=$(MITM_PACKET_DIAGNOSTICS) \
 	-DTARGET="\"$(TARGET)\"" \
-	-DVERSION="\"$(APP_VERSION)\"" \
-	-DBUILD_ID="\"$(BUILD_ID)\""
+	-DWGNX_VERSION="\"$(APP_VERSION)\"" \
+	-DWGNX_BUILD_ID="\"$(WGNX_BUILD_ID)\""
 
 CFLAGS += $(INCLUDE) -Wno-unused-result -fstack-usage
 CXXFLAGS += $(CFLAGS) -std=c++23 -Werror=frame-larger-than=8192
@@ -114,7 +115,7 @@ export LIBPATHS := $(foreach dir,$(LIBDIRS),-L$(dir)/lib) \
 
 export APP_JSON := $(TOPDIR)/res/module.json
 
-.PHONY: $(BUILD) all clean clean-libs clean-build libs dist test test-sanitize format-check static-check diff-check verify
+.PHONY: $(BUILD) all clean clean-libs clean-build libs dist test test-sanitize format-check static-check tidy-check diff-check verify
 
 all: $(BUILD) $(OUTDIR)/toolbox.json
 
@@ -140,6 +141,9 @@ format-check:
 
 static-check:
 	@$(PYTHON) $(VERIFY_SOURCES) static --root $(TOPDIR) --config $(TOPDIR)/verify_sources.json --analyzer $(CPPCHECK)
+
+tidy-check:
+	@$(PYTHON) $(VERIFY_SOURCES) tidy --root $(TOPDIR) --config $(TOPDIR)/verify_sources.json --tidy $(CLANG_TIDY)
 
 diff-check:
 	@git -C $(TOPDIR)/.. diff --check
@@ -180,6 +184,8 @@ clean: clean-libs clean-build
 
 else
 
+.PHONY: force-build-info
+
 DEPENDS := $(OFILES:.o=.d)
 
 all: $(OUTPUT).nsp
@@ -187,6 +193,10 @@ all: $(OUTPUT).nsp
 $(OUTPUT).nsp: $(OUTPUT).nso $(OUTPUT).npdm
 $(OUTPUT).nso: $(OUTPUT).elf
 $(OUTPUT).elf: $(OFILES)
+
+main.o: force-build-info
+
+force-build-info:
 
 $(OFILES): $(ATMOSPHERE_LIBRARIES_DIR)/libstratosphere/$(ATMOSPHERE_LIBRARY_DIR)/libstratosphere.a
 

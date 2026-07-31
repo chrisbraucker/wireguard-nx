@@ -10,5 +10,12 @@
   ],
   "suppressions": [
     "unknownMacro:*common/include/wgnx/tunnel_client.hpp"
+  ],
+  "tidy_source_roots": [
+    "test"
+  ],
+  "tidy_exclude": [],
+  "tidy_arguments": [
+    "-std=c++2b"
   ]
 }

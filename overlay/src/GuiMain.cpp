@@ -1,12 +1,11 @@
 #include "GuiMain.hpp"
 
 #include "wgnx/client.hpp"
+#include "wgnx/build_info.hpp"
 #include "wgnx/mitm_client.hpp"
 
 #include <algorithm>
 #include <array>
-
-#define VERSION_WITH_BUILD VERSION "-" BUILD_ID
 
 constexpr const char* const descriptions[2][2] = {
     [0] =
@@ -66,7 +65,7 @@ GuiMain::GuiMain() {
 GuiMain::~GuiMain() {}
 
 tsl::elm::Element* GuiMain::createUI() {
-    tsl::elm::OverlayFrame* rootFrame = new tsl::elm::OverlayFrame(APP_TITLE, VERSION_WITH_BUILD);
+    tsl::elm::OverlayFrame* rootFrame = new tsl::elm::OverlayFrame(APP_TITLE, wgnx::build_info::VersionWithBuild);
 
     if (!this->smIsRunning()) {
         const char* desc = "WireGuard-NX SysModule\n          is not running!";
