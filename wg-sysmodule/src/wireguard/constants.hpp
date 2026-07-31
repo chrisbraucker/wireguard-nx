@@ -44,5 +44,10 @@ constexpr inline std::uint32_t MaxTimerHandshakes = static_cast<std::uint32_t>(R
 constexpr inline std::uint32_t RekeyTimeoutJitterMaxMs = 334;
 constexpr inline auto RejectAfterTime = std::chrono::seconds{180};
 constexpr inline auto ZeroKeyMaterialAfterTime = RejectAfterTime * 3;
+constexpr inline auto CookieRefreshTime = std::chrono::seconds{120};
+constexpr inline auto UnderLoadAfterTime = std::chrono::seconds{1};
+constexpr inline std::uint32_t HandshakeRateLimitPacketsPerSecond = 20;
+constexpr inline std::uint32_t HandshakeRateLimitBurst = 5;
+constexpr inline std::size_t HandshakeRateLimitSlots = 8;
 
 } // namespace wgnx::wireguard

@@ -199,6 +199,37 @@ void PeerRuntime::HandleEncryptedDatagram(const EncryptedDatagramReceivedEvent& 
         HandleTransportData(event, effects);
         return;
     }
+    if (type.type == wgnx::wireguard::MessageType::HandshakeInitiation || type.type == wgnx::wireguard::MessageType::HandshakeResponse) {
+        wgnx::wireguard::message_handshake_cookie cookie{};
+        const auto admission = wgnx::wireguard::noise_handshake_admit_responder_packet(
+            std::addressof(m_protocol.device),
+            packet,
+            event.source,
+            wgnx::wireguard::MonotonicTimePoint{wgnx::wireguard::MonotonicDuration{event.occurred_at}},
+            std::addressof(cookie)
+        );
+        if (admission == wgnx::wireguard::ResponderHandshakeAdmission::CookieReply) {
+            SendCookieReplyEffect reply{
+                .peer = event.peer,
+                .destination = event.source,
+            };
+            if (wgnx::wireguard::SerializeHandshakeCookie(reply.packet, cookie) == wgnx::wireguard::ParseError::None) {
+                effects.Add(reply);
+            }
+            return;
+        }
+        if (admission != wgnx::wireguard::ResponderHandshakeAdmission::Accepted) {
+            logger::Log(
+                "Rejected WG handshake admission peer=%u activation=%u type=%s source=%s outcome=%s",
+                event.peer.peer_index.Value(),
+                event.peer.activation_generation.Value(),
+                wgnx::wireguard::GetMessageTypeName(type.type),
+                event.source_text.data(),
+                wgnx::wireguard::GetResponderHandshakeAdmissionName(admission)
+            );
+            return;
+        }
+    }
     if (m_pending_datagram.IsPending()) {
         logger::Log(
             "Dropped WG handshake datagram peer=%u activation=%u type=%s reason=send_pending",

@@ -123,6 +123,73 @@ void TestHandshakeInitiationAdmission(TestContext& context) {
     WGNX_TEST_REQUIRE(context, !noise_handshake_consume_initiation(&second, pair.responder), "tampered initiation mac1 was admitted");
 }
 
+void TestResponderCookieRateLimit(TestContext& context) {
+    using namespace wgnx::wireguard;
+
+    runtime::Reset(InitialRuntimeState);
+    ProtocolPair pair{};
+    WGNX_TEST_REQUIRE(context, pair.Initialize(), "protocol pair initialization failed");
+
+    std::array<std::uint8_t, HandshakeInitiationSize> initiation{};
+    WGNX_TEST_REQUIRE(context, pair.CreateAndSendInitiation(&initiation), "initiator did not create an authenticated handshake");
+    const wgnx::platform::endpoint source{
+        .family = wgnx::platform::address_family::inet,
+        .port = 51820,
+        .address = {198, 51, 100, 10},
+    };
+    const MonotonicTimePoint now{MonotonicDuration{InitialMonotonicTime}};
+    message_handshake_cookie cookie{};
+    for (std::size_t index = 0; index < HandshakeRateLimitBurst; ++index) {
+        WGNX_TEST_REQUIRE(
+            context,
+            noise_handshake_admit_responder_packet(&pair.responder_device, initiation, source, now, &cookie) ==
+                ResponderHandshakeAdmission::Accepted,
+            "arrival-rate threshold rejected an initial authenticated handshake"
+        );
+    }
+    WGNX_TEST_REQUIRE(
+        context,
+        noise_handshake_admit_responder_packet(&pair.responder_device, initiation, source, now, &cookie) ==
+            ResponderHandshakeAdmission::CookieReply,
+        "arrival-rate threshold did not request a cookie"
+    );
+    WGNX_TEST_REQUIRE(
+        context,
+        noise_handshake_consume_cookie_reply(&cookie, &pair.initiator_device, pair.initiator),
+        "initiator rejected responder cookie reply"
+    );
+
+    std::array<std::uint8_t, HandshakeInitiationSize> cookie_authenticated{};
+    WGNX_TEST_REQUIRE(
+        context,
+        SerializeHandshakeInitiation(cookie_authenticated, pair.initiator->last_initiation) == ParseError::None,
+        "initiator did not apply MAC2 after consuming cookie"
+    );
+    for (std::size_t index = 0; index < HandshakeRateLimitBurst; ++index) {
+        WGNX_TEST_REQUIRE(
+            context,
+            noise_handshake_admit_responder_packet(&pair.responder_device, cookie_authenticated, source, now, &cookie) ==
+                ResponderHandshakeAdmission::Accepted,
+            "valid MAC2 handshake was rejected below the per-source rate limit"
+        );
+    }
+    WGNX_TEST_REQUIRE(
+        context,
+        noise_handshake_admit_responder_packet(&pair.responder_device, cookie_authenticated, source, now, &cookie) ==
+            ResponderHandshakeAdmission::RateLimited,
+        "per-source handshake rate limit did not reject its burst overflow"
+    );
+
+    auto changed_source = source;
+    ++changed_source.port;
+    WGNX_TEST_REQUIRE(
+        context,
+        noise_handshake_admit_responder_packet(&pair.responder_device, cookie_authenticated, changed_source, now, &cookie) ==
+            ResponderHandshakeAdmission::CookieReply,
+        "MAC2 cookie was not bound to its source endpoint"
+    );
+}
+
 void TestTransportPaddingMtu(TestContext& context) {
     using wgnx::wireguard::GetPaddedTransportPayloadSize;
 

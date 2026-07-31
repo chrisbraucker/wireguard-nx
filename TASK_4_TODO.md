@@ -88,9 +88,13 @@ Implementation note: pass the effective MTU to the common padding calculation in
 
 ### Cookie and rate-limit parity
 
-- [ ] Retain responder cookie generation, under-load MAC2 validation, cookie replies, and handshake rate limiting as an explicit WireGuard conformance item.
+- [x] Generate responder cookies, require MAC2 while under load, send cookie replies to the received endpoint, and rate-limit valid cookie-authenticated handshakes.
 
-Implementation note: this known hardening gap does not block the initial UDP fragmentation slice, but it blocks a full hostile-network conformance claim.
+Implementation note: cookie construction, MAC1 and MAC2 validation, 120-second secret rotation, and the per-source `20/s` burst-`5` limiter follow wireguard-go.
+
+Implementation note: the current serialized receive runtime enters the upstream one-second sticky under-load state after a global valid-MAC1 arrival bucket exceeds the same `20/s` burst-`5` threshold.
+
+Implementation note: this is a target-specific substitute for wireguard-go's handshake-queue-depth trigger and remains isolated behind responder admission until a measured handshake queue is warranted.
 
 ## Verification and Test Coverage
 

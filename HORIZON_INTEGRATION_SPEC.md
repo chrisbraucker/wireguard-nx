@@ -34,6 +34,8 @@ The MITM does not construct, parse, fragment, reassemble, or demultiplex IP pack
 The userspace IP adapter is not part of the WireGuard cryptographic protocol core.
 It converts BSD-level flow operations to and from complete inner IP packets, while `PeerRuntime` and the shared packet plane continue to transport authenticated opaque inner packets.
 Userspace IP stack calls, callbacks, pbuf operations, and timeout processing must run through one serialized post-lock owner and never while the daemon state mutex is held.
+WireGuard handshake cookie replies are stateless encrypted-transport control traffic and bypass the flow IPC only to return to their received UDP endpoint.
+They never update the authenticated peer endpoint or enter BSD routing policy.
 
 An unconnected UDP extension requires a bounded per-destination association table and an explicit policy for destinations that stop matching a tunnel route.
 That extension is deferred rather than being hidden behind ambiguous direct-flow behavior.

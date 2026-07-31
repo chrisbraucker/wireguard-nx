@@ -169,6 +169,33 @@ NOINLINE void RuntimeEffectExecutor::ExecutePendingDatagramSend(const SendPendin
     generated.Append(completion);
 }
 
+NOINLINE void RuntimeEffectExecutor::ExecuteCookieReplySend(const SendCookieReplyEffect& effect) {
+    UdpBinding::Snapshot binding{};
+    {
+        std::scoped_lock lock(m_state_mutex);
+        if (!m_coordinator.IsActiveTransportIdentity(effect.peer)) {
+            return;
+        }
+        binding = m_coordinator.BindingSnapshot(effect.peer.peer_index.Value());
+    }
+    if (!binding.IsOpen() || binding.suspended) {
+        return;
+    }
+
+    std::size_t sent = 0;
+    const auto error = wgnx::platform::udp_send(binding.socket, effect.destination, effect.packet, std::addressof(sent));
+    logger::Log(
+        "WireGuard cookie reply peer=%u activation=%u bytes=%zu sent=%zu socket_generation=%u socket=%d error=%u",
+        effect.peer.peer_index.Value(),
+        effect.peer.activation_generation.Value(),
+        effect.packet.size(),
+        sent,
+        binding.generation.Value(),
+        static_cast<int>(binding.socket),
+        static_cast<unsigned int>(error)
+    );
+}
+
 void RuntimeEffectExecutor::QueuePendingDatagramTransmit(const SendPendingDatagramEffect& effect) {
     bool schedule = false;
     {
@@ -275,6 +302,8 @@ void RuntimeEffectExecutor::Execute(const EffectBatch& effects) {
                     }
                 } else if constexpr (std::is_same_v<Effect, SendPendingDatagramEffect>) {
                     QueuePendingDatagramTransmit(value);
+                } else if constexpr (std::is_same_v<Effect, SendCookieReplyEffect>) {
+                    ExecuteCookieReplySend(value);
                 } else if constexpr (std::is_same_v<Effect, QueueReceiveEffect>) {
                     bool current = false;
                     {

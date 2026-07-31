@@ -54,6 +54,7 @@ class RuntimeEffectExecutor {
     bool TakeDebugPayloadSubmission(DebugProbeRequest& out_request);
     NOINLINE void ExecuteOpenUdpBind(const OpenUdpBindEffect& effect, EffectBatch& generated);
     NOINLINE void ExecutePendingDatagramSend(const SendPendingDatagramEffect& effect, EffectBatch& generated);
+    NOINLINE void ExecuteCookieReplySend(const SendCookieReplyEffect& effect);
     void QueuePendingDatagramTransmit(const SendPendingDatagramEffect& effect);
     NOINLINE void ExecutePublishDecryptedPacket(const PublishDecryptedPacketEffect& effect);
     [[nodiscard]] bool PublishDecryptedPacketLocked(const PeerIdentity& peer, std::span<const std::uint8_t> inner_packet);

@@ -41,6 +41,7 @@ struct wg_index_registry {
 struct wg_device {
     wg_index_allocator index_allocator{};
     wg_index_registry index_registry{};
+    ResponderCookieState responder_cookie{};
     wg_peer peer{};
     bool has_peer{false};
 };

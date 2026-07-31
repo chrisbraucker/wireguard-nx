@@ -190,7 +190,8 @@ For each target build, validate a real peer in this order:
 4. Repeat with `wireguard-go` and BoringTun peer implementations where the test environment permits.
    Compare only observable protocol outcomes, not scheduler timing or platform-specific socket behavior.
 
-Cookie rate limiting, multi-peer routing, and full transparent Horizon traffic integration are outside this milestone.
+The deterministic responder-cookie test covers the local cookie wire contract, MAC2 admission, the bounded per-source rate limit, and the documented arrival-trigger adaptation.
+Multi-peer routing and full transparent Horizon traffic integration remain outside this milestone.
 Any behavior that differs from upstream must be recorded as a deliberate Horizon-specific deviation before it is relied upon by later integration work.
 
 ### Current Validation Boundary

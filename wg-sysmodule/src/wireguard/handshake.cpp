@@ -298,6 +298,179 @@ bool ComputeMac2(const message_handshake_response& message, const noise_cookie& 
     return ComputeMac2<message_handshake_response, HandshakeResponseSize>(message, cookie, out_mac2, SerializeHandshakeResponse);
 }
 
+constexpr std::int64_t HandshakeRateTokenCost = wgnx::platform::NSEC_PER_SEC / HandshakeRateLimitPacketsPerSecond;
+constexpr std::int64_t HandshakeRateMaximumTokens = HandshakeRateTokenCost * HandshakeRateLimitBurst;
+
+std::size_t SourceAddressSize(const wgnx::platform::endpoint& source) {
+    switch (source.family) {
+    case wgnx::platform::address_family::inet:
+        return 4;
+    case wgnx::platform::address_family::inet6:
+        return 16;
+    case wgnx::platform::address_family::unspecified:
+        return 0;
+    }
+    return 0;
+}
+
+bool BuildSourceBytes(const wgnx::platform::endpoint& source, std::array<std::uint8_t, 18>& out, std::size_t& out_size) {
+    const std::size_t address_size = SourceAddressSize(source);
+    if (address_size == 0) {
+        return false;
+    }
+    std::ranges::copy_n(source.address.begin(), address_size, out.begin());
+    out[address_size] = static_cast<std::uint8_t>(source.port >> 8U);
+    out[address_size + 1] = static_cast<std::uint8_t>(source.port & 0xffU);
+    out_size = address_size + 2;
+    return true;
+}
+
+bool VerifyPacketMac1(std::span<const std::uint8_t> packet, const noise_public_key& local_static) {
+    const auto type = InspectMessageType(packet);
+    const std::size_t expected_size = type.success && type.type == MessageType::HandshakeInitiation ? HandshakeInitiationSize
+                                      : type.success && type.type == MessageType::HandshakeResponse ? HandshakeResponseSize
+                                                                                                     : 0;
+    if (!local_static.valid || expected_size == 0 || packet.size() != expected_size) {
+        return false;
+    }
+
+    crypto::SensitiveBuffer<NoiseSymmetricKeySize> mac1_key{};
+    crypto::Blake2sHasher key_hasher{};
+    std::array<std::uint8_t, NoiseMacSize> expected{};
+    const bool ok = key_hasher.Initialize<NoiseSymmetricKeySize>() && key_hasher.Update(ByteView(Mac1KeyLabel)) &&
+                    key_hasher.Update(local_static.bytes) && key_hasher.Final(mac1_key.bytes()) &&
+                    crypto::Blake2sHash(expected, packet.first(packet.size() - 2 * NoiseMacSize), mac1_key.span()) &&
+                    crypto::secure_equal(expected, packet.subspan(packet.size() - 2 * NoiseMacSize, NoiseMacSize));
+    crypto::secure_clear(expected);
+    return ok;
+}
+
+bool ConsumeHandshakeRate(std::int64_t& tokens, MonotonicTimePoint& last_update, bool& initialized, MonotonicTimePoint now) {
+    if (!initialized) {
+        tokens = HandshakeRateMaximumTokens;
+        last_update = now;
+        initialized = true;
+    } else if (now > last_update) {
+        tokens = std::min(HandshakeRateMaximumTokens, tokens + (now - last_update).count());
+        last_update = now;
+    }
+    if (tokens < HandshakeRateTokenCost) {
+        return false;
+    }
+    tokens -= HandshakeRateTokenCost;
+    return true;
+}
+
+bool IsUnderLoad(ResponderCookieState& state, MonotonicTimePoint now) {
+    const bool arrival_allowed = ConsumeHandshakeRate(state.arrival_tokens, state.arrival_last_update, state.arrival_initialized, now);
+    if (!arrival_allowed) {
+        state.under_load_until = now + UnderLoadAfterTime;
+    }
+    return !arrival_allowed || state.under_load_until > now;
+}
+
+HandshakeRateLimitEntry* FindRateLimitEntry(ResponderCookieState& state, const wgnx::platform::endpoint& source, MonotonicTimePoint now) {
+    const std::size_t address_size = SourceAddressSize(source);
+    if (address_size == 0) {
+        return nullptr;
+    }
+
+    HandshakeRateLimitEntry* reusable = nullptr;
+    for (auto& entry : state.rate_limits) {
+        if (entry.active && entry.family == source.family &&
+            std::equal(entry.address.begin(), entry.address.begin() + static_cast<std::ptrdiff_t>(address_size), source.address.begin())) {
+            return &entry;
+        }
+        if (!entry.active || (now > entry.last_update && now - entry.last_update > UnderLoadAfterTime)) {
+            reusable = &entry;
+        }
+    }
+    if (reusable == nullptr) {
+        return nullptr;
+    }
+
+    *reusable = {};
+    reusable->family = source.family;
+    std::ranges::copy_n(source.address.begin(), address_size, reusable->address.begin());
+    reusable->active = true;
+    return reusable;
+}
+
+bool CheckPacketMac2(
+    ResponderCookieState& state, std::span<const std::uint8_t> packet, const wgnx::platform::endpoint& source, MonotonicTimePoint now
+) {
+    if (!state.secret.valid || state.secret_birth == MonotonicTimePoint{} || now < state.secret_birth ||
+        now - state.secret_birth > CookieRefreshTime) {
+        return false;
+    }
+
+    std::array<std::uint8_t, 18> source_bytes{};
+    std::size_t source_size = 0;
+    crypto::SensitiveBuffer<CookieValueSize> cookie{};
+    std::array<std::uint8_t, NoiseMacSize> expected{};
+    const bool ok = BuildSourceBytes(source, source_bytes, source_size) &&
+                    crypto::Blake2sHash(cookie.bytes(), std::span{source_bytes}.first(source_size), state.secret.bytes) &&
+                    crypto::Blake2sHash(expected, packet.first(packet.size() - NoiseMacSize), cookie.span()) &&
+                    crypto::secure_equal(expected, packet.last(NoiseMacSize));
+    crypto::secure_clear(source_bytes);
+    crypto::secure_clear(expected);
+    return ok;
+}
+
+bool CreateCookieReply(
+    ResponderCookieState& state,
+    const noise_public_key& local_static,
+    std::span<const std::uint8_t> packet,
+    const wgnx::platform::endpoint& source,
+    MonotonicTimePoint now,
+    message_handshake_cookie* out_cookie
+) {
+    if (out_cookie == nullptr || !local_static.valid) {
+        return false;
+    }
+    if (!state.secret.valid || state.secret_birth == MonotonicTimePoint{} || now < state.secret_birth ||
+        now - state.secret_birth > CookieRefreshTime) {
+        wgnx::platform::get_random_bytes(state.secret.bytes.data(), state.secret.bytes.size());
+        state.secret.valid = true;
+        state.secret_birth = now;
+    }
+
+    std::array<std::uint8_t, 18> source_bytes{};
+    std::size_t source_size = 0;
+    crypto::SensitiveBuffer<CookieValueSize> cookie{};
+    crypto::SensitiveBuffer<NoiseSymmetricKeySize> key{};
+    crypto::Poly1305Tag tag{};
+    if (!BuildSourceBytes(source, source_bytes, source_size) ||
+        !crypto::Blake2sHash(cookie.bytes(), std::span{source_bytes}.first(source_size), state.secret.bytes) ||
+        !ComputeCookieKey(key.bytes(), local_static)) {
+        crypto::secure_clear(source_bytes);
+        return false;
+    }
+
+    *out_cookie = {};
+    SetMessageType(out_cookie->type, MessageType::CookieReply);
+    out_cookie->receiver_index = LoadLe32(packet.data() + MessageTypeSize);
+    wgnx::platform::get_random_bytes(out_cookie->nonce.data(), out_cookie->nonce.size());
+    const bool ok = out_cookie->receiver_index != 0 &&
+                    crypto::xchacha20poly1305_encrypt(
+                        std::span{out_cookie->encrypted_cookie}.first(CookieValueSize),
+                        tag,
+                        cookie.span(),
+                        packet.subspan(packet.size() - 2 * NoiseMacSize, NoiseMacSize),
+                        key.bytes(),
+                        out_cookie->nonce
+                    );
+    if (ok) {
+        std::ranges::copy(tag, out_cookie->encrypted_cookie.begin() + CookieValueSize);
+    }
+    crypto::secure_clear(source_bytes);
+    crypto::secure_clear(tag);
+    if (!ok) {
+        *out_cookie = {};
+    }
+    return ok;
+}
+
 bool MatchesCookieReceiverIndex(const wg_device* device, std::uint32_t receiver_index) {
     if (device == nullptr || receiver_index == 0) {
         return false;
@@ -421,6 +594,20 @@ const char* GetHandshakePacketOutcomeName(HandshakePacketOutcome outcome) {
         return "cookie_reply_consumed";
     }
 
+    return "unknown";
+}
+
+const char* GetResponderHandshakeAdmissionName(ResponderHandshakeAdmission admission) {
+    switch (admission) {
+    case ResponderHandshakeAdmission::Accepted:
+        return "accepted";
+    case ResponderHandshakeAdmission::CookieReply:
+        return "cookie_reply";
+    case ResponderHandshakeAdmission::RateLimited:
+        return "rate_limited";
+    case ResponderHandshakeAdmission::Invalid:
+        return "invalid";
+    }
     return "unknown";
 }
 
@@ -983,6 +1170,35 @@ HandshakePacketOutcome noise_handshake_consume_incoming_packet(std::span<const s
         GetMessageTypeName(type_result.type)
     );
     return HandshakePacketOutcome::Invalid;
+}
+
+ResponderHandshakeAdmission noise_handshake_admit_responder_packet(
+    wg_device* device,
+    std::span<const std::uint8_t> packet,
+    const wgnx::platform::endpoint& source,
+    MonotonicTimePoint now,
+    message_handshake_cookie* out_cookie
+) {
+    wg_peer* peer = wg_device_first_peer(device);
+    if (peer == nullptr || SourceAddressSize(source) == 0 || !VerifyPacketMac1(packet, peer->static_identity.static_public)) {
+        return ResponderHandshakeAdmission::Invalid;
+    }
+
+    ResponderCookieState& state = device->responder_cookie;
+    if (!IsUnderLoad(state, now)) {
+        return ResponderHandshakeAdmission::Accepted;
+    }
+    if (!CheckPacketMac2(state, packet, source, now)) {
+        return CreateCookieReply(state, peer->static_identity.static_public, packet, source, now, out_cookie)
+                   ? ResponderHandshakeAdmission::CookieReply
+                   : ResponderHandshakeAdmission::Invalid;
+    }
+
+    HandshakeRateLimitEntry* entry = FindRateLimitEntry(state, source, now);
+    if (entry == nullptr || !ConsumeHandshakeRate(entry->tokens, entry->last_update, entry->initialized, now)) {
+        return ResponderHandshakeAdmission::RateLimited;
+    }
+    return ResponderHandshakeAdmission::Accepted;
 }
 
 } // namespace wgnx::wireguard

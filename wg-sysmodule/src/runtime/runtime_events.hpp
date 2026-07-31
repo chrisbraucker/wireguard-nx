@@ -9,6 +9,7 @@
 #include "wgnx/protocol.hpp"
 #include "wireguard/peer_controller.hpp"
 #include "wireguard/inner_packet.hpp"
+#include "wireguard/messages.hpp"
 #include "wireguard/timers.hpp"
 
 #include <array>
@@ -223,6 +224,12 @@ struct SendPendingDatagramEffect {
     DatagramGeneration datagram_generation{};
 };
 
+struct SendCookieReplyEffect {
+    PeerIdentity peer{};
+    wgnx::platform::endpoint destination{};
+    std::array<std::uint8_t, wgnx::wireguard::HandshakeCookieSize> packet{};
+};
+
 struct QueueReceiveEffect {
     PeerIdentity peer{};
 };
@@ -263,6 +270,7 @@ using RuntimeEffect = std::variant<
     OpenUdpBindEffect,
     CloseUdpSocketEffect,
     SendPendingDatagramEffect,
+    SendCookieReplyEffect,
     QueueReceiveEffect,
     ArmProtocolTimerEffect,
     CancelProtocolTimerEffect,

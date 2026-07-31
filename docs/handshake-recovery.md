@@ -24,6 +24,17 @@ A valid cookie reply updates peer cookie state.
 It does not immediately resend the cached initiation.
 The next timed retry constructs a fresh initiation and applies the cookie to that message, matching the upstream receive/send split.
 
+## Responder Cookie Admission
+
+Responder admission validates MAC1 before it accounts for an initiation or response.
+A global valid-MAC1 arrival token bucket allows `20/s` with a burst of `5` and enters the upstream one-second sticky under-load period when that threshold is exceeded.
+This is the target-specific overload signal for the current serialized receive runtime, rather than a speculative handshake-worker queue-depth proxy.
+
+While under load, admission requires a valid MAC2 derived from a rotating 120-second responder secret and the received UDP endpoint.
+A missing or invalid MAC2 produces a stateless cookie reply sent to that received endpoint without changing the authenticated peer binding or endpoint-roaming state.
+Valid cookie-authenticated handshakes then pass a fixed, bounded per-source-IP `20/s` burst-`5` limiter.
+The implementation follows wireguard-go's cookie wire format and cryptographic construction, while its arrival-trigger source is deliberately documented as a Horizon runtime adaptation.
+
 ## Exhaustion And Restart
 
 When the sequence is exhausted, the sysmodule:
