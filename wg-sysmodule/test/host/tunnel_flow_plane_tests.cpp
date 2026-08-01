@@ -219,8 +219,7 @@ void TestTunnelFlowPlane(TestContext& context) {
             opened.peer_activation_generation == first_peer.activation_generation.Value() &&
             opened_state.advertised_local.address[0] == 10 && opened_state.advertised_local.address[1] == 13 &&
             opened_state.advertised_local.address[2] == 13 && opened_state.advertised_local.address[3] == 8 &&
-            opened_state.advertised_local.port != 0 &&
-            snapshot.policy_generation != policy_after_refresh.policy_generation &&
+            opened_state.advertised_local.port != 0 && snapshot.policy_generation != policy_after_refresh.policy_generation &&
             policy_after_refresh.policy_generation != policy_after_second_refresh.policy_generation,
         "flow opening did not distinguish route coverage, availability, or peer activation, or policy generations did not advance"
     );
@@ -304,8 +303,9 @@ void TestTunnelFlowPlane(TestContext& context) {
     const auto zero_checksum_completion = plane.ReceiveCompletions(client, completions, received_payload);
     WGNX_TEST_REQUIRE(
         context,
-        accepted_zero_checksum.disposition == TunnelInboundDisposition::Delivered && zero_checksum_completion.status == ProtocolStatus::Success &&
-            zero_checksum_completion.count == 1 && completions[0].type == CompletionType::InboundDatagram,
+        accepted_zero_checksum.disposition == TunnelInboundDisposition::Delivered &&
+            zero_checksum_completion.status == ProtocolStatus::Success && zero_checksum_completion.count == 1 &&
+            completions[0].type == CompletionType::InboundDatagram,
         "IPv4 UDP zero checksum was not accepted while invalid nonzero checksums remained rejected"
     );
 
@@ -448,7 +448,8 @@ void TestTunnelFlowPlane(TestContext& context) {
     for (std::size_t index = 0; index < bounded_flows.size(); ++index) {
         auto request = open;
         request.diagnostic_tag = index;
-        const auto opened_flow = bounded_plane.OpenConnectedUdpFlow(bounded_client, request, 202 + index);
+        const auto opened_flow =
+            bounded_plane.OpenConnectedUdpFlow(bounded_client, request, 202 + static_cast<wgnx::platform::ktime_t>(index));
         bounded_flows[index] = opened_flow.flow;
         all_bounded_flows_opened = all_bounded_flows_opened && opened_flow.status == ProtocolStatus::Success;
     }
@@ -499,15 +500,20 @@ void TestTunnelFlowPlane(TestContext& context) {
     bool all_tuples_opened = true;
     std::array<FlowHandle, MaximumFlows> quarantine_flows{};
     for (std::size_t index = 0; index < quarantine_flows.size(); ++index) {
-        const auto opened_flow =
-            quarantine_plane.OpenConnectedUdpFlow(quarantine_clients[index / MaximumFlowsPerClient], open, 301 + index);
+        const auto opened_flow = quarantine_plane.OpenConnectedUdpFlow(
+            quarantine_clients[index / MaximumFlowsPerClient],
+            open,
+            301 + static_cast<wgnx::platform::ktime_t>(index)
+        );
         quarantine_flows[index] = opened_flow.flow;
         all_tuples_opened = all_tuples_opened && opened_flow.status == ProtocolStatus::Success;
     }
     for (std::size_t index = 0; index < quarantine_flows.size(); ++index) {
-        static_cast<void>(
-            quarantine_plane.CloseFlow(quarantine_clients[index / MaximumFlowsPerClient], quarantine_flows[index], 400 + index)
-        );
+        static_cast<void>(quarantine_plane.CloseFlow(
+            quarantine_clients[index / MaximumFlowsPerClient],
+            quarantine_flows[index],
+            400 + static_cast<wgnx::platform::ktime_t>(index)
+        ));
     }
     const auto exhausted = quarantine_plane.OpenConnectedUdpFlow(quarantine_clients[0], open, 500);
     const auto after_expiry =

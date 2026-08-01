@@ -145,8 +145,9 @@ class PeerRuntime {
         ActivationGeneration activation_generation, DatagramGeneration datagram_generation, PendingDatagramSnapshot& out
     ) const;
     bool HasPendingDatagram(ActivationGeneration activation_generation, DatagramGeneration datagram_generation) const;
-    bool
-    ViewDecryptedPacket(ActivationGeneration activation_generation, PacketGeneration packet_generation, DecryptedPacketView& out) const;
+    bool ViewDecryptedPacket(
+        ActivationGeneration activation_generation, PacketGeneration packet_generation, DecryptedPacketView& out
+    ) const;
     bool CanStageInnerPacket() const;
     std::size_t StagedInnerPacketCount() const;
 
@@ -180,8 +181,9 @@ class PeerRuntime {
         wgnx::wireguard::TransportDataError& out_error
     );
     bool StartHandshake(const PeerIdentity& identity, const TimerFacts& timer_facts, EffectBatch& effects, bool retry);
-    void
-    ProcessOutboundQueue(const PeerIdentity& identity, const TimerFacts& timer_facts, wgnx::platform::ktime_t now, EffectBatch& effects);
+    void ProcessOutboundQueue(
+        const PeerIdentity& identity, const TimerFacts& timer_facts, wgnx::platform::ktime_t now, EffectBatch& effects
+    );
     void HandlePendingDatagramCompletion(const PendingDatagramSentEvent& event, EffectBatch& effects);
     void HandleEncryptedDatagram(const EncryptedDatagramReceivedEvent& event, EffectBatch& effects);
     void CompleteInitiatorSession(const EncryptedDatagramReceivedEvent& event, EffectBatch& effects);
@@ -200,7 +202,9 @@ class PeerRuntime {
     void OnAuthenticatedPacketTraversal(const PeerIdentity& identity, const TimerFacts& timer_facts, EffectBatch& effects);
     void OnAuthenticatedPacketSent(const PeerIdentity& identity, EffectBatch& effects);
     void OnAuthenticatedPacketReceived(const PeerIdentity& identity, EffectBatch& effects);
-    void RefreshKeyFreshness(const PeerIdentity& identity, const TimerFacts& timer_facts, wgnx::platform::ktime_t now, EffectBatch& effects);
+    void RefreshKeyFreshness(
+        const PeerIdentity& identity, const TimerFacts& timer_facts, wgnx::platform::ktime_t now, EffectBatch& effects
+    );
     void OnDataPacketSent(const PeerIdentity& identity, const TimerFacts& timer_facts, EffectBatch& effects);
     void OnDataPacketReceived(const PeerIdentity& identity, const TimerFacts& timer_facts, EffectBatch& effects);
     void OnSessionDerived(const PeerIdentity& identity, const TimerFacts& timer_facts, EffectBatch& effects);

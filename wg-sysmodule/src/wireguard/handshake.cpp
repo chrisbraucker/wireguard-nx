@@ -329,7 +329,7 @@ bool VerifyPacketMac1(std::span<const std::uint8_t> packet, const noise_public_k
     const auto type = InspectMessageType(packet);
     const std::size_t expected_size = type.success && type.type == MessageType::HandshakeInitiation ? HandshakeInitiationSize
                                       : type.success && type.type == MessageType::HandshakeResponse ? HandshakeResponseSize
-                                                                                                     : 0;
+                                                                                                    : 0;
     if (!local_static.valid || expected_size == 0 || packet.size() != expected_size) {
         return false;
     }
@@ -451,15 +451,14 @@ bool CreateCookieReply(
     SetMessageType(out_cookie->type, MessageType::CookieReply);
     out_cookie->receiver_index = LoadLe32(packet.data() + MessageTypeSize);
     wgnx::platform::get_random_bytes(out_cookie->nonce.data(), out_cookie->nonce.size());
-    const bool ok = out_cookie->receiver_index != 0 &&
-                    crypto::xchacha20poly1305_encrypt(
-                        std::span{out_cookie->encrypted_cookie}.first(CookieValueSize),
-                        tag,
-                        cookie.span(),
-                        packet.subspan(packet.size() - 2 * NoiseMacSize, NoiseMacSize),
-                        key.bytes(),
-                        out_cookie->nonce
-                    );
+    const bool ok = out_cookie->receiver_index != 0 && crypto::xchacha20poly1305_encrypt(
+                                                           std::span{out_cookie->encrypted_cookie}.first(CookieValueSize),
+                                                           tag,
+                                                           cookie.span(),
+                                                           packet.subspan(packet.size() - 2 * NoiseMacSize, NoiseMacSize),
+                                                           key.bytes(),
+                                                           out_cookie->nonce
+                                                       );
     if (ok) {
         std::ranges::copy(tag, out_cookie->encrypted_cookie.begin() + CookieValueSize);
     }

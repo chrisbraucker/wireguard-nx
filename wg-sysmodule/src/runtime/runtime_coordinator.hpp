@@ -66,8 +66,9 @@ class RuntimeCoordinator {
     [[nodiscard]] bool SnapshotReceiveRuntime(ReceiveRuntimeSnapshot& out) const;
     [[nodiscard]] bool SnapshotDebugPeer(DebugPeerSnapshot& out) const;
     [[nodiscard]] bool SnapshotPacketState(PeerPacketStateSnapshot& out) const;
-    [[nodiscard]] bool
-    SnapshotPendingDatagram(const PeerIdentity& peer, DatagramGeneration datagram_generation, PendingDatagramSnapshot& out) const;
+    [[nodiscard]] bool SnapshotPendingDatagram(
+        const PeerIdentity& peer, DatagramGeneration datagram_generation, PendingDatagramSnapshot& out
+    ) const;
     [[nodiscard]] bool HasPendingDatagram(const PeerIdentity& peer, DatagramGeneration datagram_generation) const;
     [[nodiscard]] bool ViewDecryptedPacket(const PeerIdentity& peer, PacketGeneration packet_generation, DecryptedPacketView& out) const;
     bool IsCurrentTimerEffect(const ArmProtocolTimerEffect& effect) const;

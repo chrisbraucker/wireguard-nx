@@ -102,14 +102,16 @@ class TunnelFlowPlane {
     void NotifyOutboundCapacityAvailable(const PeerIdentity& peer);
     [[nodiscard]] std::uint32_t SignalAllClientCompletionEvents() const;
 
-    [[nodiscard]] TunnelCompletionDrainOutcome
-    ReceiveCompletions(TunnelClientId client, std::span<wgnx::tunnel::CompletionRecord> records, std::span<std::uint8_t> payload);
+    [[nodiscard]] TunnelCompletionDrainOutcome ReceiveCompletions(
+        TunnelClientId client, std::span<wgnx::tunnel::CompletionRecord> records, std::span<std::uint8_t> payload
+    );
     [[nodiscard]] bool HasCompletions(TunnelClientId client) const;
     [[nodiscard]] wgnx::tunnel::FlowStateResult GetFlowState(TunnelClientId client, wgnx::tunnel::FlowHandle flow) const;
     [[nodiscard]] wgnx::tunnel::ProtocolStatus CloseFlow(TunnelClientId client, wgnx::tunnel::FlowHandle flow, wgnx::platform::ktime_t now);
 
-    [[nodiscard]] TunnelInboundOutcome
-    DeliverDecryptedIpv4Packet(const PeerIdentity& peer, std::span<const std::uint8_t> packet, wgnx::platform::ktime_t now);
+    [[nodiscard]] TunnelInboundOutcome DeliverDecryptedIpv4Packet(
+        const PeerIdentity& peer, std::span<const std::uint8_t> packet, wgnx::platform::ktime_t now
+    );
     void InvalidatePeerActivation(const PeerIdentity& peer, wgnx::tunnel::FlowTerminalReason reason, wgnx::platform::ktime_t now);
 
   private:
@@ -235,8 +237,9 @@ class TunnelFlowPlane {
     [[nodiscard]] static bool RouteMatches(const NormalizedRoute& route, const std::uint8_t address[4]);
     [[nodiscard]] const NormalizedRoute* SelectRoute(const wgnx::tunnel::Ipv4Endpoint& remote) const;
     [[nodiscard]] static std::uint16_t ComputeInternetChecksum(std::span<const std::uint8_t> bytes);
-    [[nodiscard]] static std::uint16_t
-    ComputeUdpChecksum(const std::uint8_t source[4], const std::uint8_t destination[4], std::span<const std::uint8_t> udp);
+    [[nodiscard]] static std::uint16_t ComputeUdpChecksum(
+        const std::uint8_t source[4], const std::uint8_t destination[4], std::span<const std::uint8_t> udp
+    );
     [[nodiscard]] bool BuildUdpPacket(FlowSlot& flow, std::span<const std::uint8_t> payload, OutboundSlab& out, std::size_t* out_size);
 
     std::array<ClientSlot, wgnx::tunnel::MaximumClientContexts> m_clients{};

@@ -112,8 +112,9 @@ ParseResult ValidatePacket(std::span<const std::uint8_t> packet, MessageType exp
     return MakeSuccess(type_result.type);
 }
 
-ParseError
-ValidateSerializeTarget(std::span<std::uint8_t> output, std::size_t required_size, MessageType actual_type, MessageType expected_type) {
+ParseError ValidateSerializeTarget(
+    std::span<std::uint8_t> output, std::size_t required_size, MessageType actual_type, MessageType expected_type
+) {
     if (output.size() < required_size) {
         return ParseError::InsufficientCapacity;
     }

@@ -170,7 +170,7 @@ bool ParseIpv6Address(std::string_view value, std::uint8_t* out) {
             const unsigned int digit = character >= '0' && character <= '9'   ? static_cast<unsigned int>(character - '0')
                                        : character >= 'a' && character <= 'f' ? static_cast<unsigned int>(character - 'a' + 10)
                                        : character >= 'A' && character <= 'F' ? static_cast<unsigned int>(character - 'A' + 10)
-                                                                             : 16U;
+                                                                              : 16U;
             if (digit == 16U) {
                 return false;
             }
@@ -198,8 +198,16 @@ bool ParseIpv6Address(std::string_view value, std::uint8_t* out) {
         if (word_count >= words.size()) {
             return false;
         }
-        std::move_backward(words.begin() + static_cast<std::ptrdiff_t>(compressed_at), words.begin() + static_cast<std::ptrdiff_t>(word_count), words.end());
-        std::fill(words.begin() + static_cast<std::ptrdiff_t>(compressed_at), words.end() - static_cast<std::ptrdiff_t>(word_count - compressed_at), 0);
+        std::move_backward(
+            words.begin() + static_cast<std::ptrdiff_t>(compressed_at),
+            words.begin() + static_cast<std::ptrdiff_t>(word_count),
+            words.end()
+        );
+        std::fill(
+            words.begin() + static_cast<std::ptrdiff_t>(compressed_at),
+            words.end() - static_cast<std::ptrdiff_t>(word_count - compressed_at),
+            0
+        );
     }
     for (std::size_t index = 0; index < words.size(); ++index) {
         out[index * 2] = static_cast<std::uint8_t>(words[index] >> 8U);
@@ -337,8 +345,9 @@ InnerIpv4ValidationError ValidatePaddedInnerIpv4Packet(std::span<const std::uint
     return InnerIpv4ValidationError::None;
 }
 
-InnerIpValidationError
-ValidatePaddedInnerIpPacket(std::span<const std::uint8_t> payload, std::size_t* out_packet_size, InnerIpVersion* out_version) {
+InnerIpValidationError ValidatePaddedInnerIpPacket(
+    std::span<const std::uint8_t> payload, std::size_t* out_packet_size, InnerIpVersion* out_version
+) {
     if (out_packet_size == nullptr) {
         return InnerIpv4ValidationError::LengthMismatch;
     }

@@ -7,6 +7,7 @@ IndentWidth: 4
 ContinuationIndentWidth: 4
 PointerAlignment: Left
 ReferenceAlignment: Pointer
+PenaltyReturnTypeOnItsOwnLine: 200
 SortIncludes: Never
 BreakBeforeBraces: Attach
 AlignAfterOpenBracket: BlockIndent

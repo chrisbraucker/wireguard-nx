@@ -190,8 +190,9 @@ void BsdMitmService::ForgetSocket(const s32 descriptor) {
     logger::Log("bsd:s socket forget miss owner=%llu fd=%d", static_cast<unsigned long long>(m_owner), descriptor);
 }
 
-ams::Result
-BsdMitmService::Socket(ams::sf::Out<s32> out_fd, ams::sf::Out<s32> out_errno, const s32 domain, const s32 type, const s32 protocol) {
+ams::Result BsdMitmService::Socket(
+    ams::sf::Out<s32> out_fd, ams::sf::Out<s32> out_errno, const s32 domain, const s32 type, const s32 protocol
+) {
     struct {
         s32 domain;
         s32 type;
@@ -823,8 +824,9 @@ ams::Result BsdMitmService::Poll(
     R_SUCCEED();
 }
 
-ams::Result
-BsdMitmService::Bind(ams::sf::Out<s32> out_result, ams::sf::Out<s32> out_errno, const s32 fd, const ams::sf::InAutoSelectBuffer& address) {
+ams::Result BsdMitmService::Bind(
+    ams::sf::Out<s32> out_result, ams::sf::Out<s32> out_errno, const s32 fd, const ams::sf::InAutoSelectBuffer& address
+) {
     if (const SocketState* socket = FindSocket(fd); socket != nullptr && UsesTunnelFlow(socket->route)) {
         out_result.SetValue(-1);
         out_errno.SetValue(EOPNOTSUPP);
@@ -966,8 +968,9 @@ ams::Result BsdMitmService::GetSockName(
     return rc;
 }
 
-ams::Result
-BsdMitmService::Fcntl(ams::sf::Out<s32> out_result, ams::sf::Out<s32> out_errno, const s32 fd, const s32 command, const s32 value) {
+ams::Result BsdMitmService::Fcntl(
+    ams::sf::Out<s32> out_result, ams::sf::Out<s32> out_errno, const s32 fd, const s32 command, const s32 value
+) {
     if (const SocketState* socket = FindSocket(fd); socket != nullptr && UsesTunnelFlow(socket->route)) {
         if (!SupportsTunneledFcntl(command, value)) {
             out_result.SetValue(-1);

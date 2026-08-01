@@ -36,14 +36,16 @@ enum class DebugProbeQueueResult : std::uint8_t {
 
 class DebugProbeRunner {
   public:
-    [[nodiscard]] DebugProbeQueueResult
-    Queue(const PeerIdentity& peer, std::string_view source_address, wgnx::DebugTriggerAction action, wgnx::platform::ktime_t now);
+    [[nodiscard]] DebugProbeQueueResult Queue(
+        const PeerIdentity& peer, std::string_view source_address, wgnx::DebugTriggerAction action, wgnx::platform::ktime_t now
+    );
     [[nodiscard]] bool TakePending(DebugProbeRequest& out);
     [[nodiscard]] std::size_t BuildPacket(const DebugProbeRequest& request, std::span<std::uint8_t> packet, std::uint32_t random_seed);
     [[nodiscard]] bool MarkSent(const DebugProbeRequest& request, wgnx::platform::ktime_t now);
     [[nodiscard]] bool MarkFailed(const DebugProbeRequest& request, wgnx::DebugProbeStatus status, wgnx::platform::ktime_t now);
-    [[nodiscard]] DebugProbeReplyOutcome
-    HandleDecryptedPacket(const PeerIdentity& peer, std::span<const std::uint8_t> packet, wgnx::platform::ktime_t now);
+    [[nodiscard]] DebugProbeReplyOutcome HandleDecryptedPacket(
+        const PeerIdentity& peer, std::span<const std::uint8_t> packet, wgnx::platform::ktime_t now
+    );
     [[nodiscard]] bool HandleTimeout(wgnx::platform::ktime_t now);
     void Cancel(const PeerIdentity* peer = nullptr);
     void Project(std::uint32_t peer_index, wgnx::platform::ktime_t now, wgnx::PeerInfo& info) const;

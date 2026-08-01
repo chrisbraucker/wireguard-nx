@@ -102,12 +102,16 @@ Implementation note: this is a target-specific substitute for wireguard-go's han
 
 ## Verification and Test Coverage
 
-- [ ] Fix the three redundant moves reported by clang-tidy in `wg-sysmodule/test/host/scripted_platform.cpp`.
-- [ ] Fix the three `size_t` to signed time-type narrowing conversions reported in `wg-sysmodule/test/host/tunnel_flow_plane_tests.cpp`.
-- [ ] Include `tidy-check` in the intended aggregate verification gate, or document clearly why it remains separate.
+- [x] Fix the three redundant moves reported by clang-tidy in `wg-sysmodule/test/host/scripted_platform.cpp`.
+- [x] Fix the three `size_t` to signed time-type narrowing conversions reported in `wg-sysmodule/test/host/tunnel_flow_plane_tests.cpp`.
+- [x] Include `tidy-check` in the intended aggregate verification gate, or document clearly why it remains separate.
 - [x] Add host coverage for MITM completion validation, receive truncation, errno translation, and route-state transitions.
 
-Implementation note: the WireGuard normal, ASan/UBSan, and warning suites passed 48 deterministic cases during this review, while `tidy-check` failed on the six test findings above.
+Implementation note: the WireGuard normal, ASan/UBSan, warning, and tidy suites passed 50 deterministic cases during this review.
+
+Implementation note: `mitm-sysmodule` and `manager` now run `tidy-check` from `verify` because they pass it cleanly.
+
+Implementation note: `wg-sysmodule` now runs `tidy-check` from `verify`, while `overlay` remains separate because clang-tidy cannot parse its unmodified Tesla and Ultrahand dependency headers.
 
 Implementation note: completion validation, datagram truncation, readiness, submission state, errno translation, and route transitions are now shared production helpers with deterministic host coverage.
 

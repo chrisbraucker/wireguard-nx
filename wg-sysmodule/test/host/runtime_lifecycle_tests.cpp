@@ -1771,9 +1771,11 @@ void TestRuntimeInitiatorSessionKeepalive(TestContext& context) {
     );
     WGNX_TEST_REQUIRE(
         context,
-        effects.Size() == 2 && !std::ranges::any_of(effects, [](const RuntimeEffect& effect) {
-            return std::holds_alternative<SendPendingDatagramEffect>(effect);
-        }) &&
+        effects.Size() == 2 &&
+            !std::ranges::any_of(
+                effects,
+                [](const RuntimeEffect& effect) { return std::holds_alternative<SendPendingDatagramEffect>(effect); }
+            ) &&
             coordinator.HasPendingDatagram(identity, rekey_generation),
         "repeated authenticated traffic started a duplicate rekey handshake"
     );

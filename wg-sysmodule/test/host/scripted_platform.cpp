@@ -7,7 +7,6 @@
 #include <optional>
 #include <span>
 #include <type_traits>
-#include <utility>
 
 namespace wgnx::test {
 
@@ -46,7 +45,7 @@ void ScriptedPlatform::QueueUdpSendResult(UdpSendResult result) {
 }
 
 void ScriptedPlatform::QueueUdpReceiveResult(UdpReceiveResult result) {
-    m_udp_receive_results.push_back(std::move(result));
+    m_udp_receive_results.push_back(result);
 }
 
 void ScriptedPlatform::QueuePersistenceResult(bool success) {
@@ -146,7 +145,7 @@ bool ScriptedPlatform::CompleteNextUdpReceive() {
         return false;
     }
 
-    UdpReceiveResult result = std::move(m_udp_receive_results.front());
+    UdpReceiveResult result = m_udp_receive_results.front();
     m_udp_receive_results.pop_front();
 
     if (result.kind == UdpReceiveResult::Kind::Failure) {
@@ -318,7 +317,7 @@ wgnx::platform::endpoint_resolution_result ScriptedPlatform::TakeResolutionResul
     if (m_resolution_results.empty()) {
         return DefaultResolutionResult();
     }
-    auto result = std::move(m_resolution_results.front());
+    auto result = m_resolution_results.front();
     m_resolution_results.pop_front();
     return result;
 }

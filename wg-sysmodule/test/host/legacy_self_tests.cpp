@@ -168,8 +168,9 @@ ParseResult DispatchPacket(const wgnx::platform::packet_buffer* packet, const Pa
                              : ::wgnx::wireguard::DispatchPacket(packet->bytes(), handlers);
 }
 
-TransportDataError
-noise_create_transport_data_packet(wgnx::platform::packet_buffer* packet, noise_keypair& keypair, std::span<const std::uint8_t> payload) {
+TransportDataError noise_create_transport_data_packet(
+    wgnx::platform::packet_buffer* packet, noise_keypair& keypair, std::span<const std::uint8_t> payload
+) {
     if (packet == nullptr) {
         return TransportDataError::InvalidArgument;
     }
@@ -221,8 +222,9 @@ TransportDataError noise_consume_incoming_transport_data_packet(
     );
 }
 
-HandshakePacketOutcome
-noise_handshake_consume_incoming_packet(const wgnx::platform::packet_buffer* packet, wg_device* device, wg_peer* peer) {
+HandshakePacketOutcome noise_handshake_consume_incoming_packet(
+    const wgnx::platform::packet_buffer* packet, wg_device* device, wg_peer* peer
+) {
     if (packet == nullptr) {
         return HandshakePacketOutcome::Invalid;
     }
@@ -596,17 +598,15 @@ bool TestInnerIpv4PacketBoundary() {
         return false;
     }
 
-    if (!AllowedIpsContainSource(packet, "10.13.13.0/24, 2001:db8::/32") ||
-        AllowedIpsContainSource(packet, "10.13.14.0/24") || AllowedIpsContainSource(packet, "invalid")) {
+    if (!AllowedIpsContainSource(packet, "10.13.13.0/24, 2001:db8::/32") || AllowedIpsContainSource(packet, "10.13.14.0/24") ||
+        AllowedIpsContainSource(packet, "invalid")) {
         return false;
     }
     constexpr std::array<std::uint8_t, 40> ipv6_packet = {
-        0x60, 0x00, 0x00, 0x00, 0x00, 0x00, 0x11, 0x40, 0x20, 0x01, 0x0D, 0xB8, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x20, 0x01, 0x0D, 0xB8, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+        0x60, 0x00, 0x00, 0x00, 0x00, 0x00, 0x11, 0x40, 0x20, 0x01, 0x0D, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x02, 0x20, 0x01, 0x0D, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
     };
-    if (!AllowedIpsContainSource(ipv6_packet, "10.13.13.0/24, 2001:db8::/32") ||
-        AllowedIpsContainSource(ipv6_packet, "2001:db9::/32")) {
+    if (!AllowedIpsContainSource(ipv6_packet, "10.13.13.0/24, 2001:db8::/32") || AllowedIpsContainSource(ipv6_packet, "2001:db9::/32")) {
         return false;
     }
 

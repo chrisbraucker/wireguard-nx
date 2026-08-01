@@ -50,8 +50,9 @@ const char* GetTransportDataErrorName(TransportDataError error) {
     return "unknown";
 }
 
-TransportDataCreateResult
-noise_create_transport_data_packet(std::span<std::uint8_t> output, noise_keypair& keypair, std::span<const std::uint8_t> payload, std::size_t mtu) {
+TransportDataCreateResult noise_create_transport_data_packet(
+    std::span<std::uint8_t> output, noise_keypair& keypair, std::span<const std::uint8_t> payload, std::size_t mtu
+) {
     if (payload.size() > std::numeric_limits<std::size_t>::max() - (TransportDataPaddingBlockSize - 1)) {
         return CreateFailure(TransportDataError::InsufficientCapacity);
     }

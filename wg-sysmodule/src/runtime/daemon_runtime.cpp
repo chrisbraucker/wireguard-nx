@@ -56,8 +56,9 @@ class DaemonRuntime {
     std::uint32_t SignalTunnelClientShutdown();
     wgnx::tunnel::Capabilities GetTunnelCapabilities();
     wgnx::tunnel::RoutingPolicySnapshot CopyTunnelRoutingPolicy(std::span<wgnx::tunnel::RouteRecord> out);
-    wgnx::tunnel::OpenConnectedUdpFlowResult
-    OpenTunnelConnectedUdpFlow(runtime::TunnelClientId client, const wgnx::tunnel::OpenConnectedUdpFlowRequest& request);
+    wgnx::tunnel::OpenConnectedUdpFlowResult OpenTunnelConnectedUdpFlow(
+        runtime::TunnelClientId client, const wgnx::tunnel::OpenConnectedUdpFlowRequest& request
+    );
     wgnx::tunnel::ProtocolStatus SendTunnelUdpDatagram(
         runtime::TunnelClientId client, const wgnx::tunnel::DatagramDescriptor& descriptor, std::span<const std::uint8_t> payload
     );
@@ -551,8 +552,9 @@ ams::Result DaemonRuntime::BumpUdpBinding() {
     R_SUCCEED();
 }
 
-wgnx::PacketSubmissionResult
-DaemonRuntime::SubmitInnerIpv4Packet(std::span<const std::uint8_t> packet_bytes, runtime::ProcessId process_id) {
+wgnx::PacketSubmissionResult DaemonRuntime::SubmitInnerIpv4Packet(
+    std::span<const std::uint8_t> packet_bytes, runtime::ProcessId process_id
+) {
     wgnx::PacketSubmissionResult result = {
         .packet_id = 0,
         .status = static_cast<std::uint32_t>(wgnx::PacketApiStatus::InternalError),
@@ -716,8 +718,9 @@ wgnx::tunnel::RoutingPolicySnapshot DaemonRuntime::CopyTunnelRoutingPolicy(std::
     return m_tunnel_flow_plane.CopyRoutingPolicy(out);
 }
 
-wgnx::tunnel::OpenConnectedUdpFlowResult
-DaemonRuntime::OpenTunnelConnectedUdpFlow(runtime::TunnelClientId client, const wgnx::tunnel::OpenConnectedUdpFlowRequest& request) {
+wgnx::tunnel::OpenConnectedUdpFlowResult DaemonRuntime::OpenTunnelConnectedUdpFlow(
+    runtime::TunnelClientId client, const wgnx::tunnel::OpenConnectedUdpFlowRequest& request
+) {
     EnsureInitialized();
     std::scoped_lock lock(m_state_mutex);
     RefreshTunnelPolicyLocked();
@@ -906,13 +909,15 @@ wgnx::tunnel::RoutingPolicySnapshot CopyTunnelRoutingPolicy(std::span<wgnx::tunn
     return g_daemon_runtime.CopyTunnelRoutingPolicy(out);
 }
 
-wgnx::tunnel::OpenConnectedUdpFlowResult
-OpenTunnelConnectedUdpFlow(TunnelClientId client, const wgnx::tunnel::OpenConnectedUdpFlowRequest& request) {
+wgnx::tunnel::OpenConnectedUdpFlowResult OpenTunnelConnectedUdpFlow(
+    TunnelClientId client, const wgnx::tunnel::OpenConnectedUdpFlowRequest& request
+) {
     return g_daemon_runtime.OpenTunnelConnectedUdpFlow(client, request);
 }
 
-wgnx::tunnel::ProtocolStatus
-SendTunnelUdpDatagram(TunnelClientId client, const wgnx::tunnel::DatagramDescriptor& descriptor, std::span<const std::uint8_t> payload) {
+wgnx::tunnel::ProtocolStatus SendTunnelUdpDatagram(
+    TunnelClientId client, const wgnx::tunnel::DatagramDescriptor& descriptor, std::span<const std::uint8_t> payload
+) {
     return g_daemon_runtime.SendTunnelUdpDatagram(client, descriptor, payload);
 }
 

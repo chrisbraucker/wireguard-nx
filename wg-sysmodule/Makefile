@@ -300,6 +300,7 @@ diff-check:
 verify:
 	@$(MAKE) --no-print-directory format-check
 	@$(MAKE) --no-print-directory static-check
+	@$(MAKE) --no-print-directory tidy-check
 	@$(MAKE) --no-print-directory test-warnings
 	@$(MAKE) --no-print-directory test
 	@$(MAKE) --no-print-directory test-sanitize

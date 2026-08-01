@@ -31,8 +31,9 @@ void HorizonDispatcher::Initialize(const HorizonDispatcherCallbacks& callbacks) 
     m_initialized = true;
 }
 
-wgnx::platform::queue_work_result
-HorizonDispatcher::Queue(wgnx::platform::workqueue_struct* queue, wgnx::platform::work_struct* work, const char* name) {
+wgnx::platform::queue_work_result HorizonDispatcher::Queue(
+    wgnx::platform::workqueue_struct* queue, wgnx::platform::work_struct* work, const char* name
+) {
     const auto result = wgnx::platform::queue_work(queue, work);
     if (result != wgnx::platform::queue_work_result::capacity_exhausted && result != wgnx::platform::queue_work_result::unavailable) {
         return result;

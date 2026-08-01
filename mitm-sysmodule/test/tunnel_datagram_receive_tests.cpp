@@ -28,8 +28,13 @@ bool RunTunnelDatagramReceiveTests() {
     std::array<std::uint8_t, 2> full_output{};
     const auto full = ReceiveTunneledDatagram(&second_occupied, full_output, second);
 
-    return Check(truncated.truncated && truncated.size == short_output.size() && !first_occupied && short_output[0] == 'f' && short_output[1] == 'i',
-                 "short UDP receive did not consume the datagram after copying its prefix") &&
-           Check(!full.truncated && full.size == second.size() && !second_occupied && full_output == second,
-                 "a truncated UDP receive wedged the following datagram");
+    return Check(
+               truncated.truncated && truncated.size == short_output.size() && !first_occupied && short_output[0] == 'f' &&
+                   short_output[1] == 'i',
+               "short UDP receive did not consume the datagram after copying its prefix"
+           ) &&
+           Check(
+               !full.truncated && full.size == second.size() && !second_occupied && full_output == second,
+               "a truncated UDP receive wedged the following datagram"
+           );
 }

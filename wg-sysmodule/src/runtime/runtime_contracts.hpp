@@ -16,8 +16,9 @@ constexpr std::uint32_t BuildDaemonFlags(bool has_active_peer, bool has_runtime_
            (has_runtime_errors ? wgnx::DaemonFlag_HasErrors : 0U);
 }
 
-constexpr std::uint8_t
-BuildPeerFlags(bool is_active, bool is_auto_start, bool is_established, wgnx::PeerRuntimeState runtime_state, bool has_resolved_endpoint) {
+constexpr std::uint8_t BuildPeerFlags(
+    bool is_active, bool is_auto_start, bool is_established, wgnx::PeerRuntimeState runtime_state, bool has_resolved_endpoint
+) {
     const auto flag = [](wgnx::PeerFlags value) { return static_cast<std::uint8_t>(value); };
     return static_cast<std::uint8_t>(
         (is_active ? flag(wgnx::PeerFlag_Active) : 0U) | (is_auto_start ? flag(wgnx::PeerFlag_AutoStart) : 0U) |

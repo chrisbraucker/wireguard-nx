@@ -9,10 +9,7 @@
 namespace wgnx::mitm {
 
 inline bool ValidateTunnelCompletionDrain(
-    std::uint32_t count,
-    std::size_t record_capacity,
-    std::span<const wgnx::tunnel::CompletionRecord> records,
-    std::size_t payload_capacity
+    std::uint32_t count, std::size_t record_capacity, std::span<const wgnx::tunnel::CompletionRecord> records, std::size_t payload_capacity
 ) {
     if (count > record_capacity || count > records.size()) {
         return false;

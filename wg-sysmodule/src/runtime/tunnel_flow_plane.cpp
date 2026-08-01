@@ -496,8 +496,9 @@ wgnx::tunnel::FlowStateResult TunnelFlowPlane::GetFlowState(TunnelClientId clien
     return result;
 }
 
-wgnx::tunnel::ProtocolStatus
-TunnelFlowPlane::CloseFlow(TunnelClientId client, wgnx::tunnel::FlowHandle flow_handle, wgnx::platform::ktime_t now) {
+wgnx::tunnel::ProtocolStatus TunnelFlowPlane::CloseFlow(
+    TunnelClientId client, wgnx::tunnel::FlowHandle flow_handle, wgnx::platform::ktime_t now
+) {
     FlowSlot* flow = FindFlow(client, flow_handle);
     if (flow == nullptr) {
         return wgnx::tunnel::ProtocolStatus::StaleHandle;
@@ -509,8 +510,9 @@ TunnelFlowPlane::CloseFlow(TunnelClientId client, wgnx::tunnel::FlowHandle flow_
     return wgnx::tunnel::ProtocolStatus::Success;
 }
 
-TunnelInboundOutcome
-TunnelFlowPlane::DeliverDecryptedIpv4Packet(const PeerIdentity& peer, std::span<const std::uint8_t> packet, wgnx::platform::ktime_t now) {
+TunnelInboundOutcome TunnelFlowPlane::DeliverDecryptedIpv4Packet(
+    const PeerIdentity& peer, std::span<const std::uint8_t> packet, wgnx::platform::ktime_t now
+) {
     TunnelInboundOutcome outcome{};
     if (wgnx::wireguard::ValidateInnerIpv4Packet(packet) != wgnx::wireguard::InnerIpv4ValidationError::None ||
         packet.size() < Ipv4HeaderSize) {
@@ -1204,8 +1206,9 @@ std::uint16_t TunnelFlowPlane::ComputeInternetChecksum(std::span<const std::uint
     return FinishChecksum(AddChecksum(0, bytes));
 }
 
-std::uint16_t
-TunnelFlowPlane::ComputeUdpChecksum(const std::uint8_t source[4], const std::uint8_t destination[4], std::span<const std::uint8_t> udp) {
+std::uint16_t TunnelFlowPlane::ComputeUdpChecksum(
+    const std::uint8_t source[4], const std::uint8_t destination[4], std::span<const std::uint8_t> udp
+) {
     std::array<std::uint8_t, 4> pseudo_tail = {
         0,
         UdpProtocol,

@@ -178,8 +178,9 @@ class TunnelClientService {
   private:
     static void SignalCompletionEvent(void* context);
     static void ClearCompletionEvent(void* context);
-    [[nodiscard]] bool
-    IsPayloadRangeValid(const wgnx::tunnel::DatagramDescriptor& descriptor, const ams::sf::InMapAliasBuffer& payload) const;
+    [[nodiscard]] bool IsPayloadRangeValid(
+        const wgnx::tunnel::DatagramDescriptor& descriptor, const ams::sf::InMapAliasBuffer& payload
+    ) const;
 
     ams::os::SystemEvent m_completion_event;
     runtime::TunnelClientId m_client{};

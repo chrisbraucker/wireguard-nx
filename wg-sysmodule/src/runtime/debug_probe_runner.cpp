@@ -79,8 +79,9 @@ bool DebugProbeRunner::MarkFailed(const DebugProbeRequest& request, wgnx::DebugP
     return Matches(request) && Transition(status, now);
 }
 
-DebugProbeReplyOutcome
-DebugProbeRunner::HandleDecryptedPacket(const PeerIdentity& peer, std::span<const std::uint8_t> packet, wgnx::platform::ktime_t now) {
+DebugProbeReplyOutcome DebugProbeRunner::HandleDecryptedPacket(
+    const PeerIdentity& peer, std::span<const std::uint8_t> packet, wgnx::platform::ktime_t now
+) {
     DebugProbeReplyOutcome outcome{};
     if (m_status != wgnx::DebugProbeStatus::Sent) {
         return outcome;

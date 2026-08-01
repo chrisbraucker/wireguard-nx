@@ -118,8 +118,9 @@ class InMemoryDatagramLink {
     std::size_t m_total_sent{0};
 };
 
-inline void
-FillConfig(wgnx::PeerConfigEntry* config, const char* name, const char* address, const char* private_key, const char* remote_public_key) {
+inline void FillConfig(
+    wgnx::PeerConfigEntry* config, const char* name, const char* address, const char* private_key, const char* remote_public_key
+) {
     *config = {};
     std::snprintf(config->name.data(), config->name.size(), "%s", name);
     std::snprintf(config->address.data(), config->address.size(), "%s", address);

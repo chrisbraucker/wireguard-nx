@@ -364,17 +364,17 @@ It creates child clients only when a routed BSD socket needs one.
 
 The adapter, route state machine, bounded queues, WGNX batch submissions, and production aggregate metrics already exist.
 No MITM or WireGuard production-path change is currently justified solely by an incomplete device matrix.
-The requester does need explicit expected-outcome modes so the remaining narrow BSD behaviors can produce a positive test verdict instead of an intentional error that must be inferred from logs.
+The requester provides explicit expected-outcome modes so the remaining narrow BSD behaviors can produce a positive test verdict instead of an intentional error that must be inferred from logs.
 
-- [ ] **Requester no-reply timeout mode:** Add a BSD:S-only configuration and Settings control that requires `echo_replies=false`, sends one valid datagram, polls for `POLLIN` until the configured deadline, and reports success only when `poll()` returns zero without a receive attempt.
+- [x] **Requester no-reply timeout mode:** The BSD:S-only configuration and Settings control require `echo_replies=false`, send one valid datagram, poll for `POLLIN` until the configured deadline, and report success only when `poll()` returns zero without a receive attempt.
   A reply, `POLLIN`, `POLLHUP`, a poll error, or a send error is a failure in this mode.
-- [ ] **Requester terminal-flow mode:** Add a BSD:S-only configuration and Settings control that sends one echoed setup datagram, then waits in `poll(POLLIN)` for an operator-triggered peer deactivation or WGNX service shutdown.
+- [x] **Requester terminal-flow mode:** The BSD:S-only configuration and Settings control send one echoed setup datagram, then wait in `poll(POLLIN)` for an operator-triggered peer deactivation or WGNX service shutdown.
   It reports success only for `POLLHUP`, then verifies that a later zero-flag `Send` fails with `ECONNABORTED` and that close still succeeds.
   This mode must have a bounded operator window and must not treat a generic timeout as closure.
-- [ ] **Requester writable-recovery assertion:** Add a BSD:S-only configuration and Settings control that requires at least one `EAGAIN` followed by a subsequent `POLLOUT` and a successful retry of the same datagram.
+- [x] **Requester writable-recovery assertion:** The BSD:S-only configuration and Settings control require at least one `EAGAIN` followed by a subsequent `POLLOUT` and a successful retry of the same datagram.
   The workload remains packet-local and retains the existing 16-retry cap.
   A burst that completes without pressure is an inconclusive validation result rather than a successful writable-recovery test.
-- [ ] **Requester validation coverage:** Keep the new modes mutually compatible only where their expected outcomes cannot conflict, validate their persisted configuration, and cover the outcome classification in a host-buildable helper independent of libnx.
+- [x] **Requester validation coverage:** The modes are mutually compatible only where their expected outcomes cannot conflict, their persisted configuration is validated, and a host-buildable helper independent of libnx covers outcome classification.
   The target scenario remains responsible only for BSD calls and logging the observed result.
 - [ ] **Measurement summary helper:** Add a local report parser that extracts requester summaries, harness aggregate summaries, MITM flow summaries, and WireGuard flow summaries into one workload and flow table.
   This is not on the packet path and does not replace raw logs.
