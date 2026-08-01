@@ -61,8 +61,11 @@ struct FlowEntry {
     std::array<InboundDatagram, MaximumInboundDatagramsPerSocket> inbound{};
     std::array<std::uint8_t, MaximumQueuedOutboundDatagramsPerSocket> outbound_slots{};
     std::uint64_t sends{};
+    std::uint64_t adapter_queued{};
+    std::uint64_t adapter_queue_full{};
     std::uint64_t send_accepted{};
     std::uint64_t send_queue_full{};
+    std::uint64_t send_too_large{};
     std::uint64_t inbound_delivered{};
     std::uint64_t inbound_dropped{};
     std::uint64_t writable_notifications{};
@@ -153,14 +156,18 @@ void LogFlowSummary(const FlowEntry& flow, const char* reason) {
         return;
     }
     logger::Log(
-        "tunnel flow summary owner=%llu fd=%d reason=%s sends=%llu accepted=%llu queue_full=%llu batches=%llu "
+        "tunnel flow summary owner=%llu fd=%d reason=%s sends=%llu adapter_queued=%llu adapter_queue_full=%llu "
+        "accepted=%llu queue_full=%llu too_large=%llu batches=%llu "
         "queued=%zu discarded=%llu inbound_delivered=%llu inbound_dropped=%llu writable=%llu closed=%u",
         static_cast<unsigned long long>(flow.owner),
         flow.descriptor,
         reason,
         static_cast<unsigned long long>(flow.sends),
+        static_cast<unsigned long long>(flow.adapter_queued),
+        static_cast<unsigned long long>(flow.adapter_queue_full),
         static_cast<unsigned long long>(flow.send_accepted),
         static_cast<unsigned long long>(flow.send_queue_full),
+        static_cast<unsigned long long>(flow.send_too_large),
         static_cast<unsigned long long>(flow.batch_submissions),
         flow.submission.queued,
         static_cast<unsigned long long>(flow.queued_discarded),
@@ -1063,14 +1070,17 @@ bool TunnelFlowWorker::Dispatch(Operation& operation) {
         ++m_metrics.send_attempts;
         if (operation.input_size > m_maximum_udp_payload_bytes || operation.input_size > MaximumQueuedOutboundPayloadBytes) {
             operation.result = TunnelFlowResult::MessageTooLarge;
+            ++flow->send_too_large;
             ++m_metrics.send_too_large;
             return true;
         }
         if (!QueueOutbound(*flow, operation.input, operation.input_size)) {
             operation.result = TunnelFlowResult::WouldBlock;
+            ++flow->adapter_queue_full;
             ++m_metrics.send_adapter_queue_full;
             return true;
         }
+        ++flow->adapter_queued;
         ++m_metrics.send_queued;
         operation.result = TunnelFlowResult::Opened;
         return true;

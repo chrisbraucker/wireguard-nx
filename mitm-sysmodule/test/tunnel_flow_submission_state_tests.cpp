@@ -36,6 +36,9 @@ bool RunTunnelFlowSubmissionStateTests() {
     state.NoteWritable();
     const bool writable_completion_restores_submission = state.CanAccept(Capacity) && state.CanSubmit();
 
+    state.Retire(1);
+    const bool deferred_submission_retires_after_writable = state.queued == 0 && !state.CanSubmit();
+
     state.Close();
     const bool terminal_state_rejects_all_work = !state.CanAccept(Capacity) && !state.CanSubmit() && state.closed;
 
@@ -45,5 +48,6 @@ bool RunTunnelFlowSubmissionStateTests() {
            Check(restores_local_admission, "retiring one queued payload did not restore admission") &&
            Check(blocks_until_writable, "WGNX queue pressure did not block new sends") &&
            Check(writable_completion_restores_submission, "writable completion did not restore submission") &&
+           Check(deferred_submission_retires_after_writable, "deferred payload did not retire after writable resubmission") &&
            Check(terminal_state_rejects_all_work, "closed flow admitted or submitted work");
 }

@@ -308,6 +308,10 @@ One WGNX child client remains owned by each BSD socket, so batch submissions nev
 The worker submits up to four queued entries through `SendUdpDatagramBatch` when that flow is writable.
 On `QueueFull`, it retains the rejected FIFO suffix, suppresses `POLLOUT`, and resumes submission only after the WGNX completion queue reports `Writable`.
 The BSD caller sees `EAGAIN` only when the bounded local adapter FIFO cannot admit another payload.
+Per-flow accounting keeps these boundaries distinct: `adapter_queued` records local FIFO admission, `adapter_queue_full` records BSD-visible pre-admission rejection, and `queue_full` records a later WGNX staging-pressure disposition.
+Consequently, one payload may have a successful BSD send followed by a retained downstream `QueueFull` and internal post-`Writable` resubmission without creating a second requester retry.
+For every closed MITM flow, `sends = adapter_queued + adapter_queue_full + too_large` and `adapter_queued = accepted + discarded + queued`.
+WireGuard `send_queue_full` is a downstream pressure-event counter and must not be equated with requester-visible retries.
 
 Definition of done:
 
@@ -351,15 +355,15 @@ It creates child clients only when a routed BSD socket needs one.
 #### Outstanding Completion Items
 
 - [x] **Measurement logging:** Per-packet MITM and WireGuard diagnostics are gated by explicit target-build switches, leaving state transitions and closure summaries without synchronous SD-card writes on the packet path by default.
-- [x] **MITM accounting:** The MITM records bounded per-flow and worker aggregate counters for operation-queue pressure, BSD sends, WGNX dispositions, completion wakes, inbound delivery, MITM inbound-queue drops, writable notifications, and terminal flow outcomes.
+- [x] **MITM accounting:** The MITM records bounded per-flow and worker aggregate counters for operation-queue pressure, BSD sends, local-adapter admission and rejection, WGNX dispositions, completion wakes, inbound delivery, MITM inbound-queue drops, writable notifications, and terminal flow outcomes.
 - [x] **Writable queue pressure:** Coalesced WGNX `Writable` completions now map to tunneled `POLLOUT`, and the requester retries the same datagram only after that readiness signal rather than treating `EAGAIN` as a terminal workload failure.
 - [x] **Quiet controlled harness:** The controlled UDP harness has a quiet aggregate mode and uses a non-threaded UDP server handler, preserving source and workload accounting without a host thread or flushed line per datagram.
-- [ ] **Narrow BSD semantics:** The nonblocking requester-only operation and error contract is implemented and host-tested, including zero-flag send and receive, `F_GETFL` and `F_SETFL` with the BSD:S `O_NONBLOCK` wire value `0x800`, one-descriptor `POLLIN` and `POLLOUT`, queue pressure, and rejected unsupported operation classes.
-  Device validation remains: verify normal paced echo with the requester-recorded device-facing `GetSockName` endpoint, no-reply poll timeout, terminal `POLLHUP` after peer teardown, queue-pressure writable recovery, rejected post-route operation behavior, and a clean later requester launch.
-- [ ] **Four-mode baseline:** Run the identical requester workload through native BSD, passive MITM forwarding, direct `wgnx:tun`, and BSD MITM to WireGuard with the measurement profile enabled.
-- [ ] **Attribution and ceiling:** Reconcile requester, harness, MITM, and WireGuard summaries, then record the first throughput or resource ceiling and its explicit backpressure or drop disposition.
+- [x] **Narrow BSD semantics:** The nonblocking requester-only operation and error contract is implemented and host-tested, including zero-flag send and receive, `F_GETFL` and `F_SETFL` with the BSD:S `O_NONBLOCK` wire value `0x800`, one-descriptor `POLLIN` and `POLLOUT`, queue pressure, and rejected unsupported operation classes.
+  The 2026-08-01 device matrix passed normal paced echo with the requester-recorded device-facing `GetSockName` endpoint, no-reply poll timeout, terminal `POLLHUP` after peer teardown and WGNX shutdown, queue-pressure writable recovery, rejected post-route operation behavior, and a clean later requester launch.
+- [x] **Four-mode baseline:** The 2026-08-01 identical 32-datagram, 1200-byte workload passed through native BSD, passive MITM forwarding, direct `wgnx:tun`, and BSD MITM to WireGuard.
+- [ ] **Attribution and ceiling:** The local-admission and downstream-pressure accounting contract is reconciled and checked by the Task 4 summary helper, while the first throughput or resource ceiling and its explicit backpressure or drop disposition remain to be measured.
 - [x] **Client-context and batching decision:** Preserve one WGNX child client per BSD socket for independent descriptor teardown and completion ownership, while batching up to four FIFO-ordered payloads only within that flow's client context.
-- [ ] **Lifecycle regression:** Re-run repeated requester launch, client exit, service close, peer teardown, and broad-route self-bypass coverage with the completed readiness and measurement path.
+- [x] **Lifecycle regression:** The 2026-08-01 run completed a four-flow full BSD MITM workload, orderly requester, MITM, and WireGuard shutdown, restart, and a final clean full BSD MITM echo.
 
 #### Completion Changes Before Device Acceptance
 
@@ -377,9 +381,11 @@ The requester provides explicit expected-outcome modes so the remaining narrow B
   A burst that completes without pressure is an inconclusive validation result rather than a successful writable-recovery test.
 - [x] **Requester validation coverage:** The modes are mutually compatible only where their expected outcomes cannot conflict, their persisted configuration is validated, and a host-buildable helper independent of libnx covers outcome classification.
   The target scenario remains responsible only for BSD calls and logging the observed result.
-- [ ] **Measurement summary helper:** Add a local report parser that extracts requester summaries, harness aggregate summaries, MITM flow summaries, and WireGuard flow summaries into one workload and flow table.
+- [x] **Requester Settings state:** The expected BSD:S outcome selector now derives its initial and reset selection from the loaded configuration enum.
+  Persisted no-reply and terminal-closure selections are therefore displayed correctly instead of appearing as the normal workload.
+- [x] **Measurement summary helper:** `nx-reversing.git/tools/summarize_task4.py` extracts requester summaries, harness aggregate summaries, MITM flow summaries, and WireGuard flow summaries into one workload and flow table.
+  Its `--check` mode validates the available per-flow local-admission invariants and refuses pre-instrumentation MITM summaries.
   This is not on the packet path and does not replace raw logs.
-  It prevents repeated manual transcription from becoming the weakest part of the four-mode and saturation comparisons.
 
 The following service-close rule is already part of the private WGNX contract and must be verified rather than broadened speculatively.
 After an orderly WGNX shutdown wake with no completion record, the MITM performs its normal drain and treats a CMIF failure from that drain or any later tunnel command as terminal service loss.
@@ -428,11 +434,15 @@ Larger replies fragment on that peer and are intentionally unsupported until a l
    Restart WireGuard, reconnect the peer, restart the MITM, and complete one final full BSD MITM echo.
    Confirm no module sees its own outer transport or control traffic through the BSD MITM and that this final requester process has no stale flow or descriptor state.
 9. Run the measurement helper over the collected reports.
-   Reconcile configured sends, requester accepted sends and echoes, harness unique received and echoed sequences, MITM queued and accepted submissions, WGNX admitted sends, inbound deliveries, queue-full events, writable notifications, discarded records, and closure reasons.
+   Run `python3 tools/summarize_task4.py --check` over the collected requester, harness, MITM, and WGNX logs.
+   Reconcile configured sends, requester accepted sends and echoes, harness unique received and echoed sequences, MITM local admission and rejection, WGNX admitted sends, inbound deliveries, downstream queue-full events, writable notifications, discarded records, and closure reasons.
+   Do not equate requester `EAGAIN` retries with downstream `QueueFull` events because an already locally admitted payload can be resubmitted internally after `Writable`.
    Record the smallest workload that reaches an explicit queue, network, or remote-harness limit together with its throughput and disposition.
 
 Task 4 is complete only when every expected-success scenario above passes, every expected-error scenario reports its documented outcome, the four-mode counter table reconciles, and the lifecycle restart leaves a clean final full BSD MITM echo.
 The existing direct-WGNX and requester-only passive MITM tests remain regression controls throughout this sequence.
+The 2026-08-01 archived device matrix satisfies this acceptance sequence.
+The separate UDP performance and feasibility gate below remains open because it requires reconciled pressure accounting plus throughput and latency measurements.
 
 
 ### 5. Apply The UDP Performance And Feasibility Gate

@@ -8,11 +8,37 @@ Do not begin target-side lwIP integration until the high-priority correctness it
 
 ## Current Acceptance Work
 
-- [ ] Complete every Task 4 on-device success and expected-error scenario.
-- [ ] Reconcile requester, remote-harness, MITM, and WireGuard counters for all four workload modes.
+- [x] Complete every Task 4 on-device success and expected-error scenario.
+- [x] Reconcile requester, remote-harness, MITM, and WireGuard counters for all four workload modes.
 - [ ] Record throughput, latency, queue pressure, the first explicit saturation point, and its reported disposition.
-- [ ] Confirm lifecycle restart leaves a clean final full BSD MITM echo.
-- [ ] Preserve direct-WGNX and requester-only passive MITM tests as regression controls.
+- [x] Confirm lifecycle restart leaves a clean final full BSD MITM echo.
+- [x] Preserve direct-WGNX and requester-only passive MITM tests as regression controls.
+
+## 2026-08-01 On-Device Acceptance Record
+
+The archived evidence is under `workspace/task_4_reports/`.
+
+The four-mode comparison completed with 32 1200-byte datagrams in every mode.
+Direct WGNX workload 100 and full BSD MITM workload 200 each used source `10.13.14.2`.
+Native BSD workload 300 and passive MITM workload 400 each used source `192.168.203.27`.
+The requester, harness, MITM, and WireGuard summaries agree on 32 accepted and echoed datagrams for the two tunneled modes, with no duplicates or reordering in the four-mode harness summary.
+
+The no-reply timeout, post-route `SO_REUSEADDR` rejection, writable recovery, peer-deactivation terminal closure, and WGNX-service-loss terminal closure scenarios all reported their documented requester outcomes.
+The terminal-closure rerun verified `POLLHUP`, post-closure `ECONNABORTED`, clean service invalidation after the expected drain CMIF failure, and a later fresh echo after WGNX restart.
+The lifecycle regression completed a four-flow workload with eight echoed datagrams per flow, orderly requester and module shutdown, restart, and a final 32-datagram full BSD MITM echo without stale flow state, loss, duplication, or reordering.
+No fatal-report artifact was archived with these evidence sets.
+
+The writable-recovery behavior and its accounting boundary are reconciled.
+For workload 802, the requester reports 508 queue-full retries while the MITM and WireGuard summaries each report 509 downstream queue-full events.
+The extra downstream event is expected because MITM may first accept a BSD send into its local FIFO, then receive a later WGNX `QueueFull` while submitting that already accepted payload, retain it, and resubmit it after `Writable` without returning another BSD `EAGAIN`.
+Per-flow MITM summaries now expose `adapter_queued`, `adapter_queue_full`, and `too_large` alongside downstream acceptance, queue-full, pending, and discarded counters.
+The independent local-admission invariants are `sends = adapter_queued + adapter_queue_full + too_large` and `adapter_queued = accepted + discarded + queued`.
+WireGuard `send_queue_full` remains a downstream pressure-event counter, rather than a requester-visible rejection partition, so it must not be forced to equal requester retry count.
+`nx-reversing.git/tools/summarize_task4.py --check` validates the available per-flow invariants for newly captured summaries.
+Keep the performance and feasibility gate open for throughput, latency, and the first measured saturation point.
+
+Implementation note: requester Settings now initializes and resets the expected BSD:S outcome selector from the loaded enum value instead of always displaying the normal-workload choice.
+This makes every stored requester setting visible at first display, including a persisted no-reply or terminal-closure mode.
 
 ## Correctness Before lwIP
 
@@ -88,6 +114,9 @@ Implementation note: pass the effective MTU to the common padding calculation in
 
 Implementation note: timeout returns `0` with errno zero, readiness returns the ready count with errno zero, terminal closure returns `POLLHUP`, worker ingress or pending-poll capacity returns `-1/EAGAIN`, and worker or CMIF failure returns `-1/EIO`.
 Synthetic BSD:S errno values use named Linux-numbered CMIF wire values, so libnx converts them to the requester's newlib errno values correctly.
+
+Implementation note: the first terminal-closure device run exposed the ABI mismatch as requester `EHOSTUNREACH` instead of `ECONNABORTED`.
+The corrected Linux-numbered CMIF values passed both peer-deactivation and WGNX-service-shutdown terminal-closure reruns.
 
 Implementation note: V1 intentionally does not expose `POLLERR` because it has no defined per-flow asynchronous error state.
 
