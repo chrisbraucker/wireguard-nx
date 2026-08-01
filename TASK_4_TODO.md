@@ -87,6 +87,7 @@ Implementation note: pass the effective MTU to the common padding calculation in
 - [x] Add focused tests distinguishing timeout, readiness, and worker failure.
 
 Implementation note: timeout returns `0` with errno zero, readiness returns the ready count with errno zero, terminal closure returns `POLLHUP`, worker ingress or pending-poll capacity returns `-1/EAGAIN`, and worker or CMIF failure returns `-1/EIO`.
+Synthetic BSD:S errno values use named Linux-numbered CMIF wire values, so libnx converts them to the requester's newlib errno values correctly.
 
 Implementation note: V1 intentionally does not expose `POLLERR` because it has no defined per-flow asynchronous error state.
 

@@ -282,6 +282,7 @@ It preserves Horizon-visible socket semantics where they are understood and fail
 PID and domain bookkeeping remain in the MITM for traceability and cleanup, but are not an authorization mechanism for the private WGNX service.
 The MITM program and WireGuard sysmodule program are unconditional interception exclusions, including when policy contains `0.0.0.0/0`.
 Map every typed WGNX route, queue, flow, and transport disposition to a documented BSD return value and errno outcome.
+Synthetic BSD:S errno values use the Linux-numbered CMIF wire ABI rather than the sysmodule toolchain's newlib errno macros.
 
 Use the controlled requester UDP workload to verify this path before starting TCP work.
 Run the same workload first without interception as a direct BSD baseline and then with the MITM configured to route its defined remote endpoint through the WireGuard tunnel.
