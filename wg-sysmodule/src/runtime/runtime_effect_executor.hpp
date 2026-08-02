@@ -1,6 +1,7 @@
 #pragma once
 
 #include "runtime/runtime_events.hpp"
+#include "runtime/userspace_ip_adapter_owner.hpp"
 #include "wireguard/timers.hpp"
 
 #include <stratosphere.hpp>
@@ -33,13 +34,15 @@ class RuntimeEffectExecutor {
         TimerScheduler& timer_scheduler,
         PacketDataPlane& packet_data_plane,
         TunnelFlowPlane& tunnel_flow_plane,
+        UserspaceIpAdapterOwner& userspace_ip_adapter_owner,
         DebugProbeRunner& debug_probe_runner,
         wgnx::sysmodule::platform::horizon::NetworkPathService& network_path_service,
         EncryptedReceivePump& receive_pump
     )
         : m_state_mutex(state_mutex), m_coordinator(coordinator), m_endpoint_resolver(endpoint_resolver), m_dispatcher(dispatcher),
           m_timer_scheduler(timer_scheduler), m_packet_data_plane(packet_data_plane), m_tunnel_flow_plane(tunnel_flow_plane),
-          m_debug_probe_runner(debug_probe_runner), m_network_path_service(network_path_service), m_receive_pump(receive_pump) {}
+          m_userspace_ip_adapter_owner(userspace_ip_adapter_owner), m_debug_probe_runner(debug_probe_runner),
+          m_network_path_service(network_path_service), m_receive_pump(receive_pump) {}
 
     void Execute(const EffectBatch& effects);
     void RunEndpointResolver();
@@ -57,7 +60,9 @@ class RuntimeEffectExecutor {
     NOINLINE void ExecuteCookieReplySend(const SendCookieReplyEffect& effect);
     void QueuePendingDatagramTransmit(const SendPendingDatagramEffect& effect);
     NOINLINE void ExecutePublishDecryptedPacket(const PublishDecryptedPacketEffect& effect);
-    [[nodiscard]] bool PublishDecryptedPacketLocked(const PeerIdentity& peer, std::span<const std::uint8_t> inner_packet);
+    [[nodiscard]] bool PublishDecryptedPacketLocked(
+        const PeerIdentity& peer, std::span<const std::uint8_t> inner_packet, UserspaceIpAdapterOwner::OperationTicket* out_input_ticket
+    );
     void CommitDebugPayloadSubmission(const DebugProbeRequest& request);
     static void NetworkPathObservationCallback(void* context, const wgnx::platform::network_path_observation& observation);
 
@@ -68,6 +73,7 @@ class RuntimeEffectExecutor {
     TimerScheduler& m_timer_scheduler;
     PacketDataPlane& m_packet_data_plane;
     TunnelFlowPlane& m_tunnel_flow_plane;
+    UserspaceIpAdapterOwner& m_userspace_ip_adapter_owner;
     DebugProbeRunner& m_debug_probe_runner;
     wgnx::sysmodule::platform::horizon::NetworkPathService& m_network_path_service;
     EncryptedReceivePump& m_receive_pump;

@@ -51,7 +51,7 @@ UserspaceIpAdapterOwner::QueueResult UserspaceIpAdapterOwner::QueueCloseFlowLock
 UserspaceIpAdapterOwner::QueueResult UserspaceIpAdapterOwner::QueueSendDatagramLocked(
     std::uint64_t token, std::span<const std::uint8_t> payload, OperationTicket* out_ticket
 ) {
-    if (out_ticket == nullptr || token == 0 || payload.size() > m_data_operation.payload.size() || m_data_operation.pending ||
+    if (out_ticket == nullptr || token == 0 || payload.size() > wgnx::tunnel::MaximumUdpPayloadStorageBytes || m_data_operation.pending ||
         m_data_operation.running || m_data_operation.complete) {
         return QueueResult::QueueFull;
     }
@@ -62,6 +62,32 @@ UserspaceIpAdapterOwner::QueueResult UserspaceIpAdapterOwner::QueueSendDatagramL
     };
     std::ranges::copy(payload, m_data_operation.payload.begin());
     m_data_operation.payload_size = static_cast<std::uint16_t>(payload.size());
+    m_data_operation.pending = true;
+    *out_ticket = m_data_operation.operation.ticket;
+    return QueueResult::Queued;
+}
+
+UserspaceIpAdapterOwner::QueueResult UserspaceIpAdapterOwner::QueueInputPacketLocked(
+    const PeerIdentity& peer,
+    std::uint32_t policy_generation,
+    std::uint32_t adapter_epoch,
+    std::span<const std::uint8_t> packet,
+    OperationTicket* out_ticket
+) {
+    if (out_ticket == nullptr || peer.peer_index.IsZero() || peer.activation_generation.IsZero() || policy_generation == 0 ||
+        adapter_epoch == 0 || packet.empty() || packet.size() > m_data_operation.payload.size() || m_data_operation.pending ||
+        m_data_operation.running || m_data_operation.complete) {
+        return QueueResult::QueueFull;
+    }
+    m_data_operation.operation = {
+        .kind = OperationKind::InputPacket,
+        .ticket = {.generation = m_data_operation.generation},
+        .peer = peer,
+        .policy_generation = policy_generation,
+        .adapter_epoch = adapter_epoch,
+    };
+    std::ranges::copy(packet, m_data_operation.payload.begin());
+    m_data_operation.payload_size = static_cast<std::uint16_t>(packet.size());
     m_data_operation.pending = true;
     *out_ticket = m_data_operation.operation.ticket;
     return QueueResult::Queued;
@@ -109,6 +135,9 @@ ip::UserspaceIpResult UserspaceIpAdapterOwner::Execute(const Operation& operatio
             operation.flow.token,
             std::span<const std::uint8_t>(m_data_operation.payload).first(m_data_operation.payload_size)
         );
+    case OperationKind::InputPacket:
+        m_adapter.ClearInboundDatagrams();
+        return m_adapter.Input(std::span<const std::uint8_t>(m_data_operation.payload).first(m_data_operation.payload_size));
     }
     return ip::UserspaceIpResult::TransportError;
 }
@@ -156,6 +185,18 @@ std::span<const ip::UserspaceIpPacket> UserspaceIpAdapterOwner::OutboundPacketsL
         return {};
     }
     return m_adapter.OutboundPackets();
+}
+
+std::span<const std::uint8_t> UserspaceIpAdapterOwner::InputPacketLocked(OperationTicket ticket) const {
+    if (!ticket.IsValid() || ticket.generation != m_data_operation.generation || !m_data_operation.complete ||
+        m_data_operation.operation.kind != OperationKind::InputPacket) {
+        return {};
+    }
+    return std::span<const std::uint8_t>(m_data_operation.payload).first(m_data_operation.payload_size);
+}
+
+std::uint32_t UserspaceIpAdapterOwner::AdapterEpochLocked() const {
+    return m_adapter.Epoch();
 }
 
 void UserspaceIpAdapterOwner::CancelLocked(OperationTicket ticket) {

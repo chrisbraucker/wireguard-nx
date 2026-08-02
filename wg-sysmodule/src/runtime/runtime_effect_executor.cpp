@@ -229,16 +229,32 @@ void RuntimeEffectExecutor::QueuePendingDatagramTransmit(const SendPendingDatagr
 
 NOINLINE void RuntimeEffectExecutor::ExecutePublishDecryptedPacket(const PublishDecryptedPacketEffect& effect) {
     bool cancel_debug_timeout = false;
+    UserspaceIpAdapterOwner::OperationTicket input_ticket{};
     {
         std::scoped_lock lock(m_state_mutex);
         DecryptedPacketView view{};
         if (m_coordinator.ViewDecryptedPacket(effect.peer, effect.packet_generation, view)) {
-            cancel_debug_timeout = PublishDecryptedPacketLocked(effect.peer, view.packet);
+            cancel_debug_timeout = PublishDecryptedPacketLocked(effect.peer, view.packet, &input_ticket);
         }
     }
     if (cancel_debug_timeout) {
         m_timer_scheduler.CancelDebugProbeTimeout();
     }
+    if (!input_ticket.IsValid()) {
+        return;
+    }
+    const auto queue_result = m_dispatcher.QueueUserspaceIpAdapter();
+    if (queue_result != wgnx::platform::queue_work_result::capacity_exhausted &&
+        queue_result != wgnx::platform::queue_work_result::unavailable) {
+        return;
+    }
+    std::scoped_lock lock(m_state_mutex);
+    m_userspace_ip_adapter_owner.CancelLocked(input_ticket);
+    logger::Log(
+        "Dropped decrypted inner packet reason=adapter_work_unavailable peer=%u activation=%u",
+        effect.peer.peer_index.Value(),
+        effect.peer.activation_generation.Value()
+    );
 }
 
 void RuntimeEffectExecutor::Execute(const EffectBatch& effects) {
@@ -409,7 +425,10 @@ void RuntimeEffectExecutor::HandleNetworkPathObservation(const wgnx::platform::n
     Execute(effects);
 }
 
-bool RuntimeEffectExecutor::PublishDecryptedPacketLocked(const PeerIdentity& peer, std::span<const std::uint8_t> inner_packet) {
+bool RuntimeEffectExecutor::PublishDecryptedPacketLocked(
+    const PeerIdentity& peer, std::span<const std::uint8_t> inner_packet, UserspaceIpAdapterOwner::OperationTicket* out_input_ticket
+) {
+    AMS_ABORT_UNLESS(out_input_ticket != nullptr);
     const wgnx::PeerConfigEntry* configuration = m_coordinator.Configuration(peer.peer_index.Value());
     if (configuration == nullptr || !wgnx::wireguard::AllowedIpsContainSource(inner_packet, configuration->allowed_ips.data())) {
         logger::Log(
@@ -451,95 +470,21 @@ bool RuntimeEffectExecutor::PublishDecryptedPacketLocked(const PeerIdentity& pee
         return true;
     }
 
-    const auto tunnel_delivery = m_tunnel_flow_plane.DeliverDecryptedIpv4Packet(peer, inner_packet, GetRuntimeNowNs());
-    switch (tunnel_delivery.disposition) {
-    case TunnelInboundDisposition::Delivered:
-        logger::LogPacket(
-            "Queued tunnel UDP delivery flow=%llu peer=%u activation=%u bytes=%zu",
-            static_cast<unsigned long long>(tunnel_delivery.flow.value),
-            peer.peer_index.Value(),
-            peer.activation_generation.Value(),
-            tunnel_delivery.payload_size
-        );
-        return true;
-    case TunnelInboundDisposition::DroppedMalformed:
-        logger::LogPacket(
-            "Dropped tunnel UDP delivery peer=%u activation=%u reason=malformed",
-            peer.peer_index.Value(),
-            peer.activation_generation.Value()
-        );
-        return true;
-    case TunnelInboundDisposition::DroppedStale:
-        logger::LogPacket(
-            "Dropped tunnel UDP delivery peer=%u activation=%u reason=reverse_tuple_quarantine",
-            peer.peer_index.Value(),
-            peer.activation_generation.Value()
-        );
-        return true;
-    case TunnelInboundDisposition::DroppedQueueFull:
-        logger::LogPacket(
-            "Dropped tunnel UDP delivery flow=%llu peer=%u activation=%u reason=queue_full",
-            static_cast<unsigned long long>(tunnel_delivery.flow.value),
-            peer.peer_index.Value(),
-            peer.activation_generation.Value()
-        );
-        return true;
-    case TunnelInboundDisposition::NotClaimed:
-    case TunnelInboundDisposition::DroppedUnknown:
-        break;
-    }
-
-    const auto delivery = m_packet_data_plane.DeliverDecryptedPacket(peer, inner_packet);
-    switch (delivery.status) {
-    case PacketDeliveryStatus::Queued:
+    if (m_userspace_ip_adapter_owner.QueueInputPacketLocked(
+            peer,
+            m_tunnel_flow_plane.PolicyGeneration(),
+            m_userspace_ip_adapter_owner.AdapterEpochLocked(),
+            inner_packet,
+            out_input_ticket
+        ) != UserspaceIpAdapterOwner::QueueResult::Queued) {
         logger::Log(
-            "Queued decrypted inner packet id=%llu peer=%u activation=%u bytes=%zu depth=%zu",
-            static_cast<unsigned long long>(delivery.packet_id.Value()),
-            peer.peer_index.Value(),
-            peer.activation_generation.Value(),
-            inner_packet.size(),
-            delivery.queue_depth
-        );
-        break;
-    case PacketDeliveryStatus::NoConsumer:
-        logger::Log(
-            "Dropped decrypted inner packet peer=%u activation=%u bytes=%zu reason=no_consumer",
+            "Dropped decrypted inner packet peer=%u activation=%u bytes=%zu reason=adapter_input_queue_full",
             peer.peer_index.Value(),
             peer.activation_generation.Value(),
             inner_packet.size()
         );
-        break;
-    case PacketDeliveryStatus::MalformedPacket:
-        logger::Log(
-            "Dropped decrypted inner packet peer=%u activation=%u bytes=%zu validation=%s",
-            peer.peer_index.Value(),
-            peer.activation_generation.Value(),
-            inner_packet.size(),
-            wgnx::wireguard::GetInnerIpValidationErrorName(delivery.validation)
-        );
-        break;
-    case PacketDeliveryStatus::UnsupportedPacket:
-        logger::Log(
-            "Dropped decrypted inner packet peer=%u activation=%u bytes=%zu reason=unsupported_transport_ip_version version=%u",
-            peer.peer_index.Value(),
-            peer.activation_generation.Value(),
-            inner_packet.size(),
-            static_cast<unsigned int>(delivery.version)
-        );
-        break;
-    case PacketDeliveryStatus::QueueFull:
-        logger::Log(
-            "Dropped decrypted inner packet peer=%u activation=%u bytes=%zu reason=rx_queue_full capacity=%zu",
-            peer.peer_index.Value(),
-            peer.activation_generation.Value(),
-            inner_packet.size(),
-            delivery.queue_capacity
-        );
-        break;
-    case PacketDeliveryStatus::StalePeer:
-        break;
     }
-    return probe.consumed;
+    return false;
 }
 
 bool RuntimeEffectExecutor::TakeDebugPayloadSubmission(DebugProbeRequest& out_request) {

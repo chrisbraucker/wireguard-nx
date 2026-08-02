@@ -151,6 +151,10 @@ void TunnelFlowPlane::RefreshPolicy(const TunnelPolicyInput& input, wgnx::platfo
     EnqueuePolicyChanged();
 }
 
+std::uint32_t TunnelFlowPlane::PolicyGeneration() const {
+    return m_policy_generation;
+}
+
 wgnx::tunnel::Capabilities TunnelFlowPlane::GetCapabilities() const {
     return {
         .api_version = wgnx::tunnel::TunApiVersion,

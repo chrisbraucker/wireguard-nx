@@ -16,6 +16,7 @@ The IPC and WireGuard wire contracts remain unchanged; the separation is interna
   It performs endpoint resolution, UDP bind, send, and close operations; arms and cancels concrete timers; queues receive and outbound-submission work; publishes decrypted packets; and commits resolver, timer, debug-probe, and NIFM observation completions.
   It executes peer decisions and reports generation-tagged facts through `RuntimeCoordinator`; it does not choose peer lifecycle or recovery policy.
   It validates in-memory state under the daemon mutex, then releases it before every concrete timer, workqueue, socket, or nested-effect operation.
+  For ordinary decrypted IPv4 packets, it performs only AllowedIPs admission and debug-probe handling before submitting a tagged copied input to the userspace-IP owner.
 - `runtime/encrypted_receive_pump.*` owns encrypted UDP receive scheduling, the bounded manual-rebind request, one 4 KiB process-lifetime datagram scratch buffer, and one bounded completion batch.
   It snapshots receive identity under the shared mutex, performs blocking receive without that mutex, and publishes authenticated datagrams or factual receive failures only after generation revalidation.
 - `runtime/peer/peer_runtime.hpp` defines the fixed-capacity `PeerRegistry`.
@@ -44,6 +45,9 @@ The IPC and WireGuard wire contracts remain unchanged; the separation is interna
   Flow state reserves a stable handle under the daemon mutex, the owner opens or closes the matching PCB outside that mutex, and `TunnelFlowPlane` commits an open only after the captured client, peer, and policy identities remain current.
   A send copies one payload into the owner slot, lets lwIP construct and fragment IPv4 output, and exposes that complete bounded collector only after `udp_send()` returns.
   The daemon then atomically stages the complete packet batch through the peer-owned WireGuard queue before it executes resulting effects.
+  A decrypted input records peer identity, flow-policy generation, and adapter epoch in that same bounded slot.
+  The owner worker revalidates those identities immediately before its post-lock lwIP input call, so stale input never allocates a pbuf or joins a new reassembly epoch.
+  The worker retains the packet copy until it completes the current delivery path, and item 10 replaces that temporary delivery path with copied UDP callback results.
 - `runtime/timer_scheduler.*` owns concrete Horizon protocol and auxiliary timers. `runtime/timer_schedule.*` tracks bounded physical arm and queued delivery state independently of Horizon.
   Expirations retain their complete token until delivered through the coordinator; the scheduler contains no peer policy.
   Arm and cancellation effects likewise retain the token allocated under the runtime lock, preventing delayed platform work from changing a newer physical schedule.

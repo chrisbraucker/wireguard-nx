@@ -95,6 +95,7 @@ class TunnelFlowPlane {
     void DestroyClient(TunnelClientId client, wgnx::platform::ktime_t now);
 
     void RefreshPolicy(const TunnelPolicyInput& input, wgnx::platform::ktime_t now);
+    [[nodiscard]] std::uint32_t PolicyGeneration() const;
     [[nodiscard]] wgnx::tunnel::Capabilities GetCapabilities() const;
     [[nodiscard]] wgnx::tunnel::RoutingPolicySnapshot CopyRoutingPolicy(std::span<wgnx::tunnel::RouteRecord> out) const;
 

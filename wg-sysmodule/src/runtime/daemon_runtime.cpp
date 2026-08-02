@@ -98,6 +98,7 @@ class DaemonRuntime {
     void ExecuteRuntimeEffects(const runtime::EffectBatch& effects);
     void InitializeHorizonDispatcher();
     void RefreshTunnelPolicyLocked();
+    void DeliverUserspaceIpInputLocked(const runtime::UserspaceIpAdapterOwner::Operation& operation);
 
     static DaemonRuntime* s_instance;
     DaemonState m_state{};
@@ -137,6 +138,7 @@ DaemonRuntime::DaemonRuntime()
                                                                                       m_timer_scheduler,
                                                                                       m_packet_data_plane,
                                                                                       m_tunnel_flow_plane,
+                                                                                      m_userspace_ip_adapter_owner,
                                                                                       m_debug_probe_runner,
                                                                                       m_network_path_service,
                                                                                       m_receive_pump
@@ -335,11 +337,88 @@ void DaemonRuntime::UserspaceIpAdapterWorkCallback(wgnx::platform::work_struct* 
         if (!operation.has_value()) {
             return;
         }
-        const auto result = s_instance->m_userspace_ip_adapter_owner.Execute(*operation);
+        ip::UserspaceIpResult result = ip::UserspaceIpResult::TransportError;
+        bool execute = true;
+        if (operation->kind == runtime::UserspaceIpAdapterOwner::OperationKind::InputPacket) {
+            std::scoped_lock lock(s_instance->m_state_mutex);
+            execute = s_instance->m_runtime_coordinator.IsActiveIdentity(operation->peer) &&
+                      s_instance->m_tunnel_flow_plane.PolicyGeneration() == operation->policy_generation &&
+                      s_instance->m_userspace_ip_adapter_owner.AdapterEpochLocked() == operation->adapter_epoch;
+        }
+        if (execute) {
+            result = s_instance->m_userspace_ip_adapter_owner.Execute(*operation);
+        } else {
+            result = ip::UserspaceIpResult::Stale;
+        }
         {
             std::scoped_lock lock(s_instance->m_state_mutex);
             s_instance->m_userspace_ip_adapter_owner.CompleteLocked(*operation, result);
+            if (operation->kind == runtime::UserspaceIpAdapterOwner::OperationKind::InputPacket) {
+                if (result == ip::UserspaceIpResult::Success) {
+                    s_instance->DeliverUserspaceIpInputLocked(*operation);
+                } else if (result == ip::UserspaceIpResult::Stale) {
+                    logger::Log(
+                        "Dropped decrypted inner packet peer=%u activation=%u reason=stale_adapter_input",
+                        operation->peer.peer_index.Value(),
+                        operation->peer.activation_generation.Value()
+                    );
+                }
+                static_cast<void>(s_instance->m_userspace_ip_adapter_owner.TakeResultLocked(operation->ticket));
+            }
         }
+    }
+}
+
+void DaemonRuntime::DeliverUserspaceIpInputLocked(const runtime::UserspaceIpAdapterOwner::Operation& operation) {
+    const auto packet = m_userspace_ip_adapter_owner.InputPacketLocked(operation.ticket);
+    AMS_ABORT_UNLESS(!packet.empty());
+    const auto tunnel_delivery = m_tunnel_flow_plane.DeliverDecryptedIpv4Packet(operation.peer, packet, GetRuntimeNowNs());
+    switch (tunnel_delivery.disposition) {
+    case runtime::TunnelInboundDisposition::Delivered:
+        logger::LogPacket(
+            "Queued tunnel UDP delivery flow=%llu peer=%u activation=%u bytes=%zu",
+            static_cast<unsigned long long>(tunnel_delivery.flow.value),
+            operation.peer.peer_index.Value(),
+            operation.peer.activation_generation.Value(),
+            tunnel_delivery.payload_size
+        );
+        return;
+    case runtime::TunnelInboundDisposition::DroppedMalformed:
+        logger::LogPacket(
+            "Dropped tunnel UDP delivery peer=%u activation=%u reason=malformed",
+            operation.peer.peer_index.Value(),
+            operation.peer.activation_generation.Value()
+        );
+        return;
+    case runtime::TunnelInboundDisposition::DroppedStale:
+        logger::LogPacket(
+            "Dropped tunnel UDP delivery peer=%u activation=%u reason=reverse_tuple_quarantine",
+            operation.peer.peer_index.Value(),
+            operation.peer.activation_generation.Value()
+        );
+        return;
+    case runtime::TunnelInboundDisposition::DroppedQueueFull:
+        logger::LogPacket(
+            "Dropped tunnel UDP delivery flow=%llu peer=%u activation=%u reason=queue_full",
+            static_cast<unsigned long long>(tunnel_delivery.flow.value),
+            operation.peer.peer_index.Value(),
+            operation.peer.activation_generation.Value()
+        );
+        return;
+    case runtime::TunnelInboundDisposition::NotClaimed:
+    case runtime::TunnelInboundDisposition::DroppedUnknown:
+        break;
+    }
+    const auto delivery = m_packet_data_plane.DeliverDecryptedPacket(operation.peer, packet);
+    if (delivery.status == runtime::PacketDeliveryStatus::Queued) {
+        logger::Log(
+            "Queued decrypted inner packet id=%llu peer=%u activation=%u bytes=%zu depth=%zu",
+            static_cast<unsigned long long>(delivery.packet_id.Value()),
+            operation.peer.peer_index.Value(),
+            operation.peer.activation_generation.Value(),
+            packet.size(),
+            delivery.queue_depth
+        );
     }
 }
 

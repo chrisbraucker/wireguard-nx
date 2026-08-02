@@ -149,13 +149,17 @@ opaque WireGuard encryption and outer UDP transport
   The batch event stages every packet before it runs outbound processing once, so a later fragment cannot leave a partial datagram in the peer queue.
   The deterministic packet-plane regression fills staging to two free slots, proves that a three-packet batch leaves that queue unchanged, and then admits a two-packet batch.
 
-- [ ] **9. Fence decrypted-packet admission before any packet enters lwIP.**
+- [x] **9. Fence decrypted-packet admission before any packet enters lwIP.**
 
   Preserve peer `AllowedIPs` source authorization before copying decrypted plaintext into bounded adapter work.
   Tag each input with peer identity, activation generation, policy generation, and adapter epoch while the daemon state is locked.
   Revalidate those identities immediately before `netif->input`, not only when publishing the result, so a stale queued fragment can never join new-generation reassembly state.
   Drop stale work with an explicit aggregate disposition and do not allocate a pbuf or mutate lwIP state for it.
   Allocate and populate the raw-input pbuf only on the serialized adapter owner, then transfer ownership according to lwIP's `netif->input` contract.
+  `RuntimeEffectExecutor` now performs only AllowedIPs authorization and debug-probe handling before it copies a packet into the owner’s one bounded input slot.
+  The slot records peer identity, current flow-policy generation, and adapter epoch.
+  The adapter worker revalidates all three under the daemon mutex directly before its post-lock `netif->input` call and explicitly drops stale input without allocating a pbuf.
+  After a successful temporary input, the worker performs the existing manual delivery decision from the owner-held copy so this safety cutover preserves current behavior until item 10 replaces that parser with the copied lwIP UDP callback result.
 
 - [ ] **10. Replace inbound UDP parsing while preserving the existing consumer order.**
 

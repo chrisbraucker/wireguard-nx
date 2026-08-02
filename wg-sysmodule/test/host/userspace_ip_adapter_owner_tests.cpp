@@ -68,6 +68,33 @@ void TestUserspaceIpAdapterOwner(TestContext& context) {
             close_result == sysmodule::ip::UserspaceIpResult::Success,
         "adapter owner did not serialize bounded PCB operations or collect every fragmented UDP output"
     );
+    constexpr std::array<std::uint8_t, 20> InputPacket = {
+        0x45, 0x00, 0x00, 0x14, 0x00, 0x01, 0x00, 0x00, 0x40, 0x11, 0x66, 0xD6, 0x0A, 0xFB, 0x00, 0x02, 0x0A, 0x0D, 0x0D, 0x08,
+    };
+    sysmodule::runtime::UserspaceIpAdapterOwner::OperationTicket input_ticket{};
+    const sysmodule::runtime::PeerIdentity input_peer{
+        .peer_index = sysmodule::runtime::PeerIndex{1},
+        .activation_generation = sysmodule::runtime::ActivationGeneration{2},
+    };
+    const bool input_queued = owner.QueueInputPacketLocked(input_peer, 3, owner.AdapterEpochLocked(), InputPacket, &input_ticket) ==
+                              sysmodule::runtime::UserspaceIpAdapterOwner::QueueResult::Queued;
+    const auto input_operation = owner.TakeNextLocked();
+    const bool input_tagged = input_operation.has_value() &&
+                              input_operation->kind == sysmodule::runtime::UserspaceIpAdapterOwner::OperationKind::InputPacket &&
+                              input_operation->peer == input_peer && input_operation->policy_generation == 3 &&
+                              input_operation->adapter_epoch == owner.AdapterEpochLocked();
+    if (input_operation) {
+        owner.CompleteLocked(*input_operation, sysmodule::ip::UserspaceIpResult::Stale);
+    }
+    const auto copied_input = owner.InputPacketLocked(input_ticket);
+    const auto stale_input = owner.TakeResultLocked(input_ticket);
+    WGNX_TEST_REQUIRE(
+        context,
+        input_queued && input_tagged && copied_input.size() == InputPacket.size() &&
+            std::equal(copied_input.begin(), copied_input.end(), InputPacket.begin()) &&
+            stale_input == sysmodule::ip::UserspaceIpResult::Stale,
+        "adapter owner did not retain one tagged copied IPv4 input operation"
+    );
     owner.QueueResetLocked();
     RunOwner(owner);
     WGNX_TEST_REQUIRE(

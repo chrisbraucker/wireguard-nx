@@ -21,6 +21,7 @@ enum class UserspaceIpResult : std::uint8_t {
     InvalidArgument,
     FlowQuotaExhausted,
     QueueFull,
+    Stale,
     TransportError,
 };
 
