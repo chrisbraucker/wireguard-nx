@@ -49,6 +49,8 @@ The IPC and WireGuard wire contracts remain unchanged; the separation is interna
   The owner worker revalidates those identities immediately before its post-lock lwIP input call, so stale input never allocates a pbuf or joins a new reassembly epoch.
   After lwIP returns and releases pbufs, the worker validates copied UDP callback records against flow and client state before publishing an inbound completion.
   Unfragmented packets with no callback record use the existing raw packet consumer, while callback-copy pressure, stale callback records, and fragments still retained by lwIP are dropped.
+  The owner rearms one auxiliary Horizon timer from `sys_timeouts_sleeptime()` after each operation.
+  That timer only queues coalesced timeout work to `wgnx-submit`, where the owner runs `sys_check_timeouts()` without the daemon mutex.
 - `runtime/timer_scheduler.*` owns concrete Horizon protocol and auxiliary timers. `runtime/timer_schedule.*` tracks bounded physical arm and queued delivery state independently of Horizon.
   Expirations retain their complete token until delivered through the coordinator; the scheduler contains no peer policy.
   Arm and cancellation effects likewise retain the token allocated under the runtime lock, preventing delayed platform work from changing a newer physical schedule.

@@ -59,6 +59,7 @@ class UserspaceIpAdapter {
     [[nodiscard]] UserspaceIpResult Send(std::uint64_t token, std::span<const std::uint8_t> payload);
     [[nodiscard]] UserspaceIpResult Input(std::span<const std::uint8_t> packet);
     void RunTimeouts();
+    [[nodiscard]] std::uint32_t NextTimeoutDelayMs() const;
 
     void ClearOutboundPackets();
     void ClearInboundDatagrams();

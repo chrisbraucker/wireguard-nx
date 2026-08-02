@@ -27,6 +27,7 @@
 
 #include <algorithm>
 #include <array>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <span>
@@ -84,6 +85,7 @@ class DaemonRuntime {
     static void ReceiveWorkCallback(wgnx::platform::work_struct* work);
     static void ProtocolTimerCallback(wgnx::wireguard::TimerHook hook, const wgnx::wireguard::TimerToken& token);
     static void DebugProbeTimeoutCallback();
+    static void UserspaceIpTimeoutCallback();
 
     void ClearInnerPacketStateLocked(const char* reason);
     runtime::EffectBatch SetPeerInactive(std::size_t peer_index);
@@ -171,6 +173,7 @@ runtime::EffectBatch DaemonRuntime::SetPeerInactive(std::size_t peer_index) {
         .activation_generation = lifecycle->activation_generation,
     };
     m_tunnel_flow_plane.InvalidatePeerActivation(peer, wgnx::tunnel::FlowTerminalReason::PeerDeactivated, GetRuntimeNowNs());
+    m_userspace_ip_adapter_owner.QueueResetLocked();
     m_debug_probe_runner.Cancel(&peer);
     ClearInnerPacketStateLocked("peer inactive");
     auto effects = m_runtime_coordinator.Dispatch(
@@ -350,6 +353,12 @@ void DaemonRuntime::UserspaceIpAdapterWorkCallback(wgnx::platform::work_struct* 
         } else {
             result = ip::UserspaceIpResult::Stale;
         }
+        const std::uint32_t timeout_delay_ms = s_instance->m_userspace_ip_adapter_owner.NextTimeoutDelayMs();
+        if (timeout_delay_ms == std::numeric_limits<std::uint32_t>::max()) {
+            s_instance->m_timer_scheduler.CancelUserspaceIpTimeout();
+        } else {
+            s_instance->m_timer_scheduler.ArmUserspaceIpTimeout(timeout_delay_ms);
+        }
         {
             std::scoped_lock lock(s_instance->m_state_mutex);
             s_instance->m_userspace_ip_adapter_owner.CompleteLocked(*operation, result);
@@ -472,6 +481,15 @@ void DaemonRuntime::DebugProbeTimeoutCallback() {
     s_instance->m_effect_executor.RunDebugProbeTimeout();
 }
 
+void DaemonRuntime::UserspaceIpTimeoutCallback() {
+    AMS_ABORT_UNLESS(s_instance != nullptr);
+    {
+        std::scoped_lock lock(s_instance->m_state_mutex);
+        s_instance->m_userspace_ip_adapter_owner.QueueRunTimeoutsLocked();
+    }
+    static_cast<void>(s_instance->m_horizon_dispatcher.QueueUserspaceIpAdapter());
+}
+
 void DaemonRuntime::InitializeHorizonDispatcher() {
     m_horizon_dispatcher.Initialize({
         .resolve = ResolverWorkCallback,
@@ -486,6 +504,7 @@ void DaemonRuntime::InitializeHorizonDispatcher() {
         {
             .protocol_timer = ProtocolTimerCallback,
             .debug_probe_timeout = DebugProbeTimeoutCallback,
+            .userspace_ip_timeout = UserspaceIpTimeoutCallback,
         }
     );
 
@@ -547,6 +566,7 @@ ams::Result DaemonRuntime::SetActivePeer(std::int32_t peer_index) {
     }
 
     runtime::EffectBatch effects{};
+    bool adapter_work_pending = false;
     if (m_runtime_coordinator.ActivePeerIndex() >= 0 && m_runtime_coordinator.ActivePeerIndex() != peer_index) {
         const std::size_t old_index = static_cast<std::size_t>(m_runtime_coordinator.ActivePeerIndex());
         effects = SetPeerInactive(old_index);
@@ -563,8 +583,12 @@ ams::Result DaemonRuntime::SetActivePeer(std::int32_t peer_index) {
         effects.Append(activation_effects);
     }
     RefreshTunnelPolicyLocked();
+    adapter_work_pending = m_userspace_ip_adapter_owner.HasPendingWork();
     logger::Log("SetActivePeer(%d)", peer_index);
     lock.unlock();
+    if (adapter_work_pending) {
+        static_cast<void>(m_horizon_dispatcher.QueueUserspaceIpAdapter());
+    }
     ExecuteRuntimeEffects(effects);
     R_SUCCEED();
 }
@@ -1142,6 +1166,7 @@ void DaemonRuntime::Shutdown() {
     }
     m_timer_scheduler.CancelAllProtocolTimers();
     m_timer_scheduler.CancelDebugProbeTimeout();
+    m_timer_scheduler.CancelUserspaceIpTimeout();
     {
         std::scoped_lock lock(m_state_mutex);
         m_userspace_ip_adapter_owner.QueueResetLocked();

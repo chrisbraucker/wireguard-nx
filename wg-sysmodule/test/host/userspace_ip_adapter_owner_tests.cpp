@@ -4,6 +4,7 @@
 #include "test_framework.hpp"
 
 #include <array>
+#include <limits>
 
 namespace wgnx::test {
 
@@ -35,6 +36,16 @@ void TestUserspaceIpAdapterOwner(TestContext& context) {
             sysmodule::ip::UserspaceIpAdapter::InitializationCountForTests() == starts,
         "adapter owner did not coalesce configuration on its serialized work callback"
     );
+    owner.QueueRunTimeoutsLocked();
+    owner.QueueRunTimeoutsLocked();
+    const auto timeout_operation = owner.TakeNextLocked();
+    const bool timeout_queued = timeout_operation.has_value() &&
+                                timeout_operation->kind == sysmodule::runtime::UserspaceIpAdapterOwner::OperationKind::RunTimeouts &&
+                                owner.NextTimeoutDelayMs() != std::numeric_limits<std::uint32_t>::max();
+    if (timeout_operation) {
+        owner.CompleteLocked(*timeout_operation, owner.Execute(*timeout_operation));
+    }
+    WGNX_TEST_REQUIRE(context, timeout_queued && !owner.HasPendingWork(), "adapter owner did not coalesce and serialize lwIP timeout work");
     const sysmodule::ip::UserspaceIpFlow flow{
         .token = 1,
         .local = {.address = {10, 13, 13, 8}, .port = 49152, .reserved = 0},

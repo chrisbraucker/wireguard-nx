@@ -176,7 +176,7 @@ opaque WireGuard encryption and outer UDP transport
   The existing raw packet boundary accepts complete packets only, so this UDP-only slice does not publish an unmatched fragment before reassembly and does not add a raw-PCB path for reassembled non-flow traffic.
   The production decrypted receive path no longer calls the handmade IPv4 or UDP parser, which remains temporarily for isolated host regression coverage until the Task 6 codec deletion.
 
-- [ ] **11. Integrate timeout scheduling, adapter epochs, and lifecycle resets.**
+- [x] **11. Integrate timeout scheduling, adapter epochs, and lifecycle resets.**
 
   Implement `sys_now()` with the same wrap-safe monotonic millisecond semantics on host and target and advance the host clock explicitly in tests.
   Use `sys_timeouts_sleeptime()` to arm one auxiliary Horizon timer whose callback only queues timeout work onto `wgnx-submit`.
@@ -185,6 +185,10 @@ opaque WireGuard encryption and outer UDP transport
   Increment the adapter epoch and reset all PCB and fragment state on policy invalidation, peer restart, activation teardown, and sysmodule shutdown.
   Perform global fragment expiry or reset only at those adapter-epoch boundaries because upstream exposes no safe selective reassembly purge API.
   Record collateral fragment drops during an epoch reset instead of patching upstream reassembly internals.
+  The adapter queries `sys_timeouts_sleeptime()` after every serialized operation, and the existing timer scheduler arms one auxiliary timer in the same monotonic-millisecond unit.
+  Its timer callback only coalesces a `RunTimeouts` owner operation and queues the existing `wgnx-submit` work item, where `sys_check_timeouts()` runs without the daemon mutex.
+  Peer deactivation queues the owner reset before the next activation can use the adapter, which increments the adapter epoch and clears every PCB, result collector, and retained reassembly state.
+  The next accounting item records reset and retained-fragment dispositions without changing lwIP internals.
 
 - [ ] **12. Add bounded pressure, reassembly, callback, and lifecycle accounting.**
 

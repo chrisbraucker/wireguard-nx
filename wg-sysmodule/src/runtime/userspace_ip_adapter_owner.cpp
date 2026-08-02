@@ -15,7 +15,14 @@ void UserspaceIpAdapterOwner::QueueConfigureLocked(const std::array<std::uint8_t
 
 void UserspaceIpAdapterOwner::QueueResetLocked() {
     m_reset_pending = true;
+    m_timeout_pending = false;
     m_configuration_active = false;
+}
+
+void UserspaceIpAdapterOwner::QueueRunTimeoutsLocked() {
+    if (m_configuration_active && !m_reset_pending) {
+        m_timeout_pending = true;
+    }
 }
 
 UserspaceIpAdapterOwner::QueueResult UserspaceIpAdapterOwner::QueueOpenFlowLocked(
@@ -94,15 +101,20 @@ UserspaceIpAdapterOwner::QueueResult UserspaceIpAdapterOwner::QueueInputPacketLo
 }
 
 std::optional<UserspaceIpAdapterOwner::Operation> UserspaceIpAdapterOwner::TakeNextLocked() {
-    if (m_reset_pending || m_configuration_pending) {
+    if (m_reset_pending || m_configuration_pending || m_timeout_pending) {
         const bool reset = m_reset_pending;
+        const bool configure = !reset && m_configuration_pending;
         if (reset) {
             m_reset_pending = false;
-        } else {
+        } else if (configure) {
             m_configuration_pending = false;
+        } else {
+            m_timeout_pending = false;
         }
         return Operation{
-            .kind = reset ? OperationKind::Reset : OperationKind::Configure,
+            .kind = reset       ? OperationKind::Reset
+                    : configure ? OperationKind::Configure
+                                : OperationKind::RunTimeouts,
             .local_address = m_local_address,
             .mtu = m_mtu,
         };
@@ -138,6 +150,9 @@ ip::UserspaceIpResult UserspaceIpAdapterOwner::Execute(const Operation& operatio
     case OperationKind::InputPacket:
         m_adapter.ClearInboundDatagrams();
         return m_adapter.Input(std::span<const std::uint8_t>(m_data_operation.payload).first(m_data_operation.payload_size));
+    case OperationKind::RunTimeouts:
+        m_adapter.RunTimeouts();
+        return ip::UserspaceIpResult::Success;
     }
     return ip::UserspaceIpResult::TransportError;
 }
@@ -225,6 +240,10 @@ std::uint32_t UserspaceIpAdapterOwner::AdapterEpochLocked() const {
     return m_adapter.Epoch();
 }
 
+std::uint32_t UserspaceIpAdapterOwner::NextTimeoutDelayMs() const {
+    return m_adapter.NextTimeoutDelayMs();
+}
+
 void UserspaceIpAdapterOwner::CancelLocked(OperationTicket ticket) {
     if (!ticket.IsValid() || ticket.generation != m_data_operation.generation) {
         return;
@@ -239,7 +258,7 @@ void UserspaceIpAdapterOwner::CancelLocked(OperationTicket ticket) {
 }
 
 bool UserspaceIpAdapterOwner::HasPendingWork() const {
-    return m_reset_pending || m_configuration_pending || m_data_operation.pending || m_data_operation.running;
+    return m_reset_pending || m_configuration_pending || m_timeout_pending || m_data_operation.pending || m_data_operation.running;
 }
 
 const ip::UserspaceIpAdapter& UserspaceIpAdapterOwner::AdapterForTests() const {

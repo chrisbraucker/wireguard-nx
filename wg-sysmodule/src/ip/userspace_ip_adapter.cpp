@@ -211,6 +211,10 @@ void UserspaceIpAdapter::RunTimeouts() {
     }
 }
 
+std::uint32_t UserspaceIpAdapter::NextTimeoutDelayMs() const {
+    return m_netif_added ? sys_timeouts_sleeptime() : SYS_TIMEOUTS_SLEEPTIME_INFINITE;
+}
+
 void UserspaceIpAdapter::ClearOutboundPackets() {
     m_outbound_packet_count = 0;
 }

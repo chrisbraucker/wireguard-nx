@@ -7,6 +7,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 
 namespace wgnx::sysmodule::runtime {
 
@@ -15,6 +16,7 @@ class HorizonDispatcher;
 struct TimerSchedulerCallbacks {
     void (*protocol_timer)(wgnx::wireguard::TimerHook, const wgnx::wireguard::TimerToken&){nullptr};
     void (*debug_probe_timeout)(){nullptr};
+    void (*userspace_ip_timeout)(){nullptr};
 };
 
 class TimerScheduler {
@@ -28,6 +30,8 @@ class TimerScheduler {
 
     void ArmDebugProbeTimeout(wgnx::platform::jiffies_t deadline);
     void CancelDebugProbeTimeout();
+    void ArmUserspaceIpTimeout(std::uint32_t delay_ms);
+    void CancelUserspaceIpTimeout();
 
   private:
     struct ProtocolTimerSlot {
@@ -58,6 +62,7 @@ class TimerScheduler {
     }};
     wgnx::platform::work_struct m_debug_timeout_work{};
     wgnx::platform::timer_list m_debug_timeout_timer{};
+    wgnx::platform::timer_list m_userspace_ip_timeout_timer{};
     wgnx::platform::mutex m_operation_mutex{};
     wgnx::platform::mutex m_mutex{};
     bool m_initialized{false};

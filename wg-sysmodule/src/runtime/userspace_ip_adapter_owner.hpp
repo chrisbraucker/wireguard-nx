@@ -33,6 +33,7 @@ class UserspaceIpAdapterOwner {
         CloseFlow,
         SendDatagram,
         InputPacket,
+        RunTimeouts,
     };
 
     struct Operation {
@@ -48,6 +49,7 @@ class UserspaceIpAdapterOwner {
 
     void QueueConfigureLocked(const std::array<std::uint8_t, 4>& local_address, std::uint16_t mtu);
     void QueueResetLocked();
+    void QueueRunTimeoutsLocked();
     [[nodiscard]] QueueResult QueueOpenFlowLocked(const ip::UserspaceIpFlow& flow, OperationTicket* out_ticket);
     [[nodiscard]] QueueResult QueueCloseFlowLocked(std::uint64_t token, OperationTicket* out_ticket);
     [[nodiscard]] QueueResult QueueSendDatagramLocked(
@@ -72,6 +74,7 @@ class UserspaceIpAdapterOwner {
     [[nodiscard]] bool HadInputRejectionLocked(OperationTicket ticket) const;
     [[nodiscard]] bool HasPendingInboundFragmentLocked(OperationTicket ticket) const;
     [[nodiscard]] std::uint32_t AdapterEpochLocked() const;
+    [[nodiscard]] std::uint32_t NextTimeoutDelayMs() const;
     void CancelLocked(OperationTicket ticket);
 
     [[nodiscard]] bool HasPendingWork() const;
@@ -96,6 +99,7 @@ class UserspaceIpAdapterOwner {
     std::uint16_t m_mtu{};
     bool m_configuration_pending{};
     bool m_reset_pending{};
+    bool m_timeout_pending{};
     bool m_configuration_active{};
     DataOperationSlot m_data_operation{};
 };

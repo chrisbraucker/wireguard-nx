@@ -23,6 +23,7 @@ void TimerScheduler::Initialize(HorizonDispatcher& dispatcher, const TimerSchedu
     }
     wgnx::platform::INIT_WORK(&m_debug_timeout_work, TimerWorkCallback);
     wgnx::platform::timer_setup(&m_debug_timeout_timer, AuxiliaryTimerCallback);
+    wgnx::platform::timer_setup(&m_userspace_ip_timeout_timer, AuxiliaryTimerCallback);
     m_initialized = true;
 }
 
@@ -99,6 +100,16 @@ void TimerScheduler::CancelDebugProbeTimeout() {
     wgnx::platform::timer_delete(&m_debug_timeout_timer);
 }
 
+void TimerScheduler::ArmUserspaceIpTimeout(std::uint32_t delay_ms) {
+    wgnx::platform::MutexGuard operation_lock{m_operation_mutex};
+    static_cast<void>(wgnx::platform::mod_timer(&m_userspace_ip_timeout_timer, wgnx::platform::get_jiffies_64() + delay_ms));
+}
+
+void TimerScheduler::CancelUserspaceIpTimeout() {
+    wgnx::platform::MutexGuard operation_lock{m_operation_mutex};
+    wgnx::platform::timer_delete(&m_userspace_ip_timeout_timer);
+}
+
 void TimerScheduler::ProtocolTimerCallback(wgnx::platform::timer_list* timer) {
     if (s_instance == nullptr) {
         return;
@@ -117,6 +128,8 @@ void TimerScheduler::AuxiliaryTimerCallback(wgnx::platform::timer_list* timer) {
     }
     if (timer == &s_instance->m_debug_timeout_timer) {
         s_instance->m_dispatcher->QueueTimerWork(&s_instance->m_debug_timeout_work);
+    } else if (timer == &s_instance->m_userspace_ip_timeout_timer && s_instance->m_callbacks.userspace_ip_timeout != nullptr) {
+        s_instance->m_callbacks.userspace_ip_timeout();
     }
 }
 
