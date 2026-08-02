@@ -25,6 +25,32 @@ enum class UserspaceIpResult : std::uint8_t {
     TransportError,
 };
 
+enum class UserspaceIpRejection : std::uint8_t {
+    None = 0,
+    PbufAllocation,
+    OutboundCollector,
+    InputValidation,
+    InboundCollector,
+};
+
+struct UserspaceIpStatistics {
+    std::uint32_t active_flows{};
+    std::uint32_t flow_high_water{};
+    std::uint32_t inbound_high_water{};
+    std::uint64_t input_packets{};
+    std::uint64_t input_rejections{};
+    std::uint64_t fragment_inputs{};
+    std::uint64_t reassembly_successes{};
+    std::uint64_t callback_deliveries{};
+    std::uint64_t callback_rejections{};
+    std::uint64_t pbuf_rejections{};
+    std::uint64_t outbound_collector_rejections{};
+    std::uint64_t resets{};
+    std::uint64_t collateral_fragment_resets{};
+    std::uint64_t timeout_runs{};
+    UserspaceIpRejection first_rejection{UserspaceIpRejection::None};
+};
+
 struct UserspaceIpFlow {
     std::uint64_t token{};
     wgnx::tunnel::Ipv4Endpoint local{};
@@ -68,6 +94,7 @@ class UserspaceIpAdapter {
     [[nodiscard]] bool HadInboundDatagramRejection() const;
     [[nodiscard]] bool HadInputRejection() const;
     [[nodiscard]] bool HasPendingInboundFragment() const;
+    [[nodiscard]] const UserspaceIpStatistics& Statistics() const;
     [[nodiscard]] bool IsInitialized() const;
     [[nodiscard]] std::uint32_t Epoch() const;
     [[nodiscard]] static std::uint32_t InitializationCountForTests();
@@ -85,6 +112,7 @@ class UserspaceIpAdapter {
     [[nodiscard]] static err_t Output(netif* netif, pbuf* packet, const ip4_addr_t* destination);
     static void Receive(void* context, udp_pcb* pcb, pbuf* packet, const ip_addr_t* remote, u16_t remote_port);
     void ClearReassembly();
+    void RecordRejection(UserspaceIpRejection rejection);
 
     netif m_netif{};
     std::array<FlowSlot, MaximumFlows> m_flows{};
@@ -95,6 +123,7 @@ class UserspaceIpAdapter {
     std::uint8_t m_outbound_packet_count{};
     std::uint8_t m_inbound_datagram_count{};
     std::uint32_t m_epoch{};
+    UserspaceIpStatistics m_statistics{};
     bool m_inbound_datagram_rejected{};
     bool m_input_rejected{};
     bool m_pending_inbound_fragment{};

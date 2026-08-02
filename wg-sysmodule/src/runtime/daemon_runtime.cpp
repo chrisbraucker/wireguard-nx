@@ -353,6 +353,21 @@ void DaemonRuntime::UserspaceIpAdapterWorkCallback(wgnx::platform::work_struct* 
         } else {
             result = ip::UserspaceIpResult::Stale;
         }
+        if (operation->kind == runtime::UserspaceIpAdapterOwner::OperationKind::Reset) {
+            const auto& statistics = s_instance->m_userspace_ip_adapter_owner.Statistics();
+            logger::Log(
+                "lwip adapter reset summary resets=%llu collateral_fragments=%llu inputs=%llu rejected=%llu "
+                "reassemblies=%llu callbacks=%llu callback_rejected=%llu pbuf_rejected=%llu",
+                static_cast<unsigned long long>(statistics.resets),
+                static_cast<unsigned long long>(statistics.collateral_fragment_resets),
+                static_cast<unsigned long long>(statistics.input_packets),
+                static_cast<unsigned long long>(statistics.input_rejections),
+                static_cast<unsigned long long>(statistics.reassembly_successes),
+                static_cast<unsigned long long>(statistics.callback_deliveries),
+                static_cast<unsigned long long>(statistics.callback_rejections),
+                static_cast<unsigned long long>(statistics.pbuf_rejections)
+            );
+        }
         const std::uint32_t timeout_delay_ms = s_instance->m_userspace_ip_adapter_owner.NextTimeoutDelayMs();
         if (timeout_delay_ms == std::numeric_limits<std::uint32_t>::max()) {
             s_instance->m_timer_scheduler.CancelUserspaceIpTimeout();

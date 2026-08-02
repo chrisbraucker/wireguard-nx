@@ -157,6 +157,15 @@ void TestUserspaceIpAdapter(TestContext& context) {
         );
     }
     WGNX_TEST_REQUIRE(context, adapter.Send(Flow.token, Small) == UserspaceIpResult::QueueFull, "adapter did not bound collector pressure");
+    const auto& statistics = adapter.Statistics();
+    WGNX_TEST_REQUIRE(
+        context,
+        statistics.flow_high_water == UserspaceIpAdapter::MaximumFlows && statistics.input_packets >= 8 &&
+            statistics.fragment_inputs >= 3 && statistics.reassembly_successes >= 2 && statistics.callback_deliveries >= 2 &&
+            statistics.timeout_runs >= 1 && statistics.resets >= 2 && statistics.outbound_collector_rejections >= 1 &&
+            statistics.first_rejection == UserspaceIpRejection::PbufAllocation,
+        "adapter did not retain bounded resource, reassembly, timeout, and rejection accounting"
+    );
 }
 
 } // namespace wgnx::test

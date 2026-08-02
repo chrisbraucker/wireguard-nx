@@ -61,6 +61,10 @@ bool UserspaceIpAdapter::Initialize(const std::array<std::uint8_t, 4>& local_add
 }
 
 void UserspaceIpAdapter::Reset() {
+    ++m_statistics.resets;
+    if (m_pending_inbound_fragment) {
+        ++m_statistics.collateral_fragment_resets;
+    }
     for (FlowSlot& flow : m_flows) {
         if (flow.pcb != nullptr) {
             udp_recv(flow.pcb, nullptr, nullptr);
@@ -68,6 +72,7 @@ void UserspaceIpAdapter::Reset() {
         }
         flow = {};
     }
+    m_statistics.active_flows = 0;
     if (m_netif_added) {
         netif_set_down(&m_netif);
         netif_set_link_down(&m_netif);
@@ -109,11 +114,13 @@ UserspaceIpResult UserspaceIpAdapter::OpenFlow(const UserspaceIpFlow& flow) {
     }
     const auto slot = std::find_if(m_flows.begin(), m_flows.end(), [](const FlowSlot& candidate) { return !candidate.active; });
     if (slot == m_flows.end()) {
+        RecordRejection(UserspaceIpRejection::PbufAllocation);
         return UserspaceIpResult::FlowQuotaExhausted;
     }
 
     udp_pcb* pcb = udp_new_ip_type(IPADDR_TYPE_V4);
     if (pcb == nullptr) {
+        RecordRejection(UserspaceIpRejection::PbufAllocation);
         return UserspaceIpResult::FlowQuotaExhausted;
     }
     ip_addr_t local{};
@@ -136,6 +143,8 @@ UserspaceIpResult UserspaceIpAdapter::OpenFlow(const UserspaceIpFlow& flow) {
         .active = true,
     };
     udp_recv(pcb, Receive, std::addressof(*slot));
+    ++m_statistics.active_flows;
+    m_statistics.flow_high_water = std::max(m_statistics.flow_high_water, m_statistics.active_flows);
     return UserspaceIpResult::Success;
 }
 
@@ -147,6 +156,7 @@ void UserspaceIpAdapter::CloseFlow(std::uint64_t token) {
     udp_recv(flow->pcb, nullptr, nullptr);
     udp_remove(flow->pcb);
     *flow = {};
+    --m_statistics.active_flows;
 }
 
 UserspaceIpResult UserspaceIpAdapter::Send(std::uint64_t token, std::span<const std::uint8_t> payload) {
@@ -159,6 +169,8 @@ UserspaceIpResult UserspaceIpAdapter::Send(std::uint64_t token, std::span<const 
     }
     pbuf* packet = pbuf_alloc(PBUF_TRANSPORT, static_cast<u16_t>(payload.size()), PBUF_RAM);
     if (packet == nullptr) {
+        ++m_statistics.pbuf_rejections;
+        RecordRejection(UserspaceIpRejection::PbufAllocation);
         return UserspaceIpResult::QueueFull;
     }
     const err_t copied = pbuf_take(packet, payload.data(), static_cast<u16_t>(payload.size()));
@@ -179,12 +191,18 @@ UserspaceIpResult UserspaceIpAdapter::Input(std::span<const std::uint8_t> packet
     }
     pbuf* input = pbuf_alloc(PBUF_RAW, static_cast<u16_t>(packet.size()), PBUF_RAM);
     if (input == nullptr) {
+        ++m_statistics.pbuf_rejections;
+        RecordRejection(UserspaceIpRejection::PbufAllocation);
         return UserspaceIpResult::QueueFull;
     }
     if (pbuf_take(input, packet.data(), static_cast<u16_t>(packet.size())) != ERR_OK) {
         pbuf_free(input);
+        ++m_statistics.pbuf_rejections;
+        RecordRejection(UserspaceIpRejection::PbufAllocation);
         return UserspaceIpResult::QueueFull;
     }
+    ++m_statistics.input_packets;
+    const std::uint8_t previous_inbound_count = m_inbound_datagram_count;
     const u32_t previous_fragment_receives = lwip_stats.ip_frag.recv;
     const u32_t previous_ip_errors = lwip_stats.ip.err;
     const u32_t previous_ip_length_errors = lwip_stats.ip.lenerr;
@@ -198,6 +216,16 @@ UserspaceIpResult UserspaceIpAdapter::Input(std::span<const std::uint8_t> packet
                        lwip_stats.udp.lenerr != previous_udp_length_errors || lwip_stats.udp.chkerr != previous_udp_checksum_errors;
     m_pending_inbound_fragment =
         !m_input_rejected && lwip_stats.ip_frag.recv != previous_fragment_receives && m_inbound_datagram_count == 0;
+    if (lwip_stats.ip_frag.recv != previous_fragment_receives) {
+        ++m_statistics.fragment_inputs;
+    }
+    if (m_inbound_datagram_count > previous_inbound_count) {
+        m_statistics.reassembly_successes += lwip_stats.ip_frag.recv != previous_fragment_receives ? 1U : 0U;
+    }
+    if (m_input_rejected) {
+        ++m_statistics.input_rejections;
+        RecordRejection(UserspaceIpRejection::InputValidation);
+    }
     if (delivered == ERR_OK) {
         return UserspaceIpResult::Success;
     }
@@ -207,6 +235,7 @@ UserspaceIpResult UserspaceIpAdapter::Input(std::span<const std::uint8_t> packet
 
 void UserspaceIpAdapter::RunTimeouts() {
     if (m_netif_added) {
+        ++m_statistics.timeout_runs;
         sys_check_timeouts();
     }
 }
@@ -246,6 +275,10 @@ bool UserspaceIpAdapter::HasPendingInboundFragment() const {
     return m_pending_inbound_fragment;
 }
 
+const UserspaceIpStatistics& UserspaceIpAdapter::Statistics() const {
+    return m_statistics;
+}
+
 bool UserspaceIpAdapter::IsInitialized() const {
     return m_netif_added;
 }
@@ -282,6 +315,10 @@ err_t UserspaceIpAdapter::Output(netif* netif, pbuf* packet, const ip4_addr_t*) 
     auto* adapter = static_cast<UserspaceIpAdapter*>(netif->state);
     if (adapter == nullptr || packet == nullptr || packet->tot_len > wgnx::MaxInnerIpv4PacketSize ||
         adapter->m_outbound_packet_count == adapter->m_outbound_packets.size()) {
+        if (adapter != nullptr) {
+            ++adapter->m_statistics.outbound_collector_rejections;
+            adapter->RecordRejection(UserspaceIpRejection::OutboundCollector);
+        }
         return ERR_BUF;
     }
     UserspaceIpPacket& output = adapter->m_outbound_packets[adapter->m_outbound_packet_count];
@@ -300,6 +337,8 @@ void UserspaceIpAdapter::Receive(void* context, udp_pcb*, pbuf* packet, const ip
         if (packet->tot_len > wgnx::tunnel::MaximumUdpPayloadStorageBytes ||
             adapter.m_inbound_datagram_count == adapter.m_inbound_datagrams.size()) {
             adapter.m_inbound_datagram_rejected = true;
+            ++adapter.m_statistics.callback_rejections;
+            adapter.RecordRejection(UserspaceIpRejection::InboundCollector);
         } else {
             UserspaceIpDatagram& datagram = adapter.m_inbound_datagrams[adapter.m_inbound_datagram_count];
             if (pbuf_copy_partial(packet, datagram.payload.data(), packet->tot_len, 0) == packet->tot_len) {
@@ -317,8 +356,13 @@ void UserspaceIpAdapter::Receive(void* context, udp_pcb*, pbuf* packet, const ip
                 };
                 datagram.size = packet->tot_len;
                 ++adapter.m_inbound_datagram_count;
+                ++adapter.m_statistics.callback_deliveries;
+                adapter.m_statistics.inbound_high_water =
+                    std::max<std::uint32_t>(adapter.m_statistics.inbound_high_water, adapter.m_inbound_datagram_count);
             } else {
                 adapter.m_inbound_datagram_rejected = true;
+                ++adapter.m_statistics.callback_rejections;
+                adapter.RecordRejection(UserspaceIpRejection::InboundCollector);
             }
         }
     }
@@ -330,6 +374,12 @@ void UserspaceIpAdapter::Receive(void* context, udp_pcb*, pbuf* packet, const ip
 void UserspaceIpAdapter::ClearReassembly() {
     for (std::size_t index = 0; index <= IP_REASS_MAXAGE; ++index) {
         ip_reass_tmr();
+    }
+}
+
+void UserspaceIpAdapter::RecordRejection(UserspaceIpRejection rejection) {
+    if (m_statistics.first_rejection == UserspaceIpRejection::None) {
+        m_statistics.first_rejection = rejection;
     }
 }
 

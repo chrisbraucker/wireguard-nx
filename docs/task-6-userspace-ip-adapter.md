@@ -190,12 +190,15 @@ opaque WireGuard encryption and outer UDP transport
   Peer deactivation queues the owner reset before the next activation can use the adapter, which increments the adapter epoch and clears every PCB, result collector, and retained reassembly state.
   The next accounting item records reset and retained-fragment dispositions without changing lwIP internals.
 
-- [ ] **12. Add bounded pressure, reassembly, callback, and lifecycle accounting.**
+- [x] **12. Add bounded pressure, reassembly, callback, and lifecycle accounting.**
 
   Keep `LWIP_STATS=1` when its target cost is acceptable and report project-owned aggregate counters when an upstream counter does not express the required disposition.
   Cover pbuf and heap use, PCB use, operation slots, collector use, fragment transmit and receive, fragment drops, memory errors, reassembly success and failure, timeouts, resets, stale generations, callback delivery, peer staging, and completion pressure.
   Record current and high-water values plus the first explicit rejection reason so pressure can be reconciled across requester, MITM, flow plane, adapter, packet plane, peer, and WireGuard transport.
   Keep per-packet filesystem logging disabled and flush summaries outside the daemon state mutex at existing diagnostic boundaries.
+  `UserspaceIpAdapter` now retains fixed current or high-water flow and callback occupancy plus cumulative input, pbuf, collector, reassembly, timeout, reset, and first-rejection counters.
+  An adapter reset records whether it discarded retained fragment work and emits one lifecycle summary after the lwIP operation finishes, without packet-path filesystem logging.
+  Existing flow, completion, peer-staging, dispatcher, and WireGuard counters remain their current owners and are reconciled with these adapter counters during device validation.
 
 - [ ] **13. Extend local regression, sanitizer, fuzz, static, stack, and resource gates.**
 

@@ -79,6 +79,7 @@ class UserspaceIpAdapterOwner {
 
     [[nodiscard]] bool HasPendingWork() const;
     [[nodiscard]] const ip::UserspaceIpAdapter& AdapterForTests() const;
+    [[nodiscard]] const ip::UserspaceIpStatistics& Statistics() const;
 
   private:
     struct DataOperationSlot {

@@ -265,4 +265,8 @@ const ip::UserspaceIpAdapter& UserspaceIpAdapterOwner::AdapterForTests() const {
     return m_adapter;
 }
 
+const ip::UserspaceIpStatistics& UserspaceIpAdapterOwner::Statistics() const {
+    return m_adapter.Statistics();
+}
+
 } // namespace wgnx::sysmodule::runtime
