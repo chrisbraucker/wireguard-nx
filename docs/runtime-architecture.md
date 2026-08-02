@@ -42,6 +42,8 @@ The IPC and WireGuard wire contracts remain unchanged; the separation is interna
 - `runtime/userspace_ip_adapter_owner.*` owns lwIP initialization, one IPv4 netif, UDP PCBs, pbuf lifetime, and bounded adapter operations.
   It runs only through a dedicated work item on the existing ordered `wgnx-submit` lane.
   Flow state reserves a stable handle under the daemon mutex, the owner opens or closes the matching PCB outside that mutex, and `TunnelFlowPlane` commits an open only after the captured client, peer, and policy identities remain current.
+  A send copies one payload into the owner slot, lets lwIP construct and fragment IPv4 output, and exposes that complete bounded collector only after `udp_send()` returns.
+  The daemon then atomically stages the complete packet batch through the peer-owned WireGuard queue before it executes resulting effects.
 - `runtime/timer_scheduler.*` owns concrete Horizon protocol and auxiliary timers. `runtime/timer_schedule.*` tracks bounded physical arm and queued delivery state independently of Horizon.
   Expirations retain their complete token until delivered through the coordinator; the scheduler contains no peer policy.
   Arm and cancellation effects likewise retain the token allocated under the runtime lock, preventing delayed platform work from changing a newer physical schedule.
@@ -91,6 +93,7 @@ Blocking UDP bind and send handlers are non-inlined stack boundaries so their I/
 
 Userspace-IP flow operations use the same snapshot, release, and revalidate rule.
 The operation slot is bounded, while a coalesced lifecycle-control path remains reserved for configuration and reset work.
+lwIP callbacks only copy into owner-owned collectors and never call daemon, packet-plane, peer, CMIF, logging, or platform-I/O code.
 
 `EncryptedReceivePump` owns one process-lifetime 4 KiB datagram scratch buffer and one 2,184-byte effect batch.
 Its ordered work item places only a small `packet_buffer` view on the worker stack.

@@ -1,5 +1,7 @@
 #include "runtime/userspace_ip_adapter_owner.hpp"
 
+#include <algorithm>
+
 namespace wgnx::sysmodule::runtime {
 
 void UserspaceIpAdapterOwner::QueueConfigureLocked(const std::array<std::uint8_t, 4>& local_address, std::uint16_t mtu) {
@@ -46,6 +48,25 @@ UserspaceIpAdapterOwner::QueueResult UserspaceIpAdapterOwner::QueueCloseFlowLock
     return QueueResult::Queued;
 }
 
+UserspaceIpAdapterOwner::QueueResult UserspaceIpAdapterOwner::QueueSendDatagramLocked(
+    std::uint64_t token, std::span<const std::uint8_t> payload, OperationTicket* out_ticket
+) {
+    if (out_ticket == nullptr || token == 0 || payload.size() > m_data_operation.payload.size() || m_data_operation.pending ||
+        m_data_operation.running || m_data_operation.complete) {
+        return QueueResult::QueueFull;
+    }
+    m_data_operation.operation = {
+        .kind = OperationKind::SendDatagram,
+        .ticket = {.generation = m_data_operation.generation},
+        .flow = {.token = token},
+    };
+    std::ranges::copy(payload, m_data_operation.payload.begin());
+    m_data_operation.payload_size = static_cast<std::uint16_t>(payload.size());
+    m_data_operation.pending = true;
+    *out_ticket = m_data_operation.operation.ticket;
+    return QueueResult::Queued;
+}
+
 std::optional<UserspaceIpAdapterOwner::Operation> UserspaceIpAdapterOwner::TakeNextLocked() {
     if (m_reset_pending || m_configuration_pending) {
         const bool reset = m_reset_pending;
@@ -82,6 +103,12 @@ ip::UserspaceIpResult UserspaceIpAdapterOwner::Execute(const Operation& operatio
     case OperationKind::CloseFlow:
         m_adapter.CloseFlow(operation.flow.token);
         return ip::UserspaceIpResult::Success;
+    case OperationKind::SendDatagram:
+        m_adapter.ClearOutboundPackets();
+        return m_adapter.Send(
+            operation.flow.token,
+            std::span<const std::uint8_t>(m_data_operation.payload).first(m_data_operation.payload_size)
+        );
     }
     return ip::UserspaceIpResult::TransportError;
 }
@@ -103,8 +130,16 @@ void UserspaceIpAdapterOwner::CompleteLocked(const Operation& operation, ip::Use
     m_data_operation.result = result;
 }
 
-std::optional<ip::UserspaceIpResult> UserspaceIpAdapterOwner::TakeResultLocked(OperationTicket ticket) {
+std::optional<ip::UserspaceIpResult> UserspaceIpAdapterOwner::PeekResultLocked(OperationTicket ticket) const {
     if (!ticket.IsValid() || ticket.generation != m_data_operation.generation || !m_data_operation.complete) {
+        return std::nullopt;
+    }
+    return m_data_operation.result;
+}
+
+std::optional<ip::UserspaceIpResult> UserspaceIpAdapterOwner::TakeResultLocked(OperationTicket ticket) {
+    const auto result = PeekResultLocked(ticket);
+    if (!result) {
         return std::nullopt;
     }
     m_data_operation.complete = false;
@@ -112,7 +147,15 @@ std::optional<ip::UserspaceIpResult> UserspaceIpAdapterOwner::TakeResultLocked(O
     if (m_data_operation.generation == 0) {
         ++m_data_operation.generation;
     }
-    return m_data_operation.result;
+    return result;
+}
+
+std::span<const ip::UserspaceIpPacket> UserspaceIpAdapterOwner::OutboundPacketsLocked(OperationTicket ticket) const {
+    if (!ticket.IsValid() || ticket.generation != m_data_operation.generation || !m_data_operation.complete ||
+        m_data_operation.operation.kind != OperationKind::SendDatagram || m_data_operation.result != ip::UserspaceIpResult::Success) {
+        return {};
+    }
+    return m_adapter.OutboundPackets();
 }
 
 void UserspaceIpAdapterOwner::CancelLocked(OperationTicket ticket) {

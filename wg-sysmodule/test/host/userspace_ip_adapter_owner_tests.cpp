@@ -48,15 +48,25 @@ void TestUserspaceIpAdapterOwner(TestContext& context) {
         owner.QueueCloseFlowLocked(flow.token, &close_ticket) == sysmodule::runtime::UserspaceIpAdapterOwner::QueueResult::QueueFull;
     RunOwner(owner);
     const auto open_result = owner.TakeResultLocked(open_ticket);
+    std::array<std::uint8_t, wgnx::tunnel::MaximumUdpPayloadStorageBytes> payload{};
+    sysmodule::runtime::UserspaceIpAdapterOwner::OperationTicket send_ticket{};
+    const bool send_queued = owner.QueueSendDatagramLocked(flow.token, payload, &send_ticket) ==
+                             sysmodule::runtime::UserspaceIpAdapterOwner::QueueResult::Queued;
+    RunOwner(owner);
+    const auto send_result = owner.PeekResultLocked(send_ticket);
+    const auto packets = owner.OutboundPacketsLocked(send_ticket);
+    const auto released_send_result = owner.TakeResultLocked(send_ticket);
     const bool close_queued =
         owner.QueueCloseFlowLocked(flow.token, &close_ticket) == sysmodule::runtime::UserspaceIpAdapterOwner::QueueResult::Queued;
     RunOwner(owner);
     const auto close_result = owner.TakeResultLocked(close_ticket);
     WGNX_TEST_REQUIRE(
         context,
-        open_queued && close_rejected && open_result == sysmodule::ip::UserspaceIpResult::Success && close_queued &&
+        open_queued && close_rejected && open_result == sysmodule::ip::UserspaceIpResult::Success && send_queued &&
+            send_result == sysmodule::ip::UserspaceIpResult::Success && packets.size() == 3 &&
+            released_send_result == sysmodule::ip::UserspaceIpResult::Success && close_queued &&
             close_result == sysmodule::ip::UserspaceIpResult::Success,
-        "adapter owner did not serialize bounded PCB operations"
+        "adapter owner did not serialize bounded PCB operations or collect every fragmented UDP output"
     );
     owner.QueueResetLocked();
     RunOwner(owner);

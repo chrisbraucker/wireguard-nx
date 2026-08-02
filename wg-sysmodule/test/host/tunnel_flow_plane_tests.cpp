@@ -96,6 +96,38 @@ std::size_t BuildReply(std::span<std::uint8_t> out, std::span<const std::uint8_t
     return packet_size;
 }
 
+std::size_t BuildRequest(
+    std::span<std::uint8_t> out,
+    const wgnx::tunnel::Ipv4Endpoint& source,
+    const wgnx::tunnel::Ipv4Endpoint& destination,
+    std::span<const std::uint8_t> payload
+) {
+    if (out.size() < Ipv4HeaderSize + UdpHeaderSize + payload.size()) {
+        return 0;
+    }
+    const std::size_t packet_size = Ipv4HeaderSize + UdpHeaderSize + payload.size();
+    std::fill_n(out.begin(), packet_size, std::uint8_t{0});
+    out[0] = 0x45;
+    StoreBigEndian16(out.data() + 2, static_cast<std::uint16_t>(packet_size));
+    StoreBigEndian16(out.data() + 6, 0x4000U);
+    out[8] = 64;
+    out[9] = UdpProtocol;
+    std::memcpy(out.data() + 12, source.address, 4);
+    std::memcpy(out.data() + 16, destination.address, 4);
+    StoreBigEndian16(out.data() + 10, Checksum(out.data(), Ipv4HeaderSize));
+    std::uint8_t* udp = out.data() + Ipv4HeaderSize;
+    StoreBigEndian16(udp, source.port);
+    StoreBigEndian16(udp + 2, destination.port);
+    StoreBigEndian16(udp + 4, static_cast<std::uint16_t>(UdpHeaderSize + payload.size()));
+    std::memcpy(udp + UdpHeaderSize, payload.data(), payload.size());
+    std::uint16_t checksum = UdpChecksum(out.data() + 12, out.data() + 16, udp, UdpHeaderSize + payload.size());
+    if (checksum == 0) {
+        checksum = 0xFFFFU;
+    }
+    StoreBigEndian16(udp + 6, checksum);
+    return packet_size;
+}
+
 } // namespace
 
 void TestTunnelFlowPlane(TestContext& context) {
@@ -144,7 +176,6 @@ void TestTunnelFlowPlane(TestContext& context) {
     const auto default_mtu_send = mtu_plane.PrepareSend(mtu_client, default_mtu_descriptor, default_mtu_payload, TransportReady, 92);
     const auto oversized_default_mtu_send =
         mtu_plane.PrepareSend(mtu_client, oversized_default_mtu_descriptor, oversized_default_mtu_payload, TransportReady, 93);
-    mtu_plane.ReleasePreparedDatagram(default_mtu_send);
 
     config.mtu = 1280;
     mtu_plane.RefreshPolicy({.configuration = &config, .peer = first_peer, .selected = true}, 94);
@@ -167,14 +198,13 @@ void TestTunnelFlowPlane(TestContext& context) {
         mtu_plane.PrepareSend(mtu_client, configured_mtu_descriptor, configured_mtu_payload, TransportReady, 95);
     const auto oversized_configured_mtu_send =
         mtu_plane.PrepareSend(mtu_client, oversized_configured_mtu_descriptor, oversized_configured_mtu_payload, TransportReady, 96);
-    mtu_plane.ReleasePreparedDatagram(configured_mtu_send);
     WGNX_TEST_REQUIRE(
         context,
         mtu_flow.status == ProtocolStatus::Success && default_mtu_capabilities.effective_inner_mtu == 1420 &&
             default_mtu_capabilities.maximum_udp_payload_bytes == 1392 && default_mtu_send.status == ProtocolStatus::Success &&
-            default_mtu_send.packet.size() == 1420 && oversized_default_mtu_send.status == ProtocolStatus::DatagramTooLarge &&
+            default_mtu_send.IsPrepared() && oversized_default_mtu_send.status == ProtocolStatus::DatagramTooLarge &&
             configured_mtu_capabilities.effective_inner_mtu == 1280 && configured_mtu_capabilities.maximum_udp_payload_bytes == 1252 &&
-            configured_mtu_send.status == ProtocolStatus::Success && configured_mtu_send.packet.size() == 1280 &&
+            configured_mtu_send.status == ProtocolStatus::Success && configured_mtu_send.IsPrepared() &&
             oversized_configured_mtu_send.status == ProtocolStatus::DatagramTooLarge,
         "flow plane did not enforce the effective inner MTU at default and configured boundaries"
     );
@@ -267,15 +297,15 @@ void TestTunnelFlowPlane(TestContext& context) {
     const auto sent = plane.PrepareSend(client, descriptor, Payload, TransportReady, 140);
     WGNX_TEST_REQUIRE(
         context,
-        not_ready.status == ProtocolStatus::TransportUnavailable && sent.status == ProtocolStatus::Success && sent.HasPacket() &&
-            sent.packet.size() == Ipv4HeaderSize + UdpHeaderSize + Payload.size() && sent.packet[9] == UdpProtocol &&
-            std::equal(Payload.begin(), Payload.end(), sent.packet.begin() + Ipv4HeaderSize + UdpHeaderSize),
-        "flow send did not enforce transport availability or construct the requested UDP payload"
+        not_ready.status == ProtocolStatus::TransportUnavailable && sent.status == ProtocolStatus::Success && sent.IsPrepared() &&
+            sent.adapter_token == opened.flow.value,
+        "flow send did not enforce transport availability or retain the stable adapter flow token"
     );
 
+    std::array<std::uint8_t, wgnx::MaxInnerIpv4PacketSize> request{};
     std::array<std::uint8_t, wgnx::MaxInnerIpv4PacketSize> reply{};
-    const std::size_t reply_size = BuildReply(reply, sent.packet, Payload);
-    plane.ReleasePreparedDatagram(sent);
+    const std::size_t request_size = BuildRequest(request, opened_state.advertised_local, open.remote, Payload);
+    const std::size_t reply_size = BuildReply(reply, std::span<const std::uint8_t>(request.data(), request_size), Payload);
     const auto foreign = plane.DeliverDecryptedIpv4Packet(
         {.peer_index = PeerIndex{0}, .activation_generation = ActivationGeneration{8}},
         std::span<const std::uint8_t>(reply.data(), reply_size),
@@ -300,29 +330,28 @@ void TestTunnelFlowPlane(TestContext& context) {
     );
 
     const auto second_send = plane.PrepareSend(client, descriptor, Payload, TransportReady, 160);
-    const std::size_t second_reply_size = BuildReply(reply, second_send.packet, Payload);
-    plane.ReleasePreparedDatagram(second_send);
+    const std::size_t second_reply_size = BuildReply(reply, std::span<const std::uint8_t>(request.data(), request_size), Payload);
     static_cast<void>(plane.DeliverDecryptedIpv4Packet(first_peer, std::span<const std::uint8_t>(reply.data(), second_reply_size), 170));
     std::array<std::uint8_t, 1> too_small{};
     const auto insufficient = plane.ReceiveCompletions(client, completions, too_small);
     const auto after_insufficient = plane.ReceiveCompletions(client, completions, received_payload);
     WGNX_TEST_REQUIRE(
         context,
-        insufficient.status == ProtocolStatus::OutputBufferTooSmall && after_insufficient.status == ProtocolStatus::Success &&
-            after_insufficient.count == 1 && completions[0].type == CompletionType::InboundDatagram,
+        second_send.IsPrepared() && insufficient.status == ProtocolStatus::OutputBufferTooSmall &&
+            after_insufficient.status == ProtocolStatus::Success && after_insufficient.count == 1 &&
+            completions[0].type == CompletionType::InboundDatagram,
         "completion draining emitted a partial datagram or lost it after an undersized buffer"
     );
 
     const auto zero_checksum_send = plane.PrepareSend(client, descriptor, Payload, TransportReady, 171);
-    const std::size_t zero_checksum_reply_size = BuildReply(reply, zero_checksum_send.packet, Payload);
-    plane.ReleasePreparedDatagram(zero_checksum_send);
+    const std::size_t zero_checksum_reply_size = BuildReply(reply, std::span<const std::uint8_t>(request.data(), request_size), Payload);
     StoreBigEndian16(reply.data() + Ipv4HeaderSize + 6, 0);
     const auto accepted_zero_checksum =
         plane.DeliverDecryptedIpv4Packet(first_peer, std::span<const std::uint8_t>(reply.data(), zero_checksum_reply_size), 172);
     const auto zero_checksum_completion = plane.ReceiveCompletions(client, completions, received_payload);
     WGNX_TEST_REQUIRE(
         context,
-        accepted_zero_checksum.disposition == TunnelInboundDisposition::Delivered &&
+        zero_checksum_send.IsPrepared() && accepted_zero_checksum.disposition == TunnelInboundDisposition::Delivered &&
             zero_checksum_completion.status == ProtocolStatus::Success && zero_checksum_completion.count == 1 &&
             completions[0].type == CompletionType::InboundDatagram,
         "IPv4 UDP zero checksum was not accepted while invalid nonzero checksums remained rejected"
@@ -335,7 +364,6 @@ void TestTunnelFlowPlane(TestContext& context) {
     const auto writable = plane.ReceiveCompletions(client, completions, received_payload);
     const auto retried_send = plane.PrepareSend(client, descriptor, Payload, TransportReady, 176);
     plane.CompleteSend(retried_send, ProtocolStatus::Success);
-    plane.ReleasePreparedDatagram(retried_send);
     WGNX_TEST_REQUIRE(
         context,
         staging_full.status == ProtocolStatus::QueueFull && writable.status == ProtocolStatus::Success && writable.count == 1 &&
@@ -381,8 +409,7 @@ void TestTunnelFlowPlane(TestContext& context) {
         .client_tag = 200,
     };
     const auto first_reuse_send = client_reuse_plane.PrepareSend(first_reuse_client, first_reuse_descriptor, Payload, TransportReady, 202);
-    const std::uint16_t first_reuse_port = LoadBigEndian16(first_reuse_send.packet.data() + Ipv4HeaderSize);
-    client_reuse_plane.ReleasePreparedDatagram(first_reuse_send);
+    const std::uint16_t first_reuse_port = client_reuse_plane.GetFlowState(first_reuse_client, first_reuse_flow.flow).advertised_local.port;
     const auto first_reuse_close = client_reuse_plane.CloseFlow(first_reuse_client, first_reuse_flow.flow, 203);
     const auto second_reuse_flow = client_reuse_plane.OpenConnectedUdpFlow(second_reuse_client, open, 204);
     const DatagramDescriptor second_reuse_descriptor{
@@ -393,9 +420,11 @@ void TestTunnelFlowPlane(TestContext& context) {
     };
     const auto second_reuse_send =
         client_reuse_plane.PrepareSend(second_reuse_client, second_reuse_descriptor, Payload, TransportReady, 205);
-    const std::uint16_t second_reuse_port = LoadBigEndian16(second_reuse_send.packet.data() + Ipv4HeaderSize);
-    const std::size_t second_reuse_reply_size = BuildReply(reply, second_reuse_send.packet, Payload);
-    client_reuse_plane.ReleasePreparedDatagram(second_reuse_send);
+    const auto second_reuse_state = client_reuse_plane.GetFlowState(second_reuse_client, second_reuse_flow.flow);
+    const std::uint16_t second_reuse_port = second_reuse_state.advertised_local.port;
+    const std::size_t second_reuse_request_size = BuildRequest(request, second_reuse_state.advertised_local, open.remote, Payload);
+    const std::size_t second_reuse_reply_size =
+        BuildReply(reply, std::span<const std::uint8_t>(request.data(), second_reuse_request_size), Payload);
     const auto second_reuse_delivery = client_reuse_plane.DeliverDecryptedIpv4Packet(
         first_peer,
         std::span<const std::uint8_t>(reply.data(), second_reuse_reply_size),
@@ -474,6 +503,7 @@ void TestTunnelFlowPlane(TestContext& context) {
     }
     std::uint32_t delivered_count = 0;
     std::uint32_t dropped_count = 0;
+    bool all_bounded_prepared = true;
     for (std::uint32_t sequence = 0; sequence < 8; ++sequence) {
         const DatagramDescriptor bounded_descriptor{
             .flow = bounded_flows[sequence % bounded_flows.size()],
@@ -482,8 +512,11 @@ void TestTunnelFlowPlane(TestContext& context) {
             .client_tag = sequence,
         };
         const auto outbound = bounded_plane.PrepareSend(bounded_client, bounded_descriptor, Payload, TransportReady, 210 + sequence);
-        const std::size_t bounded_reply_size = BuildReply(reply, outbound.packet, Payload);
-        bounded_plane.ReleasePreparedDatagram(outbound);
+        all_bounded_prepared = all_bounded_prepared && outbound.IsPrepared();
+        const auto bounded_state = bounded_plane.GetFlowState(bounded_client, bounded_descriptor.flow);
+        const std::size_t bounded_request_size = BuildRequest(request, bounded_state.advertised_local, open.remote, Payload);
+        const std::size_t bounded_reply_size =
+            BuildReply(reply, std::span<const std::uint8_t>(request.data(), bounded_request_size), Payload);
         const auto inbound = bounded_plane.DeliverDecryptedIpv4Packet(
             first_peer,
             std::span<const std::uint8_t>(reply.data(), bounded_reply_size),
@@ -505,8 +538,8 @@ void TestTunnelFlowPlane(TestContext& context) {
     }
     WGNX_TEST_REQUIRE(
         context,
-        invalid_port_result.status == ProtocolStatus::MalformedInput && all_bounded_flows_opened && delivered_count == 7 &&
-            dropped_count == 1 && bounded_drain.status == ProtocolStatus::Success && terminal_seen,
+        invalid_port_result.status == ProtocolStatus::MalformedInput && all_bounded_flows_opened && all_bounded_prepared &&
+            delivered_count == 7 && dropped_count == 1 && bounded_drain.status == ProtocolStatus::Success && terminal_seen,
         "flow plane did not enforce invalid ports, bounded inbound completion pressure, or terminal notification reservation"
     );
 

@@ -124,7 +124,7 @@ opaque WireGuard encryption and outer UDP transport
   Normal close and client destruction collect their committed tokens under the state lock and remove PCBs through one bounded adapter operation at a time after releasing it.
   The direct flow-plane regression proves pending reservations cannot expose their token, committed reservations do, and a policy-generation change rejects a stale reservation.
 
-- [ ] **7. Replace outbound UDP and IPv4 construction with lwIP at the effective inner MTU.**
+- [x] **7. Replace outbound UDP and IPv4 construction with lwIP at the effective inner MTU.**
 
   Allocate a `PBUF_TRANSPORT` payload for each accepted descriptor, copy the whole UDP datagram once, and call `udp_send()` on its connected PCB.
   Set the netif MTU from the active effective inner MTU and let lwIP own IPv4 and UDP headers, checksums, packet identifiers, and fragmentation.
@@ -132,6 +132,11 @@ opaque WireGuard encryption and outer UDP transport
   Do not submit from the callback because a later fragment failure would otherwise expose only part of one BSD datagram.
   Keep the first payload backing-store ceiling at 1,472 bytes, which requires no more than three IPv4 fragments at the supported 576-byte minimum MTU.
   Keep advertising the current MTU-limited maximum until fragmentation passes every gate, then advertise the measured 1,472-byte maximum and return `DatagramTooLarge` above it.
+  `TunnelFlowPlane` now validates and reserves a send without constructing an IPv4 or UDP packet, and carries only the stable adapter token into the post-lock owner operation.
+  The owner copies one payload into its bounded operation slot, calls `udp_send()` on the connected lwIP PCB, and exposes the complete netif output collector only after that call returns.
+  `DaemonRuntime` converts that completed collector into the atomic packet batch before it executes WireGuard effects, so netif callbacks cannot publish partial fragments.
+  The owner regression sends the 1,472-byte bounded payload at a 576-byte MTU and proves that lwIP produces exactly three collected IPv4 packets.
+  The private API continues to advertise the pre-existing MTU-limited maximum until the remaining fragment, pressure, and lifecycle gates pass.
 
 - [x] **8. Add atomic fragment-batch admission and preserve writable backpressure.**
 

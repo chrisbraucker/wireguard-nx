@@ -26,6 +26,7 @@
 #include "wireguard/timers.hpp"
 
 #include <algorithm>
+#include <array>
 #include <mutex>
 #include <optional>
 #include <span>
@@ -869,6 +870,8 @@ wgnx::tunnel::ProtocolStatus DaemonRuntime::SendTunnelUdpDatagram(
     runtime::EffectBatch effects{};
     runtime::PreparedTunnelDatagram prepared{};
     wgnx::tunnel::ProtocolStatus status = wgnx::tunnel::ProtocolStatus::TransportUnavailable;
+    runtime::UserspaceIpAdapterOwner::OperationTicket ticket{};
+    bool queued = false;
     {
         std::scoped_lock lock(m_state_mutex);
         RefreshTunnelPolicyLocked();
@@ -880,32 +883,73 @@ wgnx::tunnel::ProtocolStatus DaemonRuntime::SendTunnelUdpDatagram(
             payload,
             {
                 .protocol_available = packet_state_available && peer.protocol_instantiated,
-                .staging_available = packet_state_available && peer.protocol_instantiated && peer.can_stage_packet,
+                .staging_available = true,
             },
             GetRuntimeNowNs()
         );
         status = prepared.status;
-        if (prepared.HasPacket()) {
-            const auto submission =
-                m_packet_data_plane.SubmitInternalIpPacket(prepared.packet, runtime::CaptureTimerFacts(), GetRuntimeNowNs(), effects);
-            switch (submission.status) {
-            case runtime::PacketSubmissionStatus::Queued:
-                status = wgnx::tunnel::ProtocolStatus::Success;
-                break;
-            case runtime::PacketSubmissionStatus::QueueFull:
+        if (prepared.IsPrepared()) {
+            queued = m_userspace_ip_adapter_owner.QueueSendDatagramLocked(prepared.adapter_token, payload, &ticket) ==
+                     runtime::UserspaceIpAdapterOwner::QueueResult::Queued;
+            if (!queued) {
                 status = wgnx::tunnel::ProtocolStatus::QueueFull;
-                break;
-            case runtime::PacketSubmissionStatus::TunnelUnavailable:
-                status = wgnx::tunnel::ProtocolStatus::TransportUnavailable;
-                break;
-            case runtime::PacketSubmissionStatus::MalformedPacket:
-            case runtime::PacketSubmissionStatus::InternalError:
-                status = wgnx::tunnel::ProtocolStatus::TransportUnavailable;
-                break;
+                m_tunnel_flow_plane.CompleteSend(prepared, status);
             }
-            m_tunnel_flow_plane.CompleteSend(prepared, status);
-            m_tunnel_flow_plane.ReleasePreparedDatagram(prepared);
         }
+    }
+    if (!queued) {
+        return status;
+    }
+    static_cast<void>(m_horizon_dispatcher.QueueUserspaceIpAdapter());
+    m_horizon_dispatcher.FlushSubmissionWork();
+    {
+        std::scoped_lock lock(m_state_mutex);
+        const auto adapter_result = m_userspace_ip_adapter_owner.PeekResultLocked(ticket);
+        if (!adapter_result) {
+            status = wgnx::tunnel::ProtocolStatus::TransportUnavailable;
+        } else if (*adapter_result == ip::UserspaceIpResult::Success) {
+            const auto packets = m_userspace_ip_adapter_owner.OutboundPacketsLocked(ticket);
+            std::array<runtime::SynchronousPacketView, runtime::MaximumInnerPacketBatchSize> packet_views{
+                runtime::SynchronousPacketView{std::span<const std::uint8_t>{}},
+                runtime::SynchronousPacketView{std::span<const std::uint8_t>{}},
+                runtime::SynchronousPacketView{std::span<const std::uint8_t>{}},
+            };
+            if (packets.empty() || packets.size() > packet_views.size()) {
+                status = wgnx::tunnel::ProtocolStatus::QueueFull;
+            } else {
+                for (std::size_t index = 0; index < packets.size(); ++index) {
+                    packet_views[index] =
+                        runtime::SynchronousPacketView{std::span<const std::uint8_t>(packets[index].bytes).first(packets[index].size)};
+                }
+                const auto submission = m_packet_data_plane.SubmitInternalIpPacketBatch(
+                    std::span<const runtime::SynchronousPacketView>(packet_views).first(packets.size()),
+                    runtime::CaptureTimerFacts(),
+                    GetRuntimeNowNs(),
+                    effects
+                );
+                switch (submission.status) {
+                case runtime::PacketSubmissionStatus::Queued:
+                    status = wgnx::tunnel::ProtocolStatus::Success;
+                    break;
+                case runtime::PacketSubmissionStatus::QueueFull:
+                    status = wgnx::tunnel::ProtocolStatus::QueueFull;
+                    break;
+                case runtime::PacketSubmissionStatus::TunnelUnavailable:
+                    status = wgnx::tunnel::ProtocolStatus::TransportUnavailable;
+                    break;
+                case runtime::PacketSubmissionStatus::MalformedPacket:
+                case runtime::PacketSubmissionStatus::InternalError:
+                    status = wgnx::tunnel::ProtocolStatus::TransportUnavailable;
+                    break;
+                }
+            }
+        } else if (*adapter_result == ip::UserspaceIpResult::QueueFull) {
+            status = wgnx::tunnel::ProtocolStatus::QueueFull;
+        } else {
+            status = wgnx::tunnel::ProtocolStatus::TransportUnavailable;
+        }
+        static_cast<void>(m_userspace_ip_adapter_owner.TakeResultLocked(ticket));
+        m_tunnel_flow_plane.CompleteSend(prepared, status);
     }
     ExecuteRuntimeEffects(effects);
     return status;

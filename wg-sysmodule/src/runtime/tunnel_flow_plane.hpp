@@ -54,12 +54,11 @@ struct TunnelInboundOutcome {
 struct PreparedTunnelDatagram {
     wgnx::tunnel::ProtocolStatus status{wgnx::tunnel::ProtocolStatus::MalformedInput};
     PeerIdentity peer{};
-    std::span<const std::uint8_t> packet{};
-    std::uint8_t slab_slot{0xFF};
     wgnx::tunnel::FlowHandle flow{};
+    std::uint64_t adapter_token{};
 
-    [[nodiscard]] constexpr bool HasPacket() const {
-        return slab_slot != 0xFF && !packet.empty();
+    [[nodiscard]] constexpr bool IsPrepared() const {
+        return status == wgnx::tunnel::ProtocolStatus::Success && adapter_token != 0;
     }
 };
 
@@ -126,7 +125,6 @@ class TunnelFlowPlane {
         wgnx::platform::ktime_t now
     );
     void CompleteSend(const PreparedTunnelDatagram& datagram, wgnx::tunnel::ProtocolStatus completion_status);
-    void ReleasePreparedDatagram(const PreparedTunnelDatagram& datagram);
     void NotifyOutboundCapacityAvailable(const PeerIdentity& peer);
     [[nodiscard]] std::uint32_t SignalAllClientCompletionEvents() const;
 
@@ -152,11 +150,6 @@ class TunnelFlowPlane {
         std::uint64_t route_identifier{0};
 
         friend constexpr bool operator==(const NormalizedRoute&, const NormalizedRoute&) = default;
-    };
-
-    struct OutboundSlab {
-        std::array<std::uint8_t, wgnx::MaxInnerIpv4PacketSize> bytes{};
-        bool allocated{false};
     };
 
     struct InboundSlab {
@@ -239,7 +232,6 @@ class TunnelFlowPlane {
         wgnx::platform::ktime_t now
     ) const;
 
-    [[nodiscard]] std::uint8_t AllocateOutboundSlab();
     [[nodiscard]] std::uint8_t AllocateInboundSlab();
     void ReleaseInboundSlab(std::uint8_t slot);
     void RemoveFlowCompletions(std::size_t flow_slot, ClientSlot& client);
@@ -269,11 +261,9 @@ class TunnelFlowPlane {
     [[nodiscard]] static std::uint16_t ComputeUdpChecksum(
         const std::uint8_t source[4], const std::uint8_t destination[4], std::span<const std::uint8_t> udp
     );
-    [[nodiscard]] bool BuildUdpPacket(FlowSlot& flow, std::span<const std::uint8_t> payload, OutboundSlab& out, std::size_t* out_size);
 
     std::array<ClientSlot, wgnx::tunnel::MaximumClientContexts> m_clients{};
     std::array<FlowSlot, wgnx::tunnel::MaximumFlows> m_flows{};
-    std::array<OutboundSlab, wgnx::tunnel::OutboundPacketSlabCount> m_outbound_slabs{};
     std::array<InboundSlab, wgnx::tunnel::InboundPacketSlabCount> m_inbound_slabs{};
     std::array<ReverseTupleTombstone, wgnx::tunnel::ReverseTupleQuarantineCapacity> m_tombstones{};
     std::array<NormalizedRoute, wgnx::tunnel::MaximumPolicyRoutes> m_routes{};

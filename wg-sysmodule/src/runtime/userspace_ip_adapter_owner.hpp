@@ -6,6 +6,7 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <span>
 
 namespace wgnx::sysmodule::runtime {
 
@@ -29,6 +30,7 @@ class UserspaceIpAdapterOwner {
         Reset,
         OpenFlow,
         CloseFlow,
+        SendDatagram,
     };
 
     struct Operation {
@@ -43,10 +45,15 @@ class UserspaceIpAdapterOwner {
     void QueueResetLocked();
     [[nodiscard]] QueueResult QueueOpenFlowLocked(const ip::UserspaceIpFlow& flow, OperationTicket* out_ticket);
     [[nodiscard]] QueueResult QueueCloseFlowLocked(std::uint64_t token, OperationTicket* out_ticket);
+    [[nodiscard]] QueueResult QueueSendDatagramLocked(
+        std::uint64_t token, std::span<const std::uint8_t> payload, OperationTicket* out_ticket
+    );
     [[nodiscard]] std::optional<Operation> TakeNextLocked();
     [[nodiscard]] ip::UserspaceIpResult Execute(const Operation& operation);
     void CompleteLocked(const Operation& operation, ip::UserspaceIpResult result);
+    [[nodiscard]] std::optional<ip::UserspaceIpResult> PeekResultLocked(OperationTicket ticket) const;
     [[nodiscard]] std::optional<ip::UserspaceIpResult> TakeResultLocked(OperationTicket ticket);
+    [[nodiscard]] std::span<const ip::UserspaceIpPacket> OutboundPacketsLocked(OperationTicket ticket) const;
     void CancelLocked(OperationTicket ticket);
 
     [[nodiscard]] bool HasPendingWork() const;
@@ -55,6 +62,8 @@ class UserspaceIpAdapterOwner {
   private:
     struct DataOperationSlot {
         Operation operation{};
+        std::array<std::uint8_t, wgnx::tunnel::MaximumUdpPayloadStorageBytes> payload{};
+        std::uint16_t payload_size{};
         ip::UserspaceIpResult result{ip::UserspaceIpResult::NotInitialized};
         std::uint32_t generation{1};
         bool pending{};

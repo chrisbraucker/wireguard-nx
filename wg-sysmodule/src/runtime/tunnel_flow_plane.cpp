@@ -26,11 +26,6 @@ std::uint32_t AllocateNonZero(std::uint32_t& next) {
     return value == 0 ? AllocateNonZero(next) : value;
 }
 
-void StoreBigEndian16(std::uint8_t* out, std::uint16_t value) {
-    out[0] = static_cast<std::uint8_t>(value >> 8U);
-    out[1] = static_cast<std::uint8_t>(value & 0xFFU);
-}
-
 std::uint16_t LoadBigEndian16(const std::uint8_t* in) {
     return static_cast<std::uint16_t>((static_cast<std::uint16_t>(in[0]) << 8U) | static_cast<std::uint16_t>(in[1]));
 }
@@ -431,31 +426,16 @@ PreparedTunnelDatagram TunnelFlowPlane::PrepareSend(
         return outcome;
     }
 
-    const std::uint8_t slab_slot = AllocateOutboundSlab();
-    if (slab_slot == InvalidSlabSlot) {
-        flow->writable_waiter = true;
-        ++flow->send_queue_full;
-        outcome.status = wgnx::tunnel::ProtocolStatus::QueueFull;
-        return outcome;
-    }
-    OutboundSlab& slab = m_outbound_slabs[slab_slot];
-    std::size_t packet_size = 0;
-    if (!BuildUdpPacket(*flow, payload, slab, &packet_size)) {
-        slab.allocated = false;
-        outcome.status = wgnx::tunnel::ProtocolStatus::MalformedInput;
-        return outcome;
-    }
     flow->last_activity_at = now;
     ++flow->send_admitted;
     outcome.status = wgnx::tunnel::ProtocolStatus::Success;
     outcome.peer = flow->peer;
-    outcome.packet = std::span<const std::uint8_t>(slab.bytes.data(), packet_size);
-    outcome.slab_slot = slab_slot;
+    outcome.adapter_token = descriptor.flow.value;
     return outcome;
 }
 
 void TunnelFlowPlane::CompleteSend(const PreparedTunnelDatagram& datagram, wgnx::tunnel::ProtocolStatus completion_status) {
-    if (!datagram.HasPacket()) {
+    if (!datagram.IsPrepared()) {
         return;
     }
     for (std::size_t index = 0; index < m_flows.size(); ++index) {
@@ -470,12 +450,6 @@ void TunnelFlowPlane::CompleteSend(const PreparedTunnelDatagram& datagram, wgnx:
             flow.writable_waiter = false;
         }
         return;
-    }
-}
-
-void TunnelFlowPlane::ReleasePreparedDatagram(const PreparedTunnelDatagram& datagram) {
-    if (datagram.slab_slot < m_outbound_slabs.size()) {
-        m_outbound_slabs[datagram.slab_slot].allocated = false;
     }
 }
 
@@ -896,16 +870,6 @@ bool TunnelFlowPlane::IsTombstoned(
     });
 }
 
-std::uint8_t TunnelFlowPlane::AllocateOutboundSlab() {
-    for (std::size_t index = 0; index < m_outbound_slabs.size(); ++index) {
-        if (!m_outbound_slabs[index].allocated) {
-            m_outbound_slabs[index].allocated = true;
-            return static_cast<std::uint8_t>(index);
-        }
-    }
-    return InvalidSlabSlot;
-}
-
 std::uint8_t TunnelFlowPlane::AllocateInboundSlab() {
     for (std::size_t index = 0; index < m_inbound_slabs.size(); ++index) {
         if (!m_inbound_slabs[index].allocated) {
@@ -1303,39 +1267,6 @@ std::uint16_t TunnelFlowPlane::ComputeUdpChecksum(
     sum = AddChecksum(sum, std::span<const std::uint8_t>(destination, 4));
     sum = AddChecksum(sum, pseudo_tail);
     return FinishChecksum(AddChecksum(sum, udp));
-}
-
-bool TunnelFlowPlane::BuildUdpPacket(FlowSlot& flow, std::span<const std::uint8_t> payload, OutboundSlab& out, std::size_t* out_size) {
-    if (out_size == nullptr || payload.size() > wgnx::tunnel::MaximumUdpPayloadForInnerMtu(m_effective_inner_mtu)) {
-        return false;
-    }
-    const std::size_t udp_size = UdpHeaderSize + payload.size();
-    const std::size_t packet_size = Ipv4HeaderSize + udp_size;
-    std::span<std::uint8_t> packet(out.bytes.data(), packet_size);
-    std::fill(packet.begin(), packet.end(), 0);
-    packet[0] = 0x45;
-    StoreBigEndian16(packet.data() + 2, static_cast<std::uint16_t>(packet_size));
-    StoreBigEndian16(packet.data() + 4, m_next_ipv4_identification++);
-    StoreBigEndian16(packet.data() + 6, 0x4000U);
-    packet[8] = 64;
-    packet[9] = UdpProtocol;
-    std::copy(flow.tunnel_source.begin(), flow.tunnel_source.end(), packet.begin() + 12);
-    std::copy(std::begin(flow.remote.address), std::end(flow.remote.address), packet.begin() + 16);
-    StoreBigEndian16(packet.data() + 10, ComputeInternetChecksum(packet.first(Ipv4HeaderSize)));
-
-    std::uint8_t* udp = packet.data() + Ipv4HeaderSize;
-    StoreBigEndian16(udp, flow.virtual_source_port);
-    StoreBigEndian16(udp + 2, flow.remote.port);
-    StoreBigEndian16(udp + 4, static_cast<std::uint16_t>(udp_size));
-    std::memcpy(udp + UdpHeaderSize, payload.data(), payload.size());
-    std::uint16_t checksum =
-        ComputeUdpChecksum(flow.tunnel_source.data(), flow.remote.address, std::span<const std::uint8_t>(udp, udp_size));
-    if (checksum == 0) {
-        checksum = 0xFFFFU;
-    }
-    StoreBigEndian16(udp + 6, checksum);
-    *out_size = packet_size;
-    return true;
 }
 
 } // namespace wgnx::sysmodule::runtime
