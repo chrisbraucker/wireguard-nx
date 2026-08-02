@@ -27,6 +27,14 @@
     "test/host/host_stubs.cpp",
     "test/host/legacy_self_tests.cpp"
   ],
+  "tidy_include_dirs": [
+    "src",
+    "src/ip",
+    "src/ip/third_party/lwip/src/include",
+    "test/host",
+    "test/host/include",
+    "../common/include"
+  ],
   "tidy_arguments": [
     "-std=c++2b"
   ]

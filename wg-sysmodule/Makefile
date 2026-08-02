@@ -90,6 +90,7 @@ CLANG_TIDY ?= clang-tidy-21
 VERIFY_SOURCES := $(TOPDIR)/../tools/verify_sources.py
 HOST_TEST_CPP_SOURCES := \
 	src/ip/lwip_platform.cpp \
+	src/ip/userspace_ip_adapter.cpp \
 	src/runtime/debug_probe_runner.cpp \
 	src/runtime/endpoint_resolver.cpp \
 	src/runtime/packet_data_plane.cpp \
@@ -131,6 +132,7 @@ HOST_TEST_CPP_SOURCES := \
 	test/host/timer_tests.cpp \
 	test/host/tunnel_protocol_tests.cpp \
 	test/host/tunnel_flow_plane_tests.cpp \
+	test/host/userspace_ip_adapter_tests.cpp \
 	test/host/failure_composition_tests.cpp \
 	test/host/main.cpp
 HOST_TEST_C_SOURCES := \

@@ -85,11 +85,13 @@ opaque WireGuard encryption and outer UDP transport
   `lwipopts.h` now selects this narrow `NO_SYS=1` IPv4 and UDP configuration, while the C-visible budget header and `wgnx::resource_budget` share the initial limits.
   The vendored sources compile as C in both host and target builds, with `sys_now()` bound to an injectable host clock or Horizon's monotonic millisecond clock.
 
-- [ ] **4. Prove the isolated host adapter before composing it with daemon state.**
+- [x] **4. Prove the isolated host adapter before composing it with daemon state.**
 
   Build a host-only adapter test around the production vendored source set, one netif, the real configuration, and a deterministic clock without platform sockets or WireGuard state.
   Prove one-time `lwip_init()`, deterministic adapter epoch reset, connected PCB creation and removal, unfragmented send and receive, fragmented send, in-order and out-of-order reassembly, expiry, and bounded allocation failure.
   Make the netif output callback collect complete IPv4 packets and the UDP callback collect copied datagrams so the prototype establishes ownership without introducing daemon callbacks.
+  `UserspaceIpAdapter` now owns one netif, UDP PCBs, pbuf input and output, fragment reset, and copied result collectors without daemon callbacks.
+  Its deterministic host test covers one-time initialization, connected PCB creation and removal, bounded PCB exhaustion, unfragmented output, three-fragment output, out-of-order reassembly, reset, expiry, and collector backpressure.
 
 - [ ] **5. Add one bounded serialized adapter owner on the existing submission lane.**
 

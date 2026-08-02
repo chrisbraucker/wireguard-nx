@@ -6,6 +6,7 @@
 #include "test_framework.hpp"
 #include "tunnel_protocol_tests.hpp"
 #include "tunnel_flow_plane_tests.hpp"
+#include "userspace_ip_adapter_tests.hpp"
 
 #include <array>
 
@@ -69,6 +70,7 @@ int main() {
         TestCase{"runtime.nifm-transport-ownership", wgnx::test::TestNifmDoesNotOwnUdpBinding},
         TestCase{"horizon.tunnel-protocol-contract", wgnx::test::TestTunnelProtocolContract},
         TestCase{"horizon.tunnel-flow-plane", wgnx::test::TestTunnelFlowPlane},
+        TestCase{"ip.userspace-adapter", wgnx::test::TestUserspaceIpAdapter},
     };
 
     return wgnx::test::RunTests(tests);
