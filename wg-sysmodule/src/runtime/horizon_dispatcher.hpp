@@ -31,7 +31,8 @@ class HorizonDispatcher {
     void QueueResolve();
     void QueueDebugPayloadSubmission();
     void QueueInnerPacketSubmission();
-    void QueueUserspaceIpAdapter();
+    [[nodiscard]] wgnx::platform::queue_work_result QueueUserspaceIpAdapter();
+    void FlushSubmissionWork();
     void QueuePendingDatagramTransmit();
     void QueueReceive();
     void QueueTimerWork(wgnx::platform::work_struct* work);

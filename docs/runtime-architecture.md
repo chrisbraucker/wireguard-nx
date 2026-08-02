@@ -39,6 +39,9 @@ The IPC and WireGuard wire contracts remain unchanged; the separation is interna
 - `runtime/horizon_dispatcher.*` owns Atmosphere ordered work queues only.
   It executes work supplied by runtime components and contains no timer or peer policy.
   Each lane has an explicit pending capacity and exposes high-water, coalescing, rerun, rejection, and completion statistics.
+- `runtime/userspace_ip_adapter_owner.*` owns lwIP initialization, one IPv4 netif, UDP PCBs, pbuf lifetime, and bounded adapter operations.
+  It runs only through a dedicated work item on the existing ordered `wgnx-submit` lane.
+  Flow state reserves a stable handle under the daemon mutex, the owner opens or closes the matching PCB outside that mutex, and `TunnelFlowPlane` commits an open only after the captured client, peer, and policy identities remain current.
 - `runtime/timer_scheduler.*` owns concrete Horizon protocol and auxiliary timers. `runtime/timer_schedule.*` tracks bounded physical arm and queued delivery state independently of Horizon.
   Expirations retain their complete token until delivered through the coordinator; the scheduler contains no peer policy.
   Arm and cancellation effects likewise retain the token allocated under the runtime lock, preventing delayed platform work from changing a newer physical schedule.
@@ -85,6 +88,9 @@ Stale effects are discarded.
 Effect execution is iterative.
 The platform-neutral `DrainEffectBatches` primitive owns the loop used by `RuntimeEffectExecutor`, so completion events may produce another bounded batch without recursively retaining prior batches on a Horizon worker stack.
 Blocking UDP bind and send handlers are non-inlined stack boundaries so their I/O snapshots cannot be coalesced into the executor frame.
+
+Userspace-IP flow operations use the same snapshot, release, and revalidate rule.
+The operation slot is bounded, while a coalesced lifecycle-control path remains reserved for configuration and reset work.
 
 `EncryptedReceivePump` owns one process-lifetime 4 KiB datagram scratch buffer and one 2,184-byte effect batch.
 Its ordered work item places only a small `packet_buffer` view on the worker stack.

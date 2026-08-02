@@ -206,6 +206,25 @@ void TestTunnelFlowPlane(TestContext& context) {
     const auto opened = plane.OpenConnectedUdpFlow(client, open, 120);
     const auto unavailable_result = plane.OpenConnectedUdpFlow(client, open, 125, TransportUnavailable);
     const auto opened_state = plane.GetFlowState(client, opened.flow);
+    TunnelFlowPlane reservation_plane{};
+    const TunnelClientId reservation_client = reservation_plane.CreateClient(nullptr, nullptr);
+    reservation_plane.RefreshPolicy({.configuration = &config, .peer = first_peer, .selected = true}, 121);
+    const auto reservation = reservation_plane.ReserveConnectedUdpFlow(reservation_client, open, 122, TransportReady);
+    std::uint64_t adapter_token = 0;
+    const bool hidden_before_commit =
+        reservation.IsReserved() && !reservation_plane.GetFlowAdapterToken(reservation_client, reservation.result.flow, &adapter_token);
+    const bool committed = reservation_plane.CommitFlowReservation(reservation) &&
+                           reservation_plane.GetFlowAdapterToken(reservation_client, reservation.result.flow, &adapter_token) &&
+                           adapter_token == reservation.result.flow.value;
+    const auto stale_reservation = reservation_plane.ReserveConnectedUdpFlow(reservation_client, open, 123, TransportReady);
+    reservation_plane.RefreshPolicy(
+        {.configuration = &config,
+         .peer = {.peer_index = PeerIndex{0}, .activation_generation = ActivationGeneration{8}},
+         .selected = true},
+        124
+    );
+    const bool stale_rejected = stale_reservation.IsReserved() && !reservation_plane.CommitFlowReservation(stale_reservation);
+    reservation_plane.CancelFlowReservation(stale_reservation);
     config.mtu = 1280;
     plane.RefreshPolicy({.configuration = &config, .peer = first_peer, .selected = true}, 126);
     const RoutingPolicySnapshot policy_after_refresh = plane.CopyRoutingPolicy(routes);
@@ -214,8 +233,8 @@ void TestTunnelFlowPlane(TestContext& context) {
     const RoutingPolicySnapshot policy_after_second_refresh = plane.CopyRoutingPolicy(routes);
     WGNX_TEST_REQUIRE(
         context,
-        uncovered_result.status == ProtocolStatus::RouteNotCovered && opened.status == ProtocolStatus::Success &&
-            unavailable_result.status == ProtocolStatus::TransportUnavailable &&
+        uncovered_result.status == ProtocolStatus::RouteNotCovered && opened.status == ProtocolStatus::Success && hidden_before_commit &&
+            committed && stale_rejected && unavailable_result.status == ProtocolStatus::TransportUnavailable &&
             opened.peer_activation_generation == first_peer.activation_generation.Value() &&
             opened_state.advertised_local.address[0] == 10 && opened_state.advertised_local.address[1] == 13 &&
             opened_state.advertised_local.address[2] == 13 && opened_state.advertised_local.address[3] == 8 &&

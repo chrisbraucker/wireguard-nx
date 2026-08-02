@@ -72,9 +72,16 @@ void HorizonDispatcher::QueueInnerPacketSubmission() {
     }
 }
 
-void HorizonDispatcher::QueueUserspaceIpAdapter() {
+wgnx::platform::queue_work_result HorizonDispatcher::QueueUserspaceIpAdapter() {
+    if (m_submission_queue == nullptr) {
+        return wgnx::platform::queue_work_result::unavailable;
+    }
+    return Queue(m_submission_queue, &m_userspace_ip_adapter_work, "submission");
+}
+
+void HorizonDispatcher::FlushSubmissionWork() {
     if (m_submission_queue != nullptr) {
-        static_cast<void>(Queue(m_submission_queue, &m_userspace_ip_adapter_work, "submission"));
+        wgnx::platform::flush_workqueue(m_submission_queue);
     }
 }
 

@@ -138,7 +138,7 @@ UserspaceIpResult UserspaceIpAdapter::OpenFlow(const UserspaceIpFlow& flow) {
     return UserspaceIpResult::Success;
 }
 
-void UserspaceIpAdapter::CloseFlow(std::uint32_t token) {
+void UserspaceIpAdapter::CloseFlow(std::uint64_t token) {
     FlowSlot* flow = FindFlow(token);
     if (flow == nullptr) {
         return;
@@ -148,7 +148,7 @@ void UserspaceIpAdapter::CloseFlow(std::uint32_t token) {
     *flow = {};
 }
 
-UserspaceIpResult UserspaceIpAdapter::Send(std::uint32_t token, std::span<const std::uint8_t> payload) {
+UserspaceIpResult UserspaceIpAdapter::Send(std::uint64_t token, std::span<const std::uint8_t> payload) {
     FlowSlot* flow = FindFlow(token);
     if (flow == nullptr) {
         return m_netif_added ? UserspaceIpResult::InvalidArgument : UserspaceIpResult::NotInitialized;
@@ -226,7 +226,7 @@ std::uint32_t UserspaceIpAdapter::InitializationCountForTests() {
     return g_lwip_initialization_count;
 }
 
-UserspaceIpAdapter::FlowSlot* UserspaceIpAdapter::FindFlow(std::uint32_t token) {
+UserspaceIpAdapter::FlowSlot* UserspaceIpAdapter::FindFlow(std::uint64_t token) {
     const auto flow = std::find_if(m_flows.begin(), m_flows.end(), [token](const FlowSlot& candidate) {
         return candidate.active && candidate.token == token;
     });

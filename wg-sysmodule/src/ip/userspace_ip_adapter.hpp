@@ -25,7 +25,7 @@ enum class UserspaceIpResult : std::uint8_t {
 };
 
 struct UserspaceIpFlow {
-    std::uint32_t token{};
+    std::uint64_t token{};
     wgnx::tunnel::Ipv4Endpoint local{};
     wgnx::tunnel::Ipv4Endpoint remote{};
 };
@@ -36,7 +36,7 @@ struct UserspaceIpPacket {
 };
 
 struct UserspaceIpDatagram {
-    std::uint32_t token{};
+    std::uint64_t token{};
     wgnx::tunnel::Ipv4Endpoint remote{};
     std::array<std::uint8_t, wgnx::tunnel::MaximumUdpPayloadStorageBytes> payload{};
     std::uint16_t size{};
@@ -54,8 +54,8 @@ class UserspaceIpAdapter {
     void Reset();
     [[nodiscard]] bool SetMtu(std::uint16_t mtu);
     [[nodiscard]] UserspaceIpResult OpenFlow(const UserspaceIpFlow& flow);
-    void CloseFlow(std::uint32_t token);
-    [[nodiscard]] UserspaceIpResult Send(std::uint32_t token, std::span<const std::uint8_t> payload);
+    void CloseFlow(std::uint64_t token);
+    [[nodiscard]] UserspaceIpResult Send(std::uint64_t token, std::span<const std::uint8_t> payload);
     [[nodiscard]] UserspaceIpResult Input(std::span<const std::uint8_t> packet);
     void RunTimeouts();
 
@@ -71,11 +71,11 @@ class UserspaceIpAdapter {
     struct FlowSlot {
         UserspaceIpAdapter* owner{};
         udp_pcb* pcb{};
-        std::uint32_t token{};
+        std::uint64_t token{};
         bool active{};
     };
 
-    [[nodiscard]] FlowSlot* FindFlow(std::uint32_t token);
+    [[nodiscard]] FlowSlot* FindFlow(std::uint64_t token);
     [[nodiscard]] static err_t InitializeNetif(netif* netif);
     [[nodiscard]] static err_t Output(netif* netif, pbuf* packet, const ip4_addr_t* destination);
     static void Receive(void* context, udp_pcb* pcb, pbuf* packet, const ip_addr_t* remote, u16_t remote_port);

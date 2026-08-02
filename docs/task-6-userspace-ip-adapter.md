@@ -106,10 +106,10 @@ opaque WireGuard encryption and outer UDP transport
   `UserspaceIpAdapterOwner` now owns the adapter and coalesces its configuration and reset controls until the dedicated `wgnx-submit` work item runs them.
   The owner is composed by `DaemonRuntime`, and shutdown queues its reset through that same work item.
   The explicit daemon-runtime ceiling is now 288 KiB to cover the measured bounded adapter owner instead of hiding this storage in an untracked allocation.
-  The target footprint is 1,395,858 static bytes, a 258,941-byte NSO, and a 260,001-byte NSP within the reviewed 1,572,864, 294,912, and 294,912-byte limits.
+  The current target footprint is 1,401,026 static bytes, a 263,469-byte NSO, and a 264,529-byte NSP within the reviewed 1,572,864, 294,912, and 294,912-byte limits.
   The host test proves that configuration is not executed by the producer, repeated configuration coalesces to one owner execution, and reset leaves the one-time lwIP initialization intact.
 
-- [ ] **6. Integrate flow reservation, PCB lifetime, closure, and tuple quarantine.**
+- [x] **6. Integrate flow reservation, PCB lifetime, closure, and tuple quarantine.**
 
   Keep client and flow slots, flow handles, policy generations, route selection, virtual ports, tuple tombstones, counters, and completion storage in `TunnelFlowPlane`.
   Represent each PCB outside the adapter only with a stable token containing the flow slot and allocation generation.
@@ -119,6 +119,10 @@ opaque WireGuard encryption and outer UDP transport
   Remove a closed flow's PCB with one post-lock operation and remove a destroyed client's PCBs with one bounded close batch.
   Preserve the 60-second reverse-tuple quarantine and prove it exceeds lwIP's default maximum fragment-reassembly lifetime so delayed fragments cannot target a replacement flow.
   Do not try to purge one flow through `ip_reass_tmr()` because it advances every global reassembly timer and cannot selectively remove a tuple.
+  `TunnelFlowPlane` now reserves a pending flow with its handle as the stable adapter token, and keeps that token inaccessible until a post-lock PCB open succeeds and a locked identity recheck commits it.
+  Failed or stale reservations are removed without exposing a handle or quarantining an unused tuple.
+  Normal close and client destruction collect their committed tokens under the state lock and remove PCBs through one bounded adapter operation at a time after releasing it.
+  The direct flow-plane regression proves pending reservations cannot expose their token, committed reservations do, and a policy-generation change rejects a stale reservation.
 
 - [ ] **7. Replace outbound UDP and IPv4 construction with lwIP at the effective inner MTU.**
 

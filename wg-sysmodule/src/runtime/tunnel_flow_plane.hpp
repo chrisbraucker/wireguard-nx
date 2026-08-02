@@ -68,6 +68,24 @@ struct TunnelCompletionDrainOutcome {
     std::uint32_t count{0};
 };
 
+struct TunnelFlowReservation {
+    wgnx::tunnel::OpenConnectedUdpFlowResult result{
+        .status = wgnx::tunnel::ProtocolStatus::MalformedInput,
+        .flow = {},
+        .peer_activation_generation = 0,
+        .routing_policy_generation = 0,
+    };
+    wgnx::tunnel::Ipv4Endpoint local{};
+    wgnx::tunnel::Ipv4Endpoint remote{};
+    TunnelClientId client{};
+    PeerIdentity peer{};
+    std::uint64_t adapter_token{};
+
+    [[nodiscard]] constexpr bool IsReserved() const {
+        return result.status == wgnx::tunnel::ProtocolStatus::Success && adapter_token != 0;
+    }
+};
+
 class TunnelFlowPlane {
   public:
     using CompletionNotifier = void (*)(void* context);
@@ -90,6 +108,16 @@ class TunnelFlowPlane {
             .staging_available = true,
         }
     );
+    [[nodiscard]] TunnelFlowReservation ReserveConnectedUdpFlow(
+        TunnelClientId client,
+        const wgnx::tunnel::OpenConnectedUdpFlowRequest& request,
+        wgnx::platform::ktime_t now,
+        TunnelTransportAvailability availability
+    );
+    [[nodiscard]] bool CommitFlowReservation(const TunnelFlowReservation& reservation);
+    void CancelFlowReservation(const TunnelFlowReservation& reservation);
+    [[nodiscard]] bool GetFlowAdapterToken(TunnelClientId client, wgnx::tunnel::FlowHandle flow, std::uint64_t* out_token) const;
+    [[nodiscard]] std::uint32_t CopyClientAdapterTokens(TunnelClientId client, std::span<std::uint64_t> out) const;
     [[nodiscard]] PreparedTunnelDatagram PrepareSend(
         TunnelClientId client,
         const wgnx::tunnel::DatagramDescriptor& descriptor,
@@ -145,6 +173,7 @@ class TunnelFlowPlane {
     struct FlowSlot {
         bool allocated{false};
         bool closed{false};
+        bool pending{false};
         std::uint8_t client_slot{0xFF};
         std::uint32_t client_generation{0};
         std::uint32_t allocation_generation{0};

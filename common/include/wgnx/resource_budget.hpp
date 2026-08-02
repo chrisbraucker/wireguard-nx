@@ -32,6 +32,7 @@ constexpr inline std::size_t ReceiveWorkSlots = 1;
 constexpr inline std::size_t TimerWorkSlots = ProtocolTimerSlots + 1;
 constexpr inline std::size_t EndpointRequestSlots = 1;
 constexpr inline std::size_t UdpRebindRequestSlots = 1;
+constexpr inline std::size_t UserspaceIpAdapterOperationSlots = 1;
 constexpr inline std::size_t SocketConcurrency = 2;
 
 // Fixed buffers and platform arenas.

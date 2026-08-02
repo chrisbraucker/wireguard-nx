@@ -103,6 +103,6 @@ The stack-chain configuration and footprint baseline live under `tools/baselines
 Updating either is a reviewed budget change, not routine build churn.
 
 The post-Chunk 14 corrective diagnostic queue increased measured static BSS by 8 KiB.
-The Task 6 adapter-owner measurement is 1,395,858 static bytes, a 258,941-byte NSO, and a 260,001-byte NSP against absolute limits of 1,572,864, 294,912, and 294,912 bytes.
+The Task 6 adapter reservation measurement is 1,401,026 static bytes, a 263,469-byte NSO, and a 264,529-byte NSP against absolute limits of 1,572,864, 294,912, and 294,912 bytes.
 This controlled increase includes the fixed lwIP allocator, pbuf pools, protocol tables, and one composed adapter owner.
 The diagnostic queue is intentionally fixed and drops the oldest queued diagnostic line when full.
