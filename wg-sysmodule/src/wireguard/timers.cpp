@@ -66,7 +66,7 @@ void wg_timers_schedule(wg_timers* timers, TimerHook hook, TimerDeadline deadlin
 
     state->pending = true;
     state->deadline = deadline;
-    wgnx::sysmodule::logger::Log(
+    wgnx::sysmodule::logger::LogPacket(
         "WG timer peer='%s' schedule hook=%s deadline_ms=%llu",
         peer_name != nullptr ? peer_name : "<unnamed>",
         GetTimerHookName(hook),
@@ -86,7 +86,7 @@ void wg_timers_cancel(wg_timers* timers, TimerHook hook, const char* peer_name) 
 
     state->pending = false;
     state->deadline = TimerDeadline{};
-    wgnx::sysmodule::logger::Log(
+    wgnx::sysmodule::logger::LogPacket(
         "WG timer peer='%s' cancel hook=%s",
         peer_name != nullptr ? peer_name : "<unnamed>",
         GetTimerHookName(hook)

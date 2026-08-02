@@ -82,22 +82,22 @@ IPv4 addresses are four network-order octets.
 UDP ports are host-order `u16` values because the private ABI is not a raw `sockaddr` representation.
 Every request and response structure is trivially copyable and has compile-time layout checks in the shared header.
 
-| Root command ID | Operation | Input | Output |
-|---:|---|---|---|
-| 0 | `GetTunApiVersion` | None | `Capabilities` with `api_version = 3`. |
-| 1 | `OpenTunnelClient` | None | A shared `ITunnelClient` CMIF object. |
+| Root command ID | Operation          | Input | Output                                 |
+|----------------:|--------------------|-------|----------------------------------------|
+|               0 | `GetTunApiVersion` | None  | `Capabilities` with `api_version = 3`. |
+|               1 | `OpenTunnelClient` | None  | A shared `ITunnelClient` CMIF object.  |
 
-| Client command ID | Operation | Input | Output |
-|---:|---|---|---|
-| 0 | `GetCapabilities` | None | `Capabilities`. |
-| 1 | `GetRoutingPolicySnapshot` | An output `RouteRecord` map-alias array. | `RoutingPolicySnapshot` and copied route count. |
-| 2 | `GetCompletionEvent` | None. | One copy handle for the context-owned manual-clear event. |
-| 3 | `OpenConnectedUdpFlow` | `OpenConnectedUdpFlowRequest`. | `OpenConnectedUdpFlowResult`. |
-| 4 | `SendUdpDatagram` | `DatagramDescriptor` and one input map-alias payload buffer. | One `DatagramDisposition`. |
-| 5 | `SendUdpDatagramBatch` | Input `DatagramDescriptor` map-alias array and one input map-alias payload buffer. | One output `DatagramDisposition` map-alias array entry per descriptor. |
-| 6 | `ReceiveCompletions` | Output `CompletionRecord` map-alias array and one output map-alias payload buffer. | Copied completion count and `ProtocolStatus`. |
-| 7 | `GetFlowState` | `FlowHandle`. | `FlowStateResult`. |
-| 8 | `CloseFlow` | `FlowHandle`. | `ProtocolStatus`. |
+| Client command ID | Operation                  | Input                                                                              | Output                                                                 |
+|------------------:|----------------------------|------------------------------------------------------------------------------------|------------------------------------------------------------------------|
+|                 0 | `GetCapabilities`          | None                                                                               | `Capabilities`.                                                        |
+|                 1 | `GetRoutingPolicySnapshot` | An output `RouteRecord` map-alias array.                                           | `RoutingPolicySnapshot` and copied route count.                        |
+|                 2 | `GetCompletionEvent`       | None.                                                                              | One copy handle for the context-owned manual-clear event.              |
+|                 3 | `OpenConnectedUdpFlow`     | `OpenConnectedUdpFlowRequest`.                                                     | `OpenConnectedUdpFlowResult`.                                          |
+|                 4 | `SendUdpDatagram`          | `DatagramDescriptor` and one input map-alias payload buffer.                       | One `DatagramDisposition`.                                             |
+|                 5 | `SendUdpDatagramBatch`     | Input `DatagramDescriptor` map-alias array and one input map-alias payload buffer. | One output `DatagramDisposition` map-alias array entry per descriptor. |
+|                 6 | `ReceiveCompletions`       | Output `CompletionRecord` map-alias array and one output map-alias payload buffer. | Copied completion count and `ProtocolStatus`.                          |
+|                 7 | `GetFlowState`             | `FlowHandle`.                                                                      | `FlowStateResult`.                                                     |
+|                 8 | `CloseFlow`                | `FlowHandle`.                                                                      | `ProtocolStatus`.                                                      |
 
 `DatagramDescriptor.payload_offset` and `DatagramDescriptor.payload_size` identify a complete payload inside the command's payload buffer.
 The command rejects descriptors whose range is outside that buffer and returns an individual `MalformedInput` disposition rather than consuming adjacent bytes.
@@ -105,21 +105,21 @@ The command rejects descriptors whose range is outside that buffer and returns a
 `ReceiveCompletions` returns only complete datagrams and leaves a datagram queued when the supplied output payload buffer cannot hold it.
 It returns `OutputBufferTooSmall` with no partial record in that case.
 
-| Resource limit or default | Value | Meaning |
-|---|---:|---|
-| Logical client contexts | 4 | Each context has one readiness event and its own flow namespace. |
-| Flows per client | 4 | A context may not consume all global flow capacity. |
-| Global flows | 16 | The product of the client and per-client limits. |
-| Default effective inner MTU | 1420 bytes | Conventional WireGuard interface MTU for a 1500-byte Ethernet path when `[Interface] MTU` is omitted. |
-| Maximum UDP payload | 1392 bytes by default | Active effective inner MTU minus 20 IPv4 header bytes and 8 UDP header bytes. |
-| Outbound packet slabs | 16 | Global payload ownership for client-to-tunnel packets. |
-| Inbound packet slabs | 16 | Global payload ownership for tunnel-to-client packets. |
-| Inbound datagrams per flow | 4 | A per-flow quota in addition to global slab capacity. |
-| Completion queue entries | 16 | Per-client records with reserved or coalesced lifecycle capacity. |
-| Batch entries | 8 | Maximum descriptors and dispositions in one command. |
-| Policy route records | 16 | Maximum normalized routes returned by one snapshot. |
-| Kernel handles per client | 1 | The readiness event copy handle only. |
-| Reverse tuple quarantine records | 16 | One retained tuple slot per maximum live flow. |
+| Resource limit or default        |                 Value | Meaning                                                                                               |
+|----------------------------------|----------------------:|-------------------------------------------------------------------------------------------------------|
+| Logical client contexts          |                     4 | Each context has one readiness event and its own flow namespace.                                      |
+| Flows per client                 |                     4 | A context may not consume all global flow capacity.                                                   |
+| Global flows                     |                    16 | The product of the client and per-client limits.                                                      |
+| Default effective inner MTU      |            1420 bytes | Conventional WireGuard interface MTU for a 1500-byte Ethernet path when `[Interface] MTU` is omitted. |
+| Maximum UDP payload              | 1392 bytes by default | Active effective inner MTU minus 20 IPv4 header bytes and 8 UDP header bytes.                         |
+| Outbound packet slabs            |                    16 | Global payload ownership for client-to-tunnel packets.                                                |
+| Inbound packet slabs             |                    16 | Global payload ownership for tunnel-to-client packets.                                                |
+| Inbound datagrams per flow       |                     4 | A per-flow quota in addition to global slab capacity.                                                 |
+| Completion queue entries         |                    16 | Per-client records with reserved or coalesced lifecycle capacity.                                     |
+| Batch entries                    |                     8 | Maximum descriptors and dispositions in one command.                                                  |
+| Policy route records             |                    16 | Maximum normalized routes returned by one snapshot.                                                   |
+| Kernel handles per client        |                     1 | The readiness event copy handle only.                                                                 |
+| Reverse tuple quarantine records |                    16 | One retained tuple slot per maximum live flow.                                                        |
 
 The fixed limits are deliberately modest for the first measurement path.
 They reserve 32 maximum-payload slab slots across both directions plus 16 reverse-tuple quarantine records before the existing runtime, CMIF object state, and packet headers are counted.

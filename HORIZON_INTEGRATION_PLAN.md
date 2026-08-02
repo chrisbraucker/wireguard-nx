@@ -184,10 +184,12 @@ Keep single-datagram operations as convenience wrappers over the same batch admi
 
 Extend the requester with a controlled UDP workload scenario before introducing BSD interception.
 The scenario targets a defined remote harness endpoint and generates reproducible, self-identifying payloads so that the local requester and remote harness can independently account for accepted, received, echoed, timed-out, malformed, reordered, duplicated, and unexpected datagrams.
+The requester records an aggregate local submission window plus a bounded echo RTT histogram, while the harness records aggregate and per-flow local receive windows.
 Its configuration must cover destination IPv4 address and port, payload size or a defined size sweep, datagram count, pacing or burst shape, concurrent logical sockets, receive deadline, and deterministic payload seed.
 It must support both one-way receive accounting and request-response echo accounting so that throughput, reverse delivery, and queue pressure can be measured separately.
 The default workload must remain conservative enough for routine device regressions, while the bounds must make sustained and burst traffic experiments possible without editing source code.
-The remote harness must log its configured endpoint, workload identity, per-flow counters, byte totals, and observed source tuples so a result can be correlated with sysmodule and MITM diagnostics.
+The remote harness must log its configured endpoint, workload identity, per-flow counters, byte totals, local receive interval, and observed source tuples so a result can be correlated with sysmodule and MITM diagnostics.
+Requester submission rate and harness-observed receiver goodput are independent local-clock values, so no cross-host timestamp subtraction is permitted.
 
 Definition of done:
 
@@ -408,12 +410,12 @@ Larger replies fragment on that peer and are intentionally unsupported until a l
 3. Run one identical 1200-byte, single-flow, paced echo workload in each mode below, using a distinct workload ID for each mode.
    Keep the peer connected in native BSD mode so the physical network condition matches full interception.
 
-   | Mode | Module state | Requester path | Expected harness source |
-   | --- | --- | --- | --- |
-   | Native BSD | WireGuard connected, MITM absent | BSD:S | Device-facing Wi-Fi IPv4 address |
-   | Passive MITM | MITM present, WGNX unavailable or route-uncovered | BSD:S | Device-facing Wi-Fi IPv4 address |
-   | Direct WGNX | WireGuard connected, MITM present | `wgnx:tun` | WireGuard interface IPv4 address |
-   | BSD MITM to WGNX | WireGuard connected, MITM present | BSD:S | WireGuard interface IPv4 address |
+   | Mode             | Module state                                      | Requester path | Expected harness source          |
+   |------------------|---------------------------------------------------|----------------|----------------------------------|
+   | Native BSD       | WireGuard connected, MITM absent                  | BSD:S          | Device-facing Wi-Fi IPv4 address |
+   | Passive MITM     | MITM present, WGNX unavailable or route-uncovered | BSD:S          | Device-facing Wi-Fi IPv4 address |
+   | Direct WGNX      | WireGuard connected, MITM present                 | `wgnx:tun`     | WireGuard interface IPv4 address |
+   | BSD MITM to WGNX | WireGuard connected, MITM present                 | BSD:S          | WireGuard interface IPv4 address |
 
    For every run, retain requester, MITM, WireGuard, and harness summaries.
    The controlled harness must receive exactly the configured sequence set without duplicates or malformed workload records.
@@ -434,7 +436,7 @@ Larger replies fragment on that peer and are intentionally unsupported until a l
    Restart WireGuard, reconnect the peer, restart the MITM, and complete one final full BSD MITM echo.
    Confirm no module sees its own outer transport or control traffic through the BSD MITM and that this final requester process has no stale flow or descriptor state.
 9. Run the measurement helper over the collected reports.
-   Run `python3 tools/summarize_task4.py --check` over the collected requester, harness, MITM, and WGNX logs.
+   Run `python3 tools/summarize_reports.py --check` from `nx-reversing.git` over the collected requester, harness, MITM, and WGNX logs.
    Reconcile configured sends, requester accepted sends and echoes, harness unique received and echoed sequences, MITM local admission and rejection, WGNX admitted sends, inbound deliveries, downstream queue-full events, writable notifications, discarded records, and closure reasons.
    Do not equate requester `EAGAIN` retries with downstream `QueueFull` events because an already locally admitted payload can be resubmitted internally after `Writable`.
    Record the smallest workload that reaches an explicit queue, network, or remote-harness limit together with its throughput and disposition.
@@ -462,6 +464,18 @@ Record requester and remote counters, IPC call count, event wake count, batch fi
 Disable per-packet filesystem logging for these runs and retain only aggregated counters and state-transition diagnostics.
 Replace or augment any remote harness that creates one host thread and synchronous log flush per datagram before treating results as a device ceiling.
 
+#### Auxiliary Private IPC Ceiling Experiment
+
+Use `nx-reversing.git/net-probe` as a temporary accepting `wgnx:tun` sink with the real WireGuard sysmodule stopped.
+Point the existing requester direct-flow and BSD MITM workloads at that sink so the same client, MITM worker, CMIF, batching, completion, and writable paths are measured without peer, cryptographic, outer-UDP, or remote-harness cost.
+The sink must preserve bounded admission and completion behavior, expose aggregate accepted bytes, IPC calls, batch fill, wakeups, queue high-water marks, and explicit rejection dispositions, and produce no production tunnel behavior.
+
+First measure the unchanged IP-sized datagram and batch contract as the baseline.
+Then use a net-probe-only experimental bulk submission operation to send the same total byte count with fewer CMIF calls and explicitly bounded payloads larger than the current inner-IP limit.
+Compare submission rate, sink acceptance rate, call count, queue pressure, and failure disposition across those payload sizes for direct requester and full BSD MITM paths.
+This distinguishes fixed per-call IPC cost from per-datagram copying and MITM-worker cost without widening the production `wgnx:tun` contract or claiming that larger payloads are valid IP datagrams.
+Retain the smallest bounded bulk size sequence that answers whether fewer larger calls materially raise the ceiling, and remove or keep the experiment local to net-probe rather than carrying it into the WireGuard sysmodule.
+
 Definition of done:
 
 - the four modes use the same workload identity, payloads, pacing, and remote endpoint
@@ -474,6 +488,8 @@ Definition of done:
 ### 6. Introduce The WireGuard-Owned Userspace IP Adapter
 
 Urgency: required before TCP or broader IP protocol work.
+
+The actionable implementation sequence is documented in [Task 6 Userspace IP Adapter Implementation Guide](docs/task-6-userspace-ip-adapter.md).
 
 Keep the current UDP flow IPC and MITM socket contract as the behavioral baseline while replacing the manual WireGuard-side UDP and IPv4 adapter.
 Start with a host-only NO_SYS lwIP fit prototype that compiles only the IPv4, pbuf, timeout, netif, UDP, checksum, fragmentation, and reassembly components required by this path.

@@ -323,7 +323,7 @@ EffectBatch PeerRuntime::HandleEvent(const ProtocolTimerExpiredEvent& event) {
         );
         return effects;
     }
-    logger::Log(
+    logger::LogPacket(
         "WG timer peer='%s' fire hook=%s generation=%u",
         peer->name,
         wgnx::wireguard::GetTimerHookName(event.hook),

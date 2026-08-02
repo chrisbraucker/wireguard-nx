@@ -117,7 +117,7 @@ void PeerRuntime::HandleTransportData(const EncryptedDatagramReceivedEvent& even
     OnAuthenticatedPacketTraversal(event.peer, event.timer_facts, effects);
     OnAuthenticatedPacketReceived(event.peer, effects);
     RefreshKeyFreshness(event.peer, event.timer_facts, event.occurred_at, effects);
-    logger::Log(
+    logger::LogPacket(
         "Accepted WG transport data peer=%u activation=%u bytes=%zu payload=%zu source=%s slot=%s counter=%llu promoted=%u",
         event.peer.peer_index.Value(),
         event.peer.activation_generation.Value(),
@@ -142,7 +142,7 @@ void PeerRuntime::HandleTransportData(const EncryptedDatagramReceivedEvent& even
     }
 
     if (result.decrypt.payload_size == 0) {
-        logger::Log(
+        logger::LogPacket(
             "Accepted WG keepalive payload peer=%u activation=%u",
             event.peer.peer_index.Value(),
             event.peer.activation_generation.Value()
@@ -241,7 +241,7 @@ void PeerRuntime::HandleEncryptedDatagram(const EncryptedDatagramReceivedEvent& 
     }
 
     const auto outcome = wgnx::wireguard::noise_handshake_consume_incoming_packet(packet, std::addressof(m_protocol.device), peer);
-    logger::Log(
+    logger::LogPacket(
         "Processed WG handshake datagram peer=%u activation=%u bytes=%zu source=%s outcome=%s",
         event.peer.peer_index.Value(),
         event.peer.activation_generation.Value(),

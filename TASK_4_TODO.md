@@ -34,8 +34,13 @@ The extra downstream event is expected because MITM may first accept a BSD send 
 Per-flow MITM summaries now expose `adapter_queued`, `adapter_queue_full`, and `too_large` alongside downstream acceptance, queue-full, pending, and discarded counters.
 The independent local-admission invariants are `sends = adapter_queued + adapter_queue_full + too_large` and `adapter_queued = accepted + discarded + queued`.
 WireGuard `send_queue_full` remains a downstream pressure-event counter, rather than a requester-visible rejection partition, so it must not be forced to equal requester retry count.
-`nx-reversing.git/tools/summarize_task4.py --check` validates the available per-flow invariants for newly captured summaries.
+`nx-reversing.git/tools/summarize_reports.py --check` validates the available per-flow invariants for newly captured summaries.
 Keep the performance and feasibility gate open for throughput, latency, and the first measured saturation point.
+
+Implementation note: the requester now emits aggregate local submission intervals, echoed bytes, queue-pressure counters, and bounded echo RTT histogram summaries.
+The controlled harness emits matching per-flow and per-workload local receive intervals with byte, unique, duplicate, reorder, and source accounting.
+The report helper renders requester submission rate and harness receiver goodput as separate local-clock values.
+This instrumentation supports the remaining performance measurement without claiming a cross-host one-way timing value.
 
 Implementation note: requester Settings now initializes and resets the expected BSD:S outcome selector from the loaded enum value instead of always displaying the normal-workload choice.
 This makes every stored requester setting visible at first display, including a persisted no-reply or terminal-closure mode.

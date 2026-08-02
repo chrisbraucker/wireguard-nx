@@ -7,6 +7,14 @@ Current state: Userspace WireGuard implementation is able to send and receive IP
 Parts of this project were generated under supervision with AI, make of that what you want.
 
 
+## Progress
+
+WireGuard-NX has a real userspace WireGuard implementation for Atmosphère that establishes peer tunnels and exchanges encrypted inner IPv4 traffic on-device.
+The project has deterministic host and sanitizer coverage, target resource gates, and real-peer validation across handshake and rekeying, recovery, lifecycle, direct flow IPC, and a narrowly scoped BSD MITM UDP path.
+The MITM sysmodule retains Horizon BSD lifecycle and selects passthrough or the private WireGuard flow service with bounded queues and observable backpressure.
+The next major step is a WireGuard-owned userspace IP stack that replaces the current UDP-only adapter and provides correct Layer 3 handling, including fragmentation and reassembly, before TCP support.
+
+
 ## Outline
 
 The repo is split into four main source configurations:
