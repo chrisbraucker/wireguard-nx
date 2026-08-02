@@ -1,5 +1,6 @@
 #pragma once
 
+#include "wgnx/lwip_budget.h"
 #include "wgnx/protocol.hpp"
 
 #include <cstddef>
@@ -70,6 +71,13 @@ constexpr inline std::size_t MaximumUdpRebindQueueBytes = 96;
 constexpr inline std::size_t MaximumHorizonDispatcherBytes = 512;
 constexpr inline std::size_t MaximumEncryptedReceivePumpBytes = KiB(8);
 constexpr inline std::size_t MaximumTunnelFlowPlaneBytes = KiB(80);
+constexpr inline std::size_t LwipMemoryBytes = WGNX_LWIP_MEM_SIZE;
+constexpr inline std::size_t LwipUdpPcbSlots = WGNX_LWIP_UDP_PCBS;
+constexpr inline std::size_t LwipReassemblySlots = WGNX_LWIP_REASSEMBLIES;
+constexpr inline std::size_t LwipReassemblyPbufSlots = WGNX_LWIP_REASSEMBLY_PBUFS;
+constexpr inline std::size_t LwipFragmentPbufSlots = WGNX_LWIP_FRAGMENT_PBUFS;
+constexpr inline std::size_t LwipPbufPoolSlots = WGNX_LWIP_PBUF_POOL_SIZE;
+constexpr inline std::size_t LwipPbufPoolBufferBytes = WGNX_LWIP_PBUF_POOL_BUFSIZE;
 
 static_assert(PeerSlots > 0);
 static_assert(ActivePeerSlots == 1);
@@ -84,5 +92,6 @@ static_assert(MainThreadStackBytes == WorkqueueThreadStackBytes);
 static_assert(WorkqueueThreadStackBytes == TimerThreadStackBytes);
 static_assert(NifmPathThreadStackBytes == WorkqueueThreadStackBytes);
 static_assert(IpcServerThreadStackBytes >= MainThreadStackBytes);
+static_assert(LwipPbufPoolSlots > 2 * LwipReassemblyPbufSlots);
 
 } // namespace wgnx::resource_budget

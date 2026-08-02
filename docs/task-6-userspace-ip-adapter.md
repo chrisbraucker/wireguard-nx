@@ -73,7 +73,7 @@ opaque WireGuard encryption and outer UDP transport
   Keep first-party configuration, platform hooks, wrappers, and tests outside the import, and exclude only vendored files from project style and static-analysis rules.
   The unmodified 2.2.1 import, archive digest, per-file manifest, selected source list, license, and refresh procedure now live in `wg-sysmodule/src/ip/third_party/lwip/`.
 
-- [ ] **3. Define the minimal `NO_SYS=1` configuration and explicit resource limits.**
+- [x] **3. Define the minimal `NO_SYS=1` configuration and explicit resource limits.**
 
   Add first-party `lwipopts.h`, `arch/cc.h`, and `sys_now()` adapters under `wg-sysmodule/src/ip/`, with an injectable host clock and Horizon monotonic-millisecond clock.
   Enable timers, IPv4, UDP, checksums, `IP_FRAG`, `IP_REASSEMBLY`, one netif, internal lwIP memory, and bounded statistics.
@@ -82,6 +82,8 @@ opaque WireGuard encryption and outer UDP transport
   Put C-visible limits in one first-party budget header and expose the same constants to `wgnx/resource_budget.hpp` for compile-time checks.
   Begin measurements with at most 16 UDP PCBs, four concurrent reassemblies, eight retained reassembly pbufs, eight fragment-reference pbufs, a 24-entry 1,600-byte pbuf pool, and a 32 KiB heap, but treat every value as a prototype hypothesis rather than a final requirement.
   Require `PBUF_POOL_SIZE > 2 * IP_REASS_MAX_PBUFS` and accept a final value only after deterministic exhaustion tests and target footprint evidence.
+  `lwipopts.h` now selects this narrow `NO_SYS=1` IPv4 and UDP configuration, while the C-visible budget header and `wgnx::resource_budget` share the initial limits.
+  The vendored sources compile as C in both host and target builds, with `sys_now()` bound to an injectable host clock or Horizon's monotonic millisecond clock.
 
 - [ ] **4. Prove the isolated host adapter before composing it with daemon state.**
 

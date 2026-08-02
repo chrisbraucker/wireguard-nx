@@ -32,10 +32,12 @@ TITLE_ID	:=	010000000000EAD0
 DISTDIR		:=	$(OUTDIR)/atmosphere/contents/$(TITLE_ID)
 DATA		:=	data
 RESOURCES	:=	res
-SOURCES		+=	src src/runtime src/runtime/peer src/platform src/platform/horizon src/wireguard src/wireguard/crypto src/wireguard/crypto/third_party/blake2
+SOURCES		+=	src src/ip src/runtime src/runtime/peer src/platform src/platform/horizon src/wireguard src/wireguard/crypto src/wireguard/crypto/third_party/blake2
 INCLUDES	+=	\
 				../common/include \
 				src \
+				src/ip \
+				src/ip/third_party/lwip/src/include \
 				src/platform/horizon \
 			$(ATMOSPHERE_LIBS_INCLUDE_DIR)/libstratosphere/include \
 			$(ATMOSPHERE_LIBS_INCLUDE_DIR)/libvapours/include
@@ -87,6 +89,7 @@ CPPCHECK ?= cppcheck
 CLANG_TIDY ?= clang-tidy-21
 VERIFY_SOURCES := $(TOPDIR)/../tools/verify_sources.py
 HOST_TEST_CPP_SOURCES := \
+	src/ip/lwip_platform.cpp \
 	src/runtime/debug_probe_runner.cpp \
 	src/runtime/endpoint_resolver.cpp \
 	src/runtime/packet_data_plane.cpp \
@@ -131,19 +134,43 @@ HOST_TEST_CPP_SOURCES := \
 	test/host/failure_composition_tests.cpp \
 	test/host/main.cpp
 HOST_TEST_C_SOURCES := \
+	src/ip/third_party/lwip/src/core/def.c \
+	src/ip/third_party/lwip/src/core/init.c \
+	src/ip/third_party/lwip/src/core/inet_chksum.c \
+	src/ip/third_party/lwip/src/core/ip.c \
+	src/ip/third_party/lwip/src/core/mem.c \
+	src/ip/third_party/lwip/src/core/memp.c \
+	src/ip/third_party/lwip/src/core/netif.c \
+	src/ip/third_party/lwip/src/core/pbuf.c \
+	src/ip/third_party/lwip/src/core/stats.c \
+	src/ip/third_party/lwip/src/core/timeouts.c \
+	src/ip/third_party/lwip/src/core/udp.c \
+	src/ip/third_party/lwip/src/core/ipv4/ip4.c \
+	src/ip/third_party/lwip/src/core/ipv4/ip4_addr.c \
+	src/ip/third_party/lwip/src/core/ipv4/ip4_frag.c \
 	src/wireguard/crypto/monocypher.c \
 	src/wireguard/crypto/third_party/blake2/blake2s-ref.c
+LWIP_CORE_C_SOURCES := def inet_chksum init ip mem memp netif pbuf stats timeouts udp
+LWIP_IPV4_C_SOURCES := ip4 ip4_addr ip4_frag
+LWIP_CORE_OBJECTS := $(addprefix lwip_core_,$(addsuffix .o,$(LWIP_CORE_C_SOURCES)))
+LWIP_IPV4_OBJECTS := $(addprefix lwip_ipv4_,$(addsuffix .o,$(LWIP_IPV4_C_SOURCES)))
+OFILES_SRC := $(LWIP_CORE_OBJECTS) $(LWIP_IPV4_OBJECTS)
 HOST_TEST_C_OBJECT_NAMES := $(notdir $(HOST_TEST_C_SOURCES:.c=.o))
-HOST_TEST_C_HEADERS := $(shell find $(TOPDIR)/src/wireguard/crypto -type f -name '*.h')
+HOST_TEST_C_HEADERS := $(shell find $(TOPDIR)/src/ip $(TOPDIR)/src/wireguard/crypto -type f -name '*.h')
 HOST_TEST_HEADERS := $(shell find $(TOPDIR)/test/host $(TOPDIR)/src $(TOPDIR)/../common/include -type f -name '*.hpp')
 HOST_TEST_C_INCLUDES := \
+	-I$(CURDIR)/../common/include \
+	-I$(CURDIR)/src/ip \
+	-I$(CURDIR)/src/ip/third_party/lwip/src/include \
 	-I$(CURDIR)/src/wireguard/crypto \
 	-I$(CURDIR)/src/wireguard/crypto/third_party/blake2
 HOST_TEST_INCLUDES := \
 	-I$(CURDIR)/test/host \
 	-I$(CURDIR)/test/host/include \
 	-I$(CURDIR)/../common/include \
-	-I$(CURDIR)/src
+	-I$(CURDIR)/src \
+	-I$(CURDIR)/src/ip \
+	-I$(CURDIR)/src/ip/third_party/lwip/src/include
 
 define compile_host_c_sources
 	@for source in $(HOST_TEST_C_SOURCES); do \
@@ -404,6 +431,16 @@ $(OUTPUT).elf	: $(OFILES)
 main.o ipc_service.o: force-build-info
 
 force-build-info:
+
+lwip_core_%.o: $(TOPDIR)/src/ip/third_party/lwip/src/core/%.c
+	$(SILENTMSG) $(notdir $<)
+	$(ADD_COMPILE_COMMAND) add $(CC) "$(CPPFLAGS) $(CFLAGS) -c $< -o $@" $<
+	$(SILENTCMD)$(CC) -MMD -MP -MF $(DEPSDIR)/$*.d $(CPPFLAGS) $(CFLAGS) -c $< -o $@ $(ERROR_FILTER)
+
+lwip_ipv4_%.o: $(TOPDIR)/src/ip/third_party/lwip/src/core/ipv4/%.c
+	$(SILENTMSG) $(notdir $<)
+	$(ADD_COMPILE_COMMAND) add $(CC) "$(CPPFLAGS) $(CFLAGS) -c $< -o $@" $<
+	$(SILENTCMD)$(CC) -MMD -MP -MF $(DEPSDIR)/$*.d $(CPPFLAGS) $(CFLAGS) -c $< -o $@ $(ERROR_FILTER)
 
 $(OFILES)	: $(ATMOSPHERE_LIBRARIES_DIR)/libstratosphere/$(ATMOSPHERE_LIBRARY_DIR)/libstratosphere.a
 
