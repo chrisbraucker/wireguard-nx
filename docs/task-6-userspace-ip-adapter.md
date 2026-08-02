@@ -64,13 +64,14 @@ opaque WireGuard encryption and outer UDP transport
   The target footprint is 1,300,874 static bytes, 251,859-byte NSO, and 252,919-byte NSP, all within the existing gate.
   The API remains at version 3 because lwIP can replace the codec without changing the private flow records or their semantics.
 
-- [ ] **2. Vendor the pinned minimal lwIP source set with reproducible provenance.**
+- [x] **2. Vendor the pinned minimal lwIP source set with reproducible provenance.**
 
   Import lwIP 2.2.1 under `wg-sysmodule/src/ip/third_party/lwip/` from tag `STABLE-2_2_1_RELEASE` at commit `77dcd25a72509eb83f72b033d219b1d40cd8eb95`.
   Preserve upstream `COPYING` and record the BSD-3-Clause license, retrieval URL and date, source archive and imported-file SHA-256 values, selected source list, and refresh procedure in a neighboring `UPSTREAM.md`.
   Retain the complete upstream `src/include/` tree and initially compile `def.c`, `init.c`, `inet_chksum.c`, `ip.c`, `mem.c`, `memp.c`, `netif.c`, `pbuf.c`, `timeouts.c`, `udp.c`, `ipv4/ip4.c`, `ipv4/ip4_addr.c`, and `ipv4/ip4_frag.c`.
   Compile `stats.c` only while `LWIP_STATS=1`, and omit `sys.c` because it provides no implementation in the selected `NO_SYS=1` configuration.
   Keep first-party configuration, platform hooks, wrappers, and tests outside the import, and exclude only vendored files from project style and static-analysis rules.
+  The unmodified 2.2.1 import, archive digest, per-file manifest, selected source list, license, and refresh procedure now live in `wg-sysmodule/src/ip/third_party/lwip/`.
 
 - [ ] **3. Define the minimal `NO_SYS=1` configuration and explicit resource limits.**
 

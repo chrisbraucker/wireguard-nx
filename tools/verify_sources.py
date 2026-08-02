@@ -77,7 +77,8 @@ def owned_sources(root: pathlib.Path, source_roots: list[pathlib.Path], excluded
         if not source_root.is_dir():
             raise RuntimeError(f"source root '{source_root.relative_to(root)}' does not exist")
         for path in source_root.rglob("*"):
-            if path.is_file() and path.suffix in SOURCE_SUFFIXES and path not in excluded_sources:
+            excluded = any(path == excluded_source or excluded_source in path.parents for excluded_source in excluded_sources)
+            if path.is_file() and path.suffix in SOURCE_SUFFIXES and not excluded:
                 sources.append(path)
     return sorted(sources)
 

@@ -9,7 +9,8 @@
     "src/wireguard/crypto/monocypher.h",
     "src/wireguard/crypto/third_party/blake2/blake2-impl.h",
     "src/wireguard/crypto/third_party/blake2/blake2.h",
-    "src/wireguard/crypto/third_party/blake2/blake2s-ref.c"
+    "src/wireguard/crypto/third_party/blake2/blake2s-ref.c",
+    "src/ip/third_party/lwip"
   ],
   "include_dirs": [
     "src",
