@@ -149,6 +149,7 @@ class PeerRuntime {
         ActivationGeneration activation_generation, PacketGeneration packet_generation, DecryptedPacketView& out
     ) const;
     bool CanStageInnerPacket() const;
+    bool CanStageInnerPackets(std::size_t count) const;
     std::size_t StagedInnerPacketCount() const;
 
     // Closed owner transitions used by PeerRegistry. These mutate only
@@ -222,6 +223,7 @@ class PeerRuntime {
     [[nodiscard]] EffectBatch HandleEvent(const EncryptedDatagramReceivedEvent& event);
     [[nodiscard]] EffectBatch HandleEvent(const PendingDatagramSentEvent& event);
     [[nodiscard]] EffectBatch HandleEvent(const InnerPacketStagedEvent& event);
+    [[nodiscard]] EffectBatch HandleEvent(const InnerPacketBatchStagedEvent& event);
     [[nodiscard]] EffectBatch HandleEvent(const ProcessOutboundQueueEvent& event);
     [[nodiscard]] EffectBatch HandleEvent(const ProtocolTimerExpiredEvent& event);
 

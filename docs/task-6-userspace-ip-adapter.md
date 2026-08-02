@@ -133,13 +133,16 @@ opaque WireGuard encryption and outer UDP transport
   Keep the first payload backing-store ceiling at 1,472 bytes, which requires no more than three IPv4 fragments at the supported 576-byte minimum MTU.
   Keep advertising the current MTU-limited maximum until fragmentation passes every gate, then advertise the measured 1,472-byte maximum and return `DatagramTooLarge` above it.
 
-- [ ] **8. Add atomic fragment-batch admission and preserve writable backpressure.**
+- [x] **8. Add atomic fragment-batch admission and preserve writable backpressure.**
 
   Add one all-or-none internal packet-batch admission that validates every collected packet and preflights free peer staging slots under the existing state lock.
   Reuse the current `InnerPacketStagedEvent` path for admitted fragments while producing no more than one outbound-processing effect for the batch.
   Admit no fragment when peer identity is stale or any fragment cannot fit, and map lwIP allocation, collector, operation-slot, or peer-staging pressure to the existing `QueueFull` disposition.
   Record the fragment-slot requirement of a rejected datagram and emit its coalesced `Writable` completion only when the peer queue can admit the entire retry atomically.
   Preserve current descriptor ordering and do not convert recoverable data pressure into a CMIF transport failure.
+  `PacketDataPlane` now validates an internal batch before it is dispatched, and the peer runtime preflights its staging capacity before copying any fragment.
+  The batch event stages every packet before it runs outbound processing once, so a later fragment cannot leave a partial datagram in the peer queue.
+  The deterministic packet-plane regression fills staging to two free slots, proves that a three-packet batch leaves that queue unchanged, and then admits a two-packet batch.
 
 - [ ] **9. Fence decrypted-packet admission before any packet enters lwIP.**
 

@@ -139,6 +139,21 @@ struct InnerPacketStagedEvent {
     wgnx::platform::ktime_t occurred_at{0};
 };
 
+constexpr inline std::size_t MaximumInnerPacketBatchSize = 3;
+
+struct InnerPacketBatchStagedEvent {
+    PeerIdentity peer{};
+    std::array<SynchronousPacketView, MaximumInnerPacketBatchSize> packets{
+        SynchronousPacketView{std::span<const std::uint8_t>{}},
+        SynchronousPacketView{std::span<const std::uint8_t>{}},
+        SynchronousPacketView{std::span<const std::uint8_t>{}},
+    };
+    std::array<PacketId, MaximumInnerPacketBatchSize> packet_ids{};
+    std::uint8_t count{};
+    TimerFacts timer_facts{};
+    wgnx::platform::ktime_t occurred_at{0};
+};
+
 struct ProcessOutboundQueueEvent {
     PeerIdentity peer{};
     TimerFacts timer_facts{};
@@ -165,13 +180,15 @@ using PeerEvent = std::variant<
     EncryptedDatagramReceivedEvent,
     PendingDatagramSentEvent,
     InnerPacketStagedEvent,
+    InnerPacketBatchStagedEvent,
     ProcessOutboundQueueEvent,
     ProtocolTimerExpiredEvent>;
 
 template <typename Event> consteval std::size_t MaxEffectsForEvent() {
     if constexpr (std::is_same_v<Event, ActivationRequestedEvent> || std::is_same_v<Event, NetworkPathRequestStartedEvent> ||
                   std::is_same_v<Event, EndpointResolvedEvent> || std::is_same_v<Event, PendingDatagramSentEvent> ||
-                  std::is_same_v<Event, InnerPacketStagedEvent> || std::is_same_v<Event, ProcessOutboundQueueEvent>) {
+                  std::is_same_v<Event, InnerPacketStagedEvent> || std::is_same_v<Event, InnerPacketBatchStagedEvent> ||
+                  std::is_same_v<Event, ProcessOutboundQueueEvent>) {
         return 5;
     } else if constexpr (std::is_same_v<Event, TransportFailureEvent>) {
         return 6;
@@ -359,6 +376,7 @@ static_assert(MaxEffectsForEvent<UdpRebindRequestedEvent>() <= EffectBatch::Capa
 static_assert(MaxEffectsForEvent<EncryptedDatagramReceivedEvent>() <= EffectBatch::Capacity);
 static_assert(MaxEffectsForEvent<PendingDatagramSentEvent>() <= EffectBatch::Capacity);
 static_assert(MaxEffectsForEvent<InnerPacketStagedEvent>() <= EffectBatch::Capacity);
+static_assert(MaxEffectsForEvent<InnerPacketBatchStagedEvent>() <= EffectBatch::Capacity);
 static_assert(MaxEffectsForEvent<ProcessOutboundQueueEvent>() <= EffectBatch::Capacity);
 static_assert(MaxEffectsForEvent<ProtocolTimerExpiredEvent>() <= EffectBatch::Capacity);
 

@@ -58,6 +58,65 @@ PacketSubmissionOutcome PacketDataPlane::SubmitInternalIpPacket(
     );
 }
 
+PacketSubmissionOutcome PacketDataPlane::SubmitInternalIpPacketBatch(
+    std::span<const SynchronousPacketView> packets,
+    const TimerFacts& timer_facts,
+    wgnx::platform::ktime_t occurred_at,
+    EffectBatch& out_effects
+) {
+    out_effects.Clear();
+    PacketSubmissionOutcome outcome{.status = PacketSubmissionStatus::InternalError};
+    if (packets.empty() || packets.size() > MaximumInnerPacketBatchSize) {
+        outcome.status = PacketSubmissionStatus::MalformedPacket;
+        return outcome;
+    }
+    for (const auto& packet : packets) {
+        outcome.packet_size += packet.Bytes().size();
+        outcome.validation = wireguard::ValidateInnerIpPacket(packet.Bytes());
+        if (outcome.validation != wireguard::InnerIpValidationError::None) {
+            outcome.status = PacketSubmissionStatus::MalformedPacket;
+            return outcome;
+        }
+    }
+    PeerPacketStateSnapshot peer{};
+    if (!m_coordinator.SnapshotPacketState(peer)) {
+        outcome.status = PacketSubmissionStatus::TunnelUnavailable;
+        return outcome;
+    }
+    outcome.has_peer = true;
+    outcome.peer = peer.identity;
+    outcome.peer_state = peer.state;
+    if ((peer.state != wgnx::PeerRuntimeState::ResolvingEndpoint && peer.state != wgnx::PeerRuntimeState::Handshaking &&
+         peer.state != wgnx::PeerRuntimeState::Active) ||
+        !peer.protocol_instantiated) {
+        outcome.status = PacketSubmissionStatus::TunnelUnavailable;
+        return outcome;
+    }
+    if (peer.staged_packet_count + packets.size() > wgnx::wireguard::PeerStagedPacketCapacity) {
+        outcome.status = PacketSubmissionStatus::QueueFull;
+        return outcome;
+    }
+    InnerPacketBatchStagedEvent event{
+        .peer = outcome.peer,
+        .count = static_cast<std::uint8_t>(packets.size()),
+        .timer_facts = timer_facts,
+        .occurred_at = occurred_at,
+    };
+    for (std::size_t index = 0; index < packets.size(); ++index) {
+        event.packets[index] = packets[index];
+        event.packet_ids[index] = AllocatePacketId();
+        if (index == 0) {
+            outcome.packet_id = event.packet_ids[index];
+        }
+    }
+    out_effects = m_coordinator.Dispatch(event);
+    if (m_coordinator.SnapshotPacketState(peer) && peer.identity == outcome.peer) {
+        outcome.queue_depth = peer.staged_packet_count;
+    }
+    outcome.status = PacketSubmissionStatus::Queued;
+    return outcome;
+}
+
 PacketSubmissionOutcome PacketDataPlane::SubmitValidatedPacket(
     std::span<const std::uint8_t> packet,
     ProcessId consumer_id,

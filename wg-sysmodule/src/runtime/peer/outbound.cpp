@@ -143,8 +143,12 @@ bool PeerRuntime::StartHandshake(const PeerIdentity& identity, const TimerFacts&
 }
 
 bool PeerRuntime::CanStageInnerPacket() const {
+    return CanStageInnerPackets(1);
+}
+
+bool PeerRuntime::CanStageInnerPackets(std::size_t count) const {
     const auto* peer = ProtocolPeer();
-    return peer != nullptr && peer->staged_outbound_packets.Size() < peer->staged_outbound_packets.CapacityValue();
+    return peer != nullptr && count <= peer->staged_outbound_packets.CapacityValue() - peer->staged_outbound_packets.Size();
 }
 
 std::size_t PeerRuntime::ClearStagedInnerPackets() {
@@ -325,6 +329,37 @@ EffectBatch PeerRuntime::HandleEvent(const InnerPacketStagedEvent& event) {
     std::ranges::copy(event.packet.Bytes(), m_staging_record.bytes.begin());
     if (peer->staged_outbound_packets.Push(m_staging_record) == wgnx::wireguard::QueuePushResult::Full) {
         return effects;
+    }
+    if (IsInTransportState()) {
+        ProcessOutboundQueue(event.peer, event.timer_facts, event.occurred_at, effects);
+    }
+    return effects;
+}
+
+EffectBatch PeerRuntime::HandleEvent(const InnerPacketBatchStagedEvent& event) {
+    EffectBatch effects{};
+    auto* peer = ProtocolPeer();
+    if (!IsCurrentActivation(event.peer.activation_generation) || !AcceptsInnerPacketSubmission() || peer == nullptr || event.count == 0 ||
+        event.count > event.packets.size() || !CanStageInnerPackets(event.count)) {
+        return effects;
+    }
+    for (std::size_t index = 0; index < event.count; ++index) {
+        const auto packet = event.packets[index].Bytes();
+        if (packet.empty() || packet.size() > m_staging_record.bytes.size()) {
+            return {};
+        }
+    }
+    for (std::size_t index = 0; index < event.count; ++index) {
+        const auto packet = event.packets[index].Bytes();
+        m_staging_record = {};
+        m_staging_record.packet_id = event.packet_ids[index].Value();
+        m_staging_record.activation_generation = event.peer.activation_generation.Value();
+        m_staging_record.peer_index = event.peer.peer_index.Value();
+        m_staging_record.size = static_cast<std::uint16_t>(packet.size());
+        std::ranges::copy(packet, m_staging_record.bytes.begin());
+        if (peer->staged_outbound_packets.Push(m_staging_record) == wgnx::wireguard::QueuePushResult::Full) {
+            std::abort();
+        }
     }
     if (IsInTransportState()) {
         ProcessOutboundQueue(event.peer, event.timer_facts, event.occurred_at, effects);

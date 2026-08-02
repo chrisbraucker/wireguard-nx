@@ -128,6 +128,37 @@ void TestPacketDataPlane(TestContext& context) {
         "packet data plane ownership transfer did not clear both traffic directions"
     );
 
+    const std::array<SynchronousPacketView, 3> fragments = {
+        SynchronousPacketView{Ipv4Packet},
+        SynchronousPacketView{Ipv4Packet},
+        SynchronousPacketView{Ipv4Packet},
+    };
+    static_cast<void>(coordinator.ClearStagedInnerPackets(PeerIndex{0}));
+    for (std::size_t index = 0; index < wgnx::wireguard::PeerStagedPacketCapacity - 2; ++index) {
+        WGNX_TEST_REQUIRE(
+            context,
+            data_plane.SubmitInternalIpPacket(Ipv4Packet, timer_facts, 4'050 + static_cast<wgnx::platform::ktime_t>(index), effects)
+                    .status == PacketSubmissionStatus::Queued,
+            "packet data plane did not fill peer staging for atomic batch rejection"
+        );
+    }
+    const auto atomic_rejection = data_plane.SubmitInternalIpPacketBatch(fragments, timer_facts, 4'100, effects);
+    static_cast<void>(coordinator.SnapshotPacketState(peer));
+    const bool rejected_without_partial_stage = peer.staged_packet_count == wgnx::wireguard::PeerStagedPacketCapacity - 2;
+    static_cast<void>(coordinator.ClearStagedInnerPackets(PeerIndex{0}));
+    const std::array<SynchronousPacketView, 2> admitted_fragments = {
+        SynchronousPacketView{Ipv4Packet},
+        SynchronousPacketView{Ipv4Packet},
+    };
+    const auto atomic_admission = data_plane.SubmitInternalIpPacketBatch(admitted_fragments, timer_facts, 4'200, effects);
+    static_cast<void>(coordinator.SnapshotPacketState(peer));
+    WGNX_TEST_REQUIRE(
+        context,
+        atomic_rejection.status == PacketSubmissionStatus::QueueFull && rejected_without_partial_stage &&
+            atomic_admission.status == PacketSubmissionStatus::Queued && peer.staged_packet_count == 2,
+        "packet data plane did not atomically reject or admit an internal packet batch"
+    );
+
     const auto stale_packet = data_plane.DeliverDecryptedPacket(identity, Ipv4Packet);
     WGNX_TEST_REQUIRE(
         context,
