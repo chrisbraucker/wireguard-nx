@@ -612,7 +612,7 @@ Without a target, the benchmark can describe overhead but cannot make the requir
 
 ### CMIF Client-Context Mechanics
 
-Urgency: critical during Step 1 and before freezing the current `TunApiVersion` contract.
+Urgency: critical during Step 1 and before any eventual stable release of the `TunApiVersion` contract.
 
 Prototype the exact libstratosphere object and cloned-session shape used to share one logical tunnel-client context across concurrent MITM workers.
 The prototype must demonstrate final-reference cleanup, bounded kernel-handle use, and no lost completion wake during concurrent drain and close.
