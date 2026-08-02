@@ -88,6 +88,73 @@ Separate follow-up on-device observations, which are not present in the archived
 At 1,380 bytes per datagram, 1 ms pacing offers approximately 1.38 MB/s before protocol overhead and remains below the measured direct ceiling.
 The first pressure point therefore lies between 1 ms pacing and an unpaced burst, but the requester's millisecond pacing granularity cannot locate it more precisely.
 
+## 2026-08-02 Controlled Network And Native HTTP Baselines
+
+These controls measure the local network and the custom Nintendo-shaped HTTP speed-test listener rather than the tunnel.
+They establish that the earlier tunnel measurements are not limited by the host-side Wi-Fi network.
+
+| Path and workload                                    |                           Result |
+|------------------------------------------------------|---------------------------------:|
+| A -- router -- B, bi- and unidirectional             |                     111-112 MB/s |
+| A ~~ router -- B, unidirectional in either direction |                         ~65 MB/s |
+| A ~~ router -- B, bidirectional                      | 15-30 MB/s with high fluctuation |
+
+In the table `--` depicts wired GBit ethernet, and `~~` depicts unspecified WiFi.
+
+The mixed-path bidirectional reduction is expected Wi-Fi airtime contention and is not comparable to full-duplex Ethernet.
+
+iPerf3 commands used were
+
+```bash
+# host A, ethernet
+iperf3 -c host-b%en0 -p 7777 -f M [--bidir]
+# host A, wifi
+iperf3 -c host-b%wl0 -p 7777 -f M [--bidir]
+
+# host B
+iperf3 -s -p 7777 -f M
+```
+
+The controlled HTTP listener produced the following host results.
+
+| Path       |   Download | 1 MiB upload |                     30 MiB upload |
+|------------|-----------:|-------------:|----------------------------------:|
+| Wired host | 103.4 MB/s |    29.4 MB/s | Approximately the download result |
+| Wi-Fi host |  51.7 MB/s |    12.0 MB/s | Approximately the download result |
+
+The switch-native speed test was emulated with the following commands
+
+```bash
+# Upload file creation, i = 1 or i = 30
+head -c "$(( $i * 1024**2 ))" /dev/urandom > upload.bin
+# Upload
+curl -sS -o /dev/null \
+    --noproxy '*' \
+    --resolve ctest-ul-lp1.cdn.nintendo.net:80:192.168.100.2 \
+    --data-binary @upload.bin \
+    -H 'Content-Type: application/octet-stream' \
+    -H 'Expect:' \
+    -w 'upload=%{speed_upload} B/s total=%{time_total}s http=%{http_code}\n' \
+    http://ctest-ul-lp1.cdn.nintendo.net/1m
+
+# Download
+curl -sS -o /dev/null \
+    --noproxy '*' \
+    --resolve ctest-dl-lp1.cdn.nintendo.net:80:192.168.100.2 \
+    -H 'Content-Type: application/octet-stream' \
+    -w 'upload=%{speed_download} B/s total=%{time_total}s http=%{http_code}\n' \
+    http://ctest-dl-lp1.cdn.nintendo.net/30m
+```
+
+The short upload is dominated by TCP setup and slow start, while the 30 MiB result tracks sustained download throughput.
+
+On the Switch, three controlled native speed test runs from the Settings UI averaged at 11.22 MB/s from the listener for download and 85.9 Mbit/s, or approximately 10.7 MB/s, from the Switch.
+The corresponding upload logs were 12.44 MB/s at the listener and 43.3 Mbit/s, or approximately 5.4 MB/s, at the Switch.
+The listener deliberately measures only the handler's transfer loop and excludes connection setup and middleware, so its values are an optimistic server-side boundary rather than end-to-end client throughput.
+The Switch download measurements agree closely enough to establish an approximately 10.7 MB/s sustained HTTP receive baseline.
+The current 1 MiB native upload is a short-transfer measurement and does not establish a sustained Switch transmit or Wi-Fi ceiling.
+A Switch-initiated 30 MiB upload to `ctest-ul-lp1.cdn.nintendo.net/1m`, measured at both endpoints, is required before comparing sustained one-way direct-WGNX and MITM-WGNX throughput with the native control.
+
 ## Task 5 Interpretation And Next Measurement
 
 The corrected results support a Task 5 feasibility conclusion of viable with optimization.
