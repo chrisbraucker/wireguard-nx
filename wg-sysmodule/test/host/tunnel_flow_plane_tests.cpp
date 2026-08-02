@@ -496,10 +496,10 @@ void TestTunnelFlowPlane(TestContext& context) {
     std::array<FlowHandle, MaximumFlowsPerClient> bounded_flows{};
     bool all_bounded_flows_opened = true;
     for (std::size_t index = 0; index < bounded_flows.size(); ++index) {
-        auto request = open;
-        request.diagnostic_tag = index;
+        auto flow_request = open;
+        flow_request.diagnostic_tag = index;
         const auto opened_flow =
-            bounded_plane.OpenConnectedUdpFlow(bounded_client, request, 202 + static_cast<wgnx::platform::ktime_t>(index));
+            bounded_plane.OpenConnectedUdpFlow(bounded_client, flow_request, 202 + static_cast<wgnx::platform::ktime_t>(index));
         bounded_flows[index] = opened_flow.flow;
         all_bounded_flows_opened = all_bounded_flows_opened && opened_flow.status == ProtocolStatus::Success;
     }

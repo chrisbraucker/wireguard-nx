@@ -200,7 +200,7 @@ opaque WireGuard encryption and outer UDP transport
   An adapter reset records whether it discarded retained fragment work and emits one lifecycle summary after the lwIP operation finishes, without packet-path filesystem logging.
   Existing flow, completion, peer-staging, dispatcher, and WireGuard counters remain their current owners and are reconciled with these adapter counters during device validation.
 
-- [ ] **13. Extend local regression, sanitizer, fuzz, static, stack, and resource gates.**
+- [x] **13. Extend local regression, sanitizer, fuzz, static, stack, and resource gates.**
 
   Update protocol ABI tests to the selected Task 6 version and retain route, client, handle, tombstone, completion, writable, leak-protection, packet-plane, protocol, recovery, timer, and lifecycle tests against production code.
   Compare lwIP-emitted packets by endpoints, lengths, checksums, MTU, fragment offsets, more-fragments flags, reconstructed payload, and disposition rather than incidental packet identifiers.
@@ -209,6 +209,9 @@ opaque WireGuard encryption and outer UDP transport
   Extend the existing inner-IPv4 fuzz target or add one adapter-input fuzz target that resets retained state between cases and executes the production wrapper.
   Run `test`, `test-sanitize`, `test-warnings`, supported `test-tsan`, `fuzz-run`, `format-check`, `static-check`, `tidy-check`, the target build, stack checks, and the resource report before device deployment.
   Vendor files may be excluded from style tools, but every first-party wrapper, ownership transition, budget, and disposition mapping remains in the aggregate gate.
+  The 52-case host suite now covers owner timeout coalescing, tagged input, lwIP reassembly, zero UDP checksums, retained fragments, callback pressure, adapter accounting, and generation-checked callback delivery.
+  `adapter_input_fuzz` executes the production adapter and its vendored lwIP source set with a fresh reset around every input.
+  On 2026-08-02, warnings, ASan/UBSan, TSAN, static analysis, clang-tidy, formatting, a five-second run per fuzz target, target build, stack checks, and the footprint gate passed.
 
 - [ ] **14. Cut over once, remove the handmade codec, and synchronize architecture documentation.**
 

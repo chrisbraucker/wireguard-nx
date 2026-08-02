@@ -75,11 +75,14 @@ FUZZ_DIR	:= $(OUTDIR)/fuzz
 FUZZ_SECONDS	?= 30
 FUZZ_COMMON_FLAGS := -std=c++2b -Wall -Wextra -Wpedantic -Werror -g -O1 \
 	-fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer
+FUZZ_C_FLAGS := -std=c11 -Wall -Wextra -Wpedantic -Werror -g -O1 \
+	-fsanitize=fuzzer-no-link,address,undefined -fno-omit-frame-pointer
 FUZZ_CONFIG_ENDPOINT_TARGET := $(FUZZ_DIR)/config_endpoint_fuzz
 FUZZ_MESSAGE_ADMISSION_TARGET := $(FUZZ_DIR)/message_admission_fuzz
 FUZZ_INNER_IP_TARGET := $(FUZZ_DIR)/inner_ip_fuzz
+FUZZ_ADAPTER_INPUT_TARGET := $(FUZZ_DIR)/adapter_input_fuzz
 FUZZ_RESOLVER_RESULT_TARGET := $(FUZZ_DIR)/resolver_result_fuzz
-FUZZ_TARGETS := $(FUZZ_CONFIG_ENDPOINT_TARGET) $(FUZZ_MESSAGE_ADMISSION_TARGET) $(FUZZ_INNER_IP_TARGET) $(FUZZ_RESOLVER_RESULT_TARGET)
+FUZZ_TARGETS := $(FUZZ_CONFIG_ENDPOINT_TARGET) $(FUZZ_MESSAGE_ADMISSION_TARGET) $(FUZZ_INNER_IP_TARGET) $(FUZZ_ADAPTER_INPUT_TARGET) $(FUZZ_RESOLVER_RESULT_TARGET)
 FUZZ_CORPUS_DIR := $(TOPDIR)/test/fuzz/corpus
 FUZZ_GENERATED_CORPUS_DIR := $(FUZZ_DIR)/corpus
 FUZZ_GENERATED_CONFIG_CORPUS_DIR := $(FUZZ_GENERATED_CORPUS_DIR)/config_endpoint
@@ -193,6 +196,12 @@ FUZZ_MESSAGE_ADMISSION_SOURCES := \
 FUZZ_INNER_IP_SOURCES := \
 	src/wireguard/inner_packet.cpp \
 	test/fuzz/inner_ip_fuzz.cpp
+FUZZ_ADAPTER_INPUT_SOURCES := \
+	src/ip/lwip_platform.cpp \
+	src/ip/userspace_ip_adapter.cpp \
+	test/fuzz/adapter_input_fuzz.cpp
+FUZZ_ADAPTER_INPUT_OBJECT_DIR := $(FUZZ_DIR)/adapter-input-objects
+FUZZ_ADAPTER_INPUT_C_OBJECTS := $(addprefix $(FUZZ_ADAPTER_INPUT_OBJECT_DIR)/,$(HOST_TEST_C_OBJECT_NAMES))
 FUZZ_RESOLVER_RESULT_SOURCES := \
 	src/platform/resolver_serialization.cpp \
 	test/fuzz/resolver_result_fuzz.cpp
@@ -308,6 +317,7 @@ fuzz-run: fuzz fuzz-seeds
 	@$(FUZZ_CONFIG_ENDPOINT_TARGET) $(FUZZ_GENERATED_CONFIG_CORPUS_DIR) $(FUZZ_CORPUS_DIR)/config_endpoint -max_total_time=$(FUZZ_SECONDS) -max_len=16384
 	@$(FUZZ_MESSAGE_ADMISSION_TARGET) $(FUZZ_GENERATED_CORPUS_DIR)/message_admission -max_total_time=$(FUZZ_SECONDS) -max_len=66000
 	@$(FUZZ_INNER_IP_TARGET) $(FUZZ_GENERATED_CORPUS_DIR)/inner_ip -max_total_time=$(FUZZ_SECONDS) -max_len=66000
+	@$(FUZZ_ADAPTER_INPUT_TARGET) $(FUZZ_GENERATED_CORPUS_DIR)/inner_ip -max_total_time=$(FUZZ_SECONDS) -max_len=1600
 	@$(FUZZ_RESOLVER_RESULT_TARGET) $(FUZZ_GENERATED_CORPUS_DIR)/resolver_result -max_total_time=$(FUZZ_SECONDS) -max_len=16384
 
 fuzz-seeds: $(FUZZ_SEED_WRITER)
@@ -386,6 +396,16 @@ $(FUZZ_INNER_IP_TARGET): Makefile $(FUZZ_INNER_IP_SOURCES) $(FUZZ_HEADERS)
 	@[ -d $(FUZZ_DIR) ] || mkdir -p $(FUZZ_DIR)
 	@command -v $(FUZZ_CXX) >/dev/null || { echo "missing FUZZ_CXX=$(FUZZ_CXX); install Clang with libFuzzer support or set FUZZ_CXX" >&2; exit 1; }
 	@$(FUZZ_CXX) $(FUZZ_COMMON_FLAGS) $(HOST_TEST_INCLUDES) $(addprefix $(CURDIR)/,$(FUZZ_INNER_IP_SOURCES)) -o $(FUZZ_INNER_IP_TARGET)
+
+$(FUZZ_ADAPTER_INPUT_TARGET): Makefile $(FUZZ_ADAPTER_INPUT_SOURCES) $(HOST_TEST_C_SOURCES) $(FUZZ_HEADERS)
+	@[ -d $(FUZZ_DIR) ] || mkdir -p $(FUZZ_DIR)
+	@[ -d $(FUZZ_ADAPTER_INPUT_OBJECT_DIR) ] || mkdir -p $(FUZZ_ADAPTER_INPUT_OBJECT_DIR)
+	@command -v $(FUZZ_CXX) >/dev/null || { echo "missing FUZZ_CXX=$(FUZZ_CXX); install Clang with libFuzzer support or set FUZZ_CXX" >&2; exit 1; }
+	@for source in $(HOST_TEST_C_SOURCES); do \
+		object=$(FUZZ_ADAPTER_INPUT_OBJECT_DIR)/$$(basename "$$source" .c).o; \
+		$(FUZZ_CXX) $(FUZZ_C_FLAGS) $(HOST_TEST_C_INCLUDES) -x c -c $(CURDIR)/$$source -o $$object || exit $$?; \
+	done
+	@$(FUZZ_CXX) $(FUZZ_COMMON_FLAGS) $(HOST_TEST_INCLUDES) $(addprefix $(CURDIR)/,$(FUZZ_ADAPTER_INPUT_SOURCES)) $(FUZZ_ADAPTER_INPUT_C_OBJECTS) -o $(FUZZ_ADAPTER_INPUT_TARGET)
 
 $(FUZZ_RESOLVER_RESULT_TARGET): Makefile $(FUZZ_RESOLVER_RESULT_SOURCES) $(FUZZ_HEADERS)
 	@[ -d $(FUZZ_DIR) ] || mkdir -p $(FUZZ_DIR)
