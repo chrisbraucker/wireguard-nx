@@ -372,7 +372,41 @@ void DaemonRuntime::UserspaceIpAdapterWorkCallback(wgnx::platform::work_struct* 
 void DaemonRuntime::DeliverUserspaceIpInputLocked(const runtime::UserspaceIpAdapterOwner::Operation& operation) {
     const auto packet = m_userspace_ip_adapter_owner.InputPacketLocked(operation.ticket);
     AMS_ABORT_UNLESS(!packet.empty());
-    const auto tunnel_delivery = m_tunnel_flow_plane.DeliverDecryptedIpv4Packet(operation.peer, packet, GetRuntimeNowNs());
+    const auto datagrams = m_userspace_ip_adapter_owner.InboundDatagramsLocked(operation.ticket);
+    if (datagrams.empty() && (m_userspace_ip_adapter_owner.HadInboundDatagramRejectionLocked(operation.ticket) ||
+                              m_userspace_ip_adapter_owner.HadInputRejectionLocked(operation.ticket) ||
+                              m_userspace_ip_adapter_owner.HasPendingInboundFragmentLocked(operation.ticket))) {
+        logger::LogPacket(
+            "Dropped decrypted inner packet peer=%u activation=%u reason=lwip_input_unclaimed",
+            operation.peer.peer_index.Value(),
+            operation.peer.activation_generation.Value()
+        );
+        return;
+    }
+    if (datagrams.empty()) {
+        const auto delivery = m_packet_data_plane.DeliverDecryptedPacket(operation.peer, packet);
+        if (delivery.status == runtime::PacketDeliveryStatus::Queued) {
+            logger::Log(
+                "Queued decrypted inner packet id=%llu peer=%u activation=%u bytes=%zu depth=%zu",
+                static_cast<unsigned long long>(delivery.packet_id.Value()),
+                operation.peer.peer_index.Value(),
+                operation.peer.activation_generation.Value(),
+                packet.size(),
+                delivery.queue_depth
+            );
+        }
+        return;
+    }
+    AMS_ABORT_UNLESS(datagrams.size() == 1);
+    const auto& datagram = datagrams.front();
+    const auto tunnel_delivery = m_tunnel_flow_plane.DeliverInboundUdpDatagram(
+        operation.peer,
+        operation.policy_generation,
+        datagram.token,
+        datagram.remote,
+        std::span<const std::uint8_t>(datagram.payload).first(datagram.size),
+        GetRuntimeNowNs()
+    );
     switch (tunnel_delivery.disposition) {
     case runtime::TunnelInboundDisposition::Delivered:
         logger::LogPacket(
@@ -407,18 +441,12 @@ void DaemonRuntime::DeliverUserspaceIpInputLocked(const runtime::UserspaceIpAdap
         return;
     case runtime::TunnelInboundDisposition::NotClaimed:
     case runtime::TunnelInboundDisposition::DroppedUnknown:
-        break;
-    }
-    const auto delivery = m_packet_data_plane.DeliverDecryptedPacket(operation.peer, packet);
-    if (delivery.status == runtime::PacketDeliveryStatus::Queued) {
-        logger::Log(
-            "Queued decrypted inner packet id=%llu peer=%u activation=%u bytes=%zu depth=%zu",
-            static_cast<unsigned long long>(delivery.packet_id.Value()),
+        logger::LogPacket(
+            "Dropped tunnel UDP delivery peer=%u activation=%u reason=unknown_adapter_flow",
             operation.peer.peer_index.Value(),
-            operation.peer.activation_generation.Value(),
-            packet.size(),
-            delivery.queue_depth
+            operation.peer.activation_generation.Value()
         );
+        return;
     }
 }
 

@@ -87,12 +87,28 @@ void TestUserspaceIpAdapter(TestContext& context) {
     WGNX_TEST_REQUIRE(
         context,
         adapter.Input(std::span<const std::uint8_t>(reversed[1].bytes).first(reversed[1].size)) == UserspaceIpResult::Success &&
+            adapter.HasPendingInboundFragment() &&
             adapter.Input(std::span<const std::uint8_t>(reversed[0].bytes).first(reversed[0].size)) == UserspaceIpResult::Success &&
             adapter.Input(std::span<const std::uint8_t>(reversed[2].bytes).first(reversed[2].size)) == UserspaceIpResult::Success &&
             adapter.InboundDatagrams().size() == 1 && adapter.InboundDatagrams().front().token == Flow.token &&
             adapter.InboundDatagrams().front().size == payload.size() &&
             std::equal(payload.begin(), payload.end(), adapter.InboundDatagrams().front().payload.begin()),
         "adapter did not reassemble out-of-order fragments into the matching PCB"
+    );
+
+    auto zero_checksum = reversed;
+    zero_checksum[0].bytes[Ipv4HeaderBytes + 6] = 0;
+    zero_checksum[0].bytes[Ipv4HeaderBytes + 7] = 0;
+    adapter.ClearInboundDatagrams();
+    WGNX_TEST_REQUIRE(
+        context,
+        adapter.Input(std::span<const std::uint8_t>(zero_checksum[1].bytes).first(zero_checksum[1].size)) == UserspaceIpResult::Success &&
+            adapter.Input(std::span<const std::uint8_t>(zero_checksum[0].bytes).first(zero_checksum[0].size)) ==
+                UserspaceIpResult::Success &&
+            adapter.Input(std::span<const std::uint8_t>(zero_checksum[2].bytes).first(zero_checksum[2].size)) ==
+                UserspaceIpResult::Success &&
+            adapter.InboundDatagrams().size() == 1 && adapter.InboundDatagrams().front().size == payload.size(),
+        "adapter did not accept a zero IPv4 UDP checksum after reassembly"
     );
 
     adapter.ClearInboundDatagrams();

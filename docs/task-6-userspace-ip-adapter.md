@@ -159,9 +159,9 @@ opaque WireGuard encryption and outer UDP transport
   `RuntimeEffectExecutor` now performs only AllowedIPs authorization and debug-probe handling before it copies a packet into the owner’s one bounded input slot.
   The slot records peer identity, current flow-policy generation, and adapter epoch.
   The adapter worker revalidates all three under the daemon mutex directly before its post-lock `netif->input` call and explicitly drops stale input without allocating a pbuf.
-  After a successful temporary input, the worker performs the existing manual delivery decision from the owner-held copy so this safety cutover preserves current behavior until item 10 replaces that parser with the copied lwIP UDP callback result.
+  Item 10 consumes the copied lwIP UDP callback result after this fence.
 
-- [ ] **10. Replace inbound UDP parsing while preserving the existing consumer order.**
+- [x] **10. Replace inbound UDP parsing while preserving the existing consumer order.**
 
   Preserve the current decrypted receive order of `AllowedIPs` authorization, debug-probe handling, tunnel UDP delivery, and fallback to the generic `PacketDataPlane` consumer.
   Let lwIP retain valid IPv4 fragments until reassembly, and let a connected UDP PCB claim only a datagram matching its current local and remote tuple.
@@ -170,6 +170,11 @@ opaque WireGuard encryption and outer UDP transport
   Publish exactly one `InboundDatagram` completion for a valid reassembly and never retain a callback pointer or pbuf reference in project state.
   Pass complete valid packets that are not claimed as tunnel UDP, including unmatched UDP, to the existing raw packet consumer rather than dropping them or misrepresenting them as a flow delivery.
   Preserve zero-checksum IPv4 UDP acceptance and give invalid checksums, malformed lengths, unsupported options, invalid fragments, oversized payloads, unknown tuples, stale state, and completion pressure deterministic bounded dispositions.
+  The lwIP UDP callback now copies only one bounded datagram collector record and reports explicit callback-copy or capacity rejection without entering daemon state.
+  After `netif->input` returns, the daemon validates the callback token, current client and flow allocation, peer identity, policy generation, remote endpoint, inbound quota, and completion reservation before it publishes one completion.
+  Unfragmented packets without a callback record remain on the existing generic raw-packet path, while callback rejection, stale flow state, unknown tokens, completion pressure, and a fragment still retained by lwIP are dropped with a bounded disposition.
+  The existing raw packet boundary accepts complete packets only, so this UDP-only slice does not publish an unmatched fragment before reassembly and does not add a raw-PCB path for reassembled non-flow traffic.
+  The production decrypted receive path no longer calls the handmade IPv4 or UDP parser, which remains temporarily for isolated host regression coverage until the Task 6 codec deletion.
 
 - [ ] **11. Integrate timeout scheduling, adapter epochs, and lifecycle resets.**
 

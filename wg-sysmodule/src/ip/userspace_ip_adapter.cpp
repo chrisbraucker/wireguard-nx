@@ -5,6 +5,7 @@ extern "C" {
 #include <lwip/ip4.h>
 #include <lwip/ip4_frag.h>
 #include <lwip/pbuf.h>
+#include <lwip/stats.h>
 #include <lwip/timeouts.h>
 }
 
@@ -184,7 +185,19 @@ UserspaceIpResult UserspaceIpAdapter::Input(std::span<const std::uint8_t> packet
         pbuf_free(input);
         return UserspaceIpResult::QueueFull;
     }
+    const u32_t previous_fragment_receives = lwip_stats.ip_frag.recv;
+    const u32_t previous_ip_errors = lwip_stats.ip.err;
+    const u32_t previous_ip_length_errors = lwip_stats.ip.lenerr;
+    const u32_t previous_ip_checksum_errors = lwip_stats.ip.chkerr;
+    const u32_t previous_ip_option_errors = lwip_stats.ip.opterr;
+    const u32_t previous_udp_length_errors = lwip_stats.udp.lenerr;
+    const u32_t previous_udp_checksum_errors = lwip_stats.udp.chkerr;
     const err_t delivered = m_netif.input(input, &m_netif);
+    m_input_rejected = lwip_stats.ip.err != previous_ip_errors || lwip_stats.ip.lenerr != previous_ip_length_errors ||
+                       lwip_stats.ip.chkerr != previous_ip_checksum_errors || lwip_stats.ip.opterr != previous_ip_option_errors ||
+                       lwip_stats.udp.lenerr != previous_udp_length_errors || lwip_stats.udp.chkerr != previous_udp_checksum_errors;
+    m_pending_inbound_fragment =
+        !m_input_rejected && lwip_stats.ip_frag.recv != previous_fragment_receives && m_inbound_datagram_count == 0;
     if (delivered == ERR_OK) {
         return UserspaceIpResult::Success;
     }
@@ -204,6 +217,9 @@ void UserspaceIpAdapter::ClearOutboundPackets() {
 
 void UserspaceIpAdapter::ClearInboundDatagrams() {
     m_inbound_datagram_count = 0;
+    m_inbound_datagram_rejected = false;
+    m_input_rejected = false;
+    m_pending_inbound_fragment = false;
 }
 
 std::span<const UserspaceIpPacket> UserspaceIpAdapter::OutboundPackets() const {
@@ -212,6 +228,18 @@ std::span<const UserspaceIpPacket> UserspaceIpAdapter::OutboundPackets() const {
 
 std::span<const UserspaceIpDatagram> UserspaceIpAdapter::InboundDatagrams() const {
     return std::span<const UserspaceIpDatagram>(m_inbound_datagrams).first(m_inbound_datagram_count);
+}
+
+bool UserspaceIpAdapter::HadInboundDatagramRejection() const {
+    return m_inbound_datagram_rejected;
+}
+
+bool UserspaceIpAdapter::HadInputRejection() const {
+    return m_input_rejected;
+}
+
+bool UserspaceIpAdapter::HasPendingInboundFragment() const {
+    return m_pending_inbound_fragment;
 }
 
 bool UserspaceIpAdapter::IsInitialized() const {
@@ -263,10 +291,12 @@ err_t UserspaceIpAdapter::Output(netif* netif, pbuf* packet, const ip4_addr_t*) 
 
 void UserspaceIpAdapter::Receive(void* context, udp_pcb*, pbuf* packet, const ip_addr_t* remote, u16_t remote_port) {
     auto* flow = static_cast<FlowSlot*>(context);
-    if (flow != nullptr && flow->owner != nullptr && flow->active && packet != nullptr && remote != nullptr &&
-        packet->tot_len <= wgnx::tunnel::MaximumUdpPayloadStorageBytes) {
+    if (flow != nullptr && flow->owner != nullptr && flow->active && packet != nullptr && remote != nullptr) {
         UserspaceIpAdapter& adapter = *flow->owner;
-        if (adapter.m_inbound_datagram_count != adapter.m_inbound_datagrams.size()) {
+        if (packet->tot_len > wgnx::tunnel::MaximumUdpPayloadStorageBytes ||
+            adapter.m_inbound_datagram_count == adapter.m_inbound_datagrams.size()) {
+            adapter.m_inbound_datagram_rejected = true;
+        } else {
             UserspaceIpDatagram& datagram = adapter.m_inbound_datagrams[adapter.m_inbound_datagram_count];
             if (pbuf_copy_partial(packet, datagram.payload.data(), packet->tot_len, 0) == packet->tot_len) {
                 datagram.token = flow->token;
@@ -283,6 +313,8 @@ void UserspaceIpAdapter::Receive(void* context, udp_pcb*, pbuf* packet, const ip
                 };
                 datagram.size = packet->tot_len;
                 ++adapter.m_inbound_datagram_count;
+            } else {
+                adapter.m_inbound_datagram_rejected = true;
             }
         }
     }

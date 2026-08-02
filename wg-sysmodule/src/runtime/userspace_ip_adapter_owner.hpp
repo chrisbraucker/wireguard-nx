@@ -67,6 +67,10 @@ class UserspaceIpAdapterOwner {
     [[nodiscard]] std::optional<ip::UserspaceIpResult> TakeResultLocked(OperationTicket ticket);
     [[nodiscard]] std::span<const ip::UserspaceIpPacket> OutboundPacketsLocked(OperationTicket ticket) const;
     [[nodiscard]] std::span<const std::uint8_t> InputPacketLocked(OperationTicket ticket) const;
+    [[nodiscard]] std::span<const ip::UserspaceIpDatagram> InboundDatagramsLocked(OperationTicket ticket) const;
+    [[nodiscard]] bool HadInboundDatagramRejectionLocked(OperationTicket ticket) const;
+    [[nodiscard]] bool HadInputRejectionLocked(OperationTicket ticket) const;
+    [[nodiscard]] bool HasPendingInboundFragmentLocked(OperationTicket ticket) const;
     [[nodiscard]] std::uint32_t AdapterEpochLocked() const;
     void CancelLocked(OperationTicket ticket);
 

@@ -314,7 +314,8 @@ void TestTunnelFlowPlane(TestContext& context) {
     reply[Ipv4HeaderSize + 6] ^= 0xFFU;
     const auto malformed = plane.DeliverDecryptedIpv4Packet(first_peer, std::span<const std::uint8_t>(reply.data(), reply_size), 149);
     reply[Ipv4HeaderSize + 6] ^= 0xFFU;
-    const auto delivered = plane.DeliverDecryptedIpv4Packet(first_peer, std::span<const std::uint8_t>(reply.data(), reply_size), 150);
+    const auto delivered =
+        plane.DeliverInboundUdpDatagram(first_peer, plane.PolicyGeneration(), opened.flow.value, open.remote, Payload, 150);
     std::array<CompletionRecord, MaximumBatchEntries> completions{};
     std::array<std::uint8_t, MaximumUdpPayloadStorageBytes> received_payload{};
     const auto received = plane.ReceiveCompletions(client, completions, received_payload);
@@ -373,7 +374,8 @@ void TestTunnelFlowPlane(TestContext& context) {
     );
 
     const auto close_status = plane.CloseFlow(client, opened.flow, 180);
-    const auto delayed = plane.DeliverDecryptedIpv4Packet(first_peer, std::span<const std::uint8_t>(reply.data(), second_reply_size), 181);
+    const auto delayed =
+        plane.DeliverInboundUdpDatagram(first_peer, plane.PolicyGeneration(), opened.flow.value, open.remote, Payload, 181);
     const auto replacement = plane.OpenConnectedUdpFlow(client, open, 182);
     WGNX_TEST_REQUIRE(
         context,

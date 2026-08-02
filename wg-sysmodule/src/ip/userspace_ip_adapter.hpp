@@ -64,6 +64,9 @@ class UserspaceIpAdapter {
     void ClearInboundDatagrams();
     [[nodiscard]] std::span<const UserspaceIpPacket> OutboundPackets() const;
     [[nodiscard]] std::span<const UserspaceIpDatagram> InboundDatagrams() const;
+    [[nodiscard]] bool HadInboundDatagramRejection() const;
+    [[nodiscard]] bool HadInputRejection() const;
+    [[nodiscard]] bool HasPendingInboundFragment() const;
     [[nodiscard]] bool IsInitialized() const;
     [[nodiscard]] std::uint32_t Epoch() const;
     [[nodiscard]] static std::uint32_t InitializationCountForTests();
@@ -91,6 +94,9 @@ class UserspaceIpAdapter {
     std::uint8_t m_outbound_packet_count{};
     std::uint8_t m_inbound_datagram_count{};
     std::uint32_t m_epoch{};
+    bool m_inbound_datagram_rejected{};
+    bool m_input_rejected{};
+    bool m_pending_inbound_fragment{};
     bool m_netif_added{};
 };
 

@@ -139,6 +139,14 @@ class TunnelFlowPlane {
     [[nodiscard]] TunnelInboundOutcome DeliverDecryptedIpv4Packet(
         const PeerIdentity& peer, std::span<const std::uint8_t> packet, wgnx::platform::ktime_t now
     );
+    [[nodiscard]] TunnelInboundOutcome DeliverInboundUdpDatagram(
+        const PeerIdentity& peer,
+        std::uint32_t policy_generation,
+        std::uint64_t adapter_token,
+        const wgnx::tunnel::Ipv4Endpoint& remote,
+        std::span<const std::uint8_t> payload,
+        wgnx::platform::ktime_t now
+    );
     void InvalidatePeerActivation(const PeerIdentity& peer, wgnx::tunnel::FlowTerminalReason reason, wgnx::platform::ktime_t now);
 
   private:

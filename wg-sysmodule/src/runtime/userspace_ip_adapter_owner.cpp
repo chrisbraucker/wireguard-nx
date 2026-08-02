@@ -195,6 +195,32 @@ std::span<const std::uint8_t> UserspaceIpAdapterOwner::InputPacketLocked(Operati
     return std::span<const std::uint8_t>(m_data_operation.payload).first(m_data_operation.payload_size);
 }
 
+std::span<const ip::UserspaceIpDatagram> UserspaceIpAdapterOwner::InboundDatagramsLocked(OperationTicket ticket) const {
+    if (!ticket.IsValid() || ticket.generation != m_data_operation.generation || !m_data_operation.complete ||
+        m_data_operation.operation.kind != OperationKind::InputPacket || m_data_operation.result != ip::UserspaceIpResult::Success) {
+        return {};
+    }
+    return m_adapter.InboundDatagrams();
+}
+
+bool UserspaceIpAdapterOwner::HadInboundDatagramRejectionLocked(OperationTicket ticket) const {
+    return ticket.IsValid() && ticket.generation == m_data_operation.generation && m_data_operation.complete &&
+           m_data_operation.operation.kind == OperationKind::InputPacket && m_data_operation.result == ip::UserspaceIpResult::Success &&
+           m_adapter.HadInboundDatagramRejection();
+}
+
+bool UserspaceIpAdapterOwner::HadInputRejectionLocked(OperationTicket ticket) const {
+    return ticket.IsValid() && ticket.generation == m_data_operation.generation && m_data_operation.complete &&
+           m_data_operation.operation.kind == OperationKind::InputPacket && m_data_operation.result == ip::UserspaceIpResult::Success &&
+           m_adapter.HadInputRejection();
+}
+
+bool UserspaceIpAdapterOwner::HasPendingInboundFragmentLocked(OperationTicket ticket) const {
+    return ticket.IsValid() && ticket.generation == m_data_operation.generation && m_data_operation.complete &&
+           m_data_operation.operation.kind == OperationKind::InputPacket && m_data_operation.result == ip::UserspaceIpResult::Success &&
+           m_adapter.HasPendingInboundFragment();
+}
+
 std::uint32_t UserspaceIpAdapterOwner::AdapterEpochLocked() const {
     return m_adapter.Epoch();
 }

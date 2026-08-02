@@ -146,6 +146,8 @@ void TunnelFlowPlane::RefreshPolicy(const TunnelPolicyInput& input, wgnx::platfo
         }
         if (!m_policy_available || flow.peer != m_policy_peer || SelectRoute(flow.remote) == nullptr) {
             CloseFlowSlot(index, wgnx::tunnel::FlowTerminalReason::PolicyInvalidated, now, true);
+        } else {
+            flow.policy_generation = m_policy_generation;
         }
     }
     EnqueuePolicyChanged();
@@ -566,6 +568,62 @@ wgnx::tunnel::ProtocolStatus TunnelFlowPlane::CloseFlow(
         CloseFlowSlot(slot, wgnx::tunnel::FlowTerminalReason::ClientClosed, now, true);
     }
     return wgnx::tunnel::ProtocolStatus::Success;
+}
+
+TunnelInboundOutcome TunnelFlowPlane::DeliverInboundUdpDatagram(
+    const PeerIdentity& peer,
+    std::uint32_t policy_generation,
+    std::uint64_t adapter_token,
+    const wgnx::tunnel::Ipv4Endpoint& remote,
+    std::span<const std::uint8_t> payload,
+    wgnx::platform::ktime_t now
+) {
+    TunnelInboundOutcome outcome{};
+    if (adapter_token == 0 || payload.size() > wgnx::tunnel::MaximumUdpPayloadStorageBytes) {
+        outcome.disposition = TunnelInboundDisposition::DroppedMalformed;
+        return outcome;
+    }
+    for (std::size_t index = 0; index < m_flows.size(); ++index) {
+        FlowSlot& flow = m_flows[index];
+        if (!flow.allocated || MakeFlowHandle(index, flow).value != adapter_token) {
+            continue;
+        }
+        outcome.client = {.slot = flow.client_slot, .generation = flow.client_generation};
+        outcome.flow = MakeFlowHandle(index, flow);
+        outcome.payload_size = payload.size();
+        if (flow.closed || flow.pending || FindClient(outcome.client) == nullptr || flow.peer != peer ||
+            flow.policy_generation != policy_generation || m_policy_generation != policy_generation || m_policy_peer != peer ||
+            !EndpointEqual(flow.remote, remote)) {
+            outcome.disposition = TunnelInboundDisposition::DroppedStale;
+            return outcome;
+        }
+        if (flow.inbound_occupancy >= wgnx::tunnel::MaximumInboundDatagramsPerFlow) {
+            ++flow.inbound_dropped;
+            outcome.disposition = TunnelInboundDisposition::DroppedQueueFull;
+            return outcome;
+        }
+        const std::uint8_t slab_slot = AllocateInboundSlab();
+        if (slab_slot == InvalidSlabSlot) {
+            ++flow.inbound_dropped;
+            outcome.disposition = TunnelInboundDisposition::DroppedQueueFull;
+            return outcome;
+        }
+        InboundSlab& slab = m_inbound_slabs[slab_slot];
+        slab.size = static_cast<std::uint16_t>(payload.size());
+        std::memcpy(slab.bytes.data(), payload.data(), payload.size());
+        ++flow.inbound_occupancy;
+        flow.last_activity_at = now;
+        outcome.disposition =
+            EnqueueDataCompletion(index, slab_slot) ? TunnelInboundDisposition::Delivered : TunnelInboundDisposition::DroppedQueueFull;
+        if (outcome.disposition == TunnelInboundDisposition::Delivered) {
+            ++flow.inbound_delivered;
+        } else {
+            ++flow.inbound_dropped;
+        }
+        return outcome;
+    }
+    outcome.disposition = TunnelInboundDisposition::DroppedUnknown;
+    return outcome;
 }
 
 TunnelInboundOutcome TunnelFlowPlane::DeliverDecryptedIpv4Packet(

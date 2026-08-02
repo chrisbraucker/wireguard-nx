@@ -47,7 +47,8 @@ The IPC and WireGuard wire contracts remain unchanged; the separation is interna
   The daemon then atomically stages the complete packet batch through the peer-owned WireGuard queue before it executes resulting effects.
   A decrypted input records peer identity, flow-policy generation, and adapter epoch in that same bounded slot.
   The owner worker revalidates those identities immediately before its post-lock lwIP input call, so stale input never allocates a pbuf or joins a new reassembly epoch.
-  The worker retains the packet copy until it completes the current delivery path, and item 10 replaces that temporary delivery path with copied UDP callback results.
+  After lwIP returns and releases pbufs, the worker validates copied UDP callback records against flow and client state before publishing an inbound completion.
+  Unfragmented packets with no callback record use the existing raw packet consumer, while callback-copy pressure, stale callback records, and fragments still retained by lwIP are dropped.
 - `runtime/timer_scheduler.*` owns concrete Horizon protocol and auxiliary timers. `runtime/timer_schedule.*` tracks bounded physical arm and queued delivery state independently of Horizon.
   Expirations retain their complete token until delivered through the coordinator; the scheduler contains no peer policy.
   Arm and cancellation effects likewise retain the token allocated under the runtime lock, preventing delayed platform work from changing a newer physical schedule.
