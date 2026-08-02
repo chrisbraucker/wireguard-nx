@@ -52,7 +52,7 @@ opaque WireGuard encryption and outer UDP transport
 
 ## Implementation Checklist
 
-- [ ] **1. Record the behavioral, resource, performance, and device baselines and choose the Task 6 API shape.**
+- [x] **1. Record the behavioral, resource, performance, and device baselines and choose the Task 6 API shape.**
 
   Run `make -C wg-sysmodule verify`, retain the current resource report, and preserve passing protocol, flow-plane, packet-plane, lifecycle, and Task 4 device results.
   Treat ordered batch dispositions, route selection, leak protection, stale handles, tuple quarantine, completion reservation, `QueueFull`, `Writable`, zero-checksum IPv4 UDP acceptance, and completion-drain atomicity as correctness baselines rather than API compatibility requirements.
@@ -60,6 +60,9 @@ opaque WireGuard encryption and outer UDP transport
   Increment `TunApiVersion` whenever an incompatible Task 6 contract change lands.
   Update every in-tree producer and consumer in the same cutover and do not retain compatibility branches for older private API versions.
   Preserve the MITM `EMSGSIZE` contract and record the direct-WGNX and full-MITM throughput and latency baselines from `docs/PERF.md`.
+  Baseline verification on 2026-08-02 passes the 50-case host suite, warnings, ASan/UBSan, format, static analysis, clang-tidy, target build, stack checks, and footprint report.
+  The target footprint is 1,300,874 static bytes, 251,859-byte NSO, and 252,919-byte NSP, all within the existing gate.
+  The API remains at version 3 because lwIP can replace the codec without changing the private flow records or their semantics.
 
 - [ ] **2. Vendor the pinned minimal lwIP source set with reproducible provenance.**
 

@@ -28,7 +28,7 @@
         {"label": "handshake startup", "match": "PeerRuntime::StartHandshake("},
         {"label": "initiation staging", "match": "PeerRuntime::PrepareHandshakeInitiation("},
         {"label": "initiation creation", "match": "noise_handshake_create_initiation("},
-        {"label": "transition logging", "match": "logger.cpp:183:6:"}
+        {"label": "transition logging", "match": "logger.cpp:188:6:)"}
       ]
     },
     {
@@ -43,7 +43,7 @@
         {"label": "peer dispatch", "match": "EffectBatch wgnx::sysmodule::runtime::PeerRuntime::Handle("},
         {"label": "send completion event", "match": "PeerRuntime::HandleEvent(const wgnx::sysmodule::runtime::PendingDatagramSentEvent&)"},
         {"label": "authenticated traversal", "match": "PeerRuntime::OnAuthenticatedPacketTraversal("},
-        {"label": "transition logging", "match": "logger.cpp:183:6:"}
+        {"label": "transition logging", "match": "logger.cpp:188:6:)"}
       ]
     },
     {
@@ -57,7 +57,7 @@
         {"label": "coordinator dispatch", "match": "EffectBatch wgnx::sysmodule::runtime::RuntimeCoordinator::Dispatch("},
         {"label": "peer dispatch", "match": "EffectBatch wgnx::sysmodule::runtime::PeerRuntime::Handle("},
         {"label": "NIFM state policy", "match": "PeerRuntime::HandleEvent(const wgnx::sysmodule::runtime::NetworkPathAvailabilityChangedEvent&)"},
-        {"label": "observation logging", "match": "logger.cpp:183:6:"}
+        {"label": "observation logging", "match": "logger.cpp:188:6:)"}
       ]
     },
     {
@@ -72,7 +72,7 @@
         {"label": "encrypted admission", "match": "PeerRuntime::HandleEncryptedDatagram("},
         {"label": "transport handling", "match": "PeerRuntime::HandleTransportData("},
         {"label": "session establishment", "match": "noise_handshake_begin_session("},
-        {"label": "transition logging", "match": "logger.cpp:183:6:"}
+        {"label": "transition logging", "match": "logger.cpp:188:6:)"}
       ]
     },
     {
@@ -84,7 +84,7 @@
         {"label": "effect iteration", "match": "void wgnx::sysmodule::runtime::RuntimeEffectExecutor::Execute(const"},
         {"label": "effect drain", "match": "DrainEffectBatches(const EffectBatch&, ExecuteEffect&&)"},
         {"label": "UDP datagram send", "match": "RuntimeEffectExecutor::ExecutePendingDatagramSend("},
-        {"label": "send logging", "match": "logger.cpp:183:6:"}
+        {"label": "send logging", "match": "logger.cpp:188:6:)"}
       ]
     },
     {
@@ -96,7 +96,7 @@
         {"label": "failure commit", "match": "EncryptedReceivePump::CommitReceiveFailure("},
         {"label": "effect iteration", "match": "void wgnx::sysmodule::runtime::RuntimeEffectExecutor::Execute(const"},
         {"label": "effect drain", "match": "DrainEffectBatches(const EffectBatch&, ExecuteEffect&&)"},
-        {"label": "failure logging", "match": "logger.cpp:183:6:"}
+        {"label": "failure logging", "match": "logger.cpp:188:6:)"}
       ]
     }
   ]
