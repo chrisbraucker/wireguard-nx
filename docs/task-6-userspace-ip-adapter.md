@@ -93,7 +93,7 @@ opaque WireGuard encryption and outer UDP transport
   `UserspaceIpAdapter` now owns one netif, UDP PCBs, pbuf input and output, fragment reset, and copied result collectors without daemon callbacks.
   Its deterministic host test covers one-time initialization, connected PCB creation and removal, bounded PCB exhaustion, unfragmented output, three-fragment output, out-of-order reassembly, reset, expiry, and collector backpressure.
 
-- [ ] **5. Add one bounded serialized adapter owner on the existing submission lane.**
+- [x] **5. Add one bounded serialized adapter owner on the existing submission lane.**
 
   Introduce `UserspaceIpAdapter` as the sole owner of lwIP initialization, the IPv4 netif, UDP PCBs, pbuf activity, fragment state, result collectors, counters, and operation slots.
   Do not expose `netif`, `udp_pcb`, `pbuf`, or lwIP error types outside this boundary.
@@ -103,6 +103,11 @@ opaque WireGuard encryption and outer UDP transport
   A CMIF command may wait for accepted adapter work only after releasing `DaemonRuntime::m_state_mutex`, and shutdown must complete every accepted waiter exactly once.
   Process one `SendUdpDatagramBatch` as one adapter operation while preserving the current admitted-prefix and queue-full-suffix ordering.
   Restrict lwIP callbacks to copying into adapter-owned collectors without calling daemon state, packet-plane, peer, logging, CMIF, or platform-I/O code.
+  `UserspaceIpAdapterOwner` now owns the adapter and coalesces its configuration and reset controls until the dedicated `wgnx-submit` work item runs them.
+  The owner is composed by `DaemonRuntime`, and shutdown queues its reset through that same work item.
+  The explicit daemon-runtime ceiling is now 288 KiB to cover the measured bounded adapter owner instead of hiding this storage in an untracked allocation.
+  The target footprint is 1,395,858 static bytes, a 258,941-byte NSO, and a 260,001-byte NSP within the reviewed 1,572,864, 294,912, and 294,912-byte limits.
+  The host test proves that configuration is not executed by the producer, repeated configuration coalesces to one owner execution, and reset leaves the one-time lwIP initialization intact.
 
 - [ ] **6. Integrate flow reservation, PCB lifetime, closure, and tuple quarantine.**
 

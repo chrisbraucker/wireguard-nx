@@ -7,6 +7,7 @@
 #include "tunnel_protocol_tests.hpp"
 #include "tunnel_flow_plane_tests.hpp"
 #include "userspace_ip_adapter_tests.hpp"
+#include "userspace_ip_adapter_owner_tests.hpp"
 
 #include <array>
 
@@ -71,6 +72,7 @@ int main() {
         TestCase{"horizon.tunnel-protocol-contract", wgnx::test::TestTunnelProtocolContract},
         TestCase{"horizon.tunnel-flow-plane", wgnx::test::TestTunnelFlowPlane},
         TestCase{"ip.userspace-adapter", wgnx::test::TestUserspaceIpAdapter},
+        TestCase{"runtime.userspace-ip-adapter-owner", wgnx::test::TestUserspaceIpAdapterOwner},
     };
 
     return wgnx::test::RunTests(tests);

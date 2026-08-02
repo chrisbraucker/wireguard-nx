@@ -63,6 +63,7 @@ class UserspaceIpAdapter {
     void ClearInboundDatagrams();
     [[nodiscard]] std::span<const UserspaceIpPacket> OutboundPackets() const;
     [[nodiscard]] std::span<const UserspaceIpDatagram> InboundDatagrams() const;
+    [[nodiscard]] bool IsInitialized() const;
     [[nodiscard]] std::uint32_t Epoch() const;
     [[nodiscard]] static std::uint32_t InitializationCountForTests();
 

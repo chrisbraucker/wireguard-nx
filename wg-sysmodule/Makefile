@@ -95,6 +95,7 @@ HOST_TEST_CPP_SOURCES := \
 	src/runtime/endpoint_resolver.cpp \
 	src/runtime/packet_data_plane.cpp \
 	src/runtime/tunnel_flow_plane.cpp \
+	src/runtime/userspace_ip_adapter_owner.cpp \
 	src/runtime/peer/peer_runtime.cpp \
 	src/runtime/peer/activation.cpp \
 	src/runtime/peer/inbound.cpp \
@@ -132,6 +133,7 @@ HOST_TEST_CPP_SOURCES := \
 	test/host/timer_tests.cpp \
 	test/host/tunnel_protocol_tests.cpp \
 	test/host/tunnel_flow_plane_tests.cpp \
+	test/host/userspace_ip_adapter_owner_tests.cpp \
 	test/host/userspace_ip_adapter_tests.cpp \
 	test/host/failure_composition_tests.cpp \
 	test/host/main.cpp

@@ -26,6 +26,7 @@ void HorizonDispatcher::Initialize(const HorizonDispatcherCallbacks& callbacks) 
     wgnx::platform::INIT_WORK(&m_resolve_work, m_callbacks.resolve);
     wgnx::platform::INIT_WORK(&m_debug_submission_work, m_callbacks.submit_debug_payload);
     wgnx::platform::INIT_WORK(&m_inner_submission_work, m_callbacks.submit_inner_packet);
+    wgnx::platform::INIT_WORK(&m_userspace_ip_adapter_work, m_callbacks.run_userspace_ip_adapter);
     wgnx::platform::INIT_WORK(&m_transmit_work, m_callbacks.transmit_datagram);
     wgnx::platform::INIT_WORK(&m_receive_work, m_callbacks.receive);
     m_initialized = true;
@@ -68,6 +69,12 @@ void HorizonDispatcher::QueueDebugPayloadSubmission() {
 void HorizonDispatcher::QueueInnerPacketSubmission() {
     if (m_submission_queue != nullptr) {
         static_cast<void>(Queue(m_submission_queue, &m_inner_submission_work, "submission"));
+    }
+}
+
+void HorizonDispatcher::QueueUserspaceIpAdapter() {
+    if (m_submission_queue != nullptr) {
+        static_cast<void>(Queue(m_submission_queue, &m_userspace_ip_adapter_work, "submission"));
     }
 }
 

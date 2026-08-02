@@ -65,12 +65,13 @@ constexpr inline std::size_t MaximumPeerRuntimeBytes = KiB(24);
 constexpr inline std::size_t MaximumPeerRegistryBytes = KiB(192);
 constexpr inline std::size_t MaximumTimerSchedulerBytes = 1600;
 // The direct-flow plane owns bounded IPv4/UDP and completion slabs.
-constexpr inline std::size_t MaximumDaemonRuntimeBytes = KiB(272);
+constexpr inline std::size_t MaximumDaemonRuntimeBytes = KiB(288);
 constexpr inline std::size_t MaximumEndpointResolverBytes = 512;
 constexpr inline std::size_t MaximumUdpRebindQueueBytes = 96;
 constexpr inline std::size_t MaximumHorizonDispatcherBytes = 512;
 constexpr inline std::size_t MaximumEncryptedReceivePumpBytes = KiB(8);
 constexpr inline std::size_t MaximumTunnelFlowPlaneBytes = KiB(80);
+constexpr inline std::size_t MaximumUserspaceIpAdapterOwnerBytes = KiB(16);
 constexpr inline std::size_t LwipMemoryBytes = WGNX_LWIP_MEM_SIZE;
 constexpr inline std::size_t LwipUdpPcbSlots = WGNX_LWIP_UDP_PCBS;
 constexpr inline std::size_t LwipReassemblySlots = WGNX_LWIP_REASSEMBLIES;

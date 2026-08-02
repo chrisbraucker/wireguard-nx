@@ -11,6 +11,7 @@ struct HorizonDispatcherCallbacks {
     wgnx::platform::work_func_t resolve{nullptr};
     wgnx::platform::work_func_t submit_debug_payload{nullptr};
     wgnx::platform::work_func_t submit_inner_packet{nullptr};
+    wgnx::platform::work_func_t run_userspace_ip_adapter{nullptr};
     wgnx::platform::work_func_t transmit_datagram{nullptr};
     wgnx::platform::work_func_t receive{nullptr};
 };
@@ -30,6 +31,7 @@ class HorizonDispatcher {
     void QueueResolve();
     void QueueDebugPayloadSubmission();
     void QueueInnerPacketSubmission();
+    void QueueUserspaceIpAdapter();
     void QueuePendingDatagramTransmit();
     void QueueReceive();
     void QueueTimerWork(wgnx::platform::work_struct* work);
@@ -50,6 +52,7 @@ class HorizonDispatcher {
     wgnx::platform::work_struct m_resolve_work{};
     wgnx::platform::work_struct m_debug_submission_work{};
     wgnx::platform::work_struct m_inner_submission_work{};
+    wgnx::platform::work_struct m_userspace_ip_adapter_work{};
     wgnx::platform::work_struct m_transmit_work{};
     wgnx::platform::work_struct m_receive_work{};
     bool m_initialized{false};

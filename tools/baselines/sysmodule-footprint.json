@@ -10,8 +10,8 @@
     "nsp": 208263
   },
   "limits": {
-    "static_total": 1310720,
-    "nso": 262144,
-    "nsp": 270336
+    "static_total": 1572864,
+    "nso": 294912,
+    "nsp": 294912
   }
 }

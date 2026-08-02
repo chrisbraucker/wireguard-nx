@@ -24,7 +24,11 @@ Any increase must be reviewed against the Switch system-module memory budget and
 | Resolver scratch           |            1 operation |                 16 KiB |
 | Filesystem heap            |                1 arena |                 32 KiB |
 | Diagnostic producer queue  | 16 x 512-byte messages |                  8 KiB |
-| Composed daemon            |                      1 |                216 KiB |
+| Userspace IP adapter owner |   1 netif and 16 PCBs |                 16 KiB |
+| lwIP internal heap         |              32 KiB |                  32 KiB |
+| lwIP pbuf pool             |      24 x 1600 bytes |              37.5 KiB |
+| lwIP fragment reassembly   |       4 datagrams | 8 retained pbuf references |
+| Composed daemon            |                      1 |                288 KiB |
 
 The five ordered lanes admit at most one resolver request, two submission requests, one encrypted-datagram transmit, one receive request, and six timer actions.
 Each queue has one 16 KiB worker stack.
@@ -76,7 +80,7 @@ All lock ownership is scoped through `std::scoped_lock`, `std::unique_lock`, or 
 ## Worker Contexts
 
 - `wgnx-resolve`: endpoint resolution and activation completion.
-- `wgnx-submit`: serialized debug and IPC inner-packet submission.
+- `wgnx-submit`: serialized debug, IPC inner-packet, and userspace-IP adapter submission.
 - `wgnx-tx`: serialized encrypted UDP datagram submission and completion policy.
   It owns one pending send handoff, so endpoint resolution, receive, and timer workers release their local frames before concrete send completion.
 - `wgnx-recv`: blocking encrypted UDP receive, rebind processing, inbound protocol dispatch, and generated effects.
@@ -99,6 +103,6 @@ The stack-chain configuration and footprint baseline live under `tools/baselines
 Updating either is a reviewed budget change, not routine build churn.
 
 The post-Chunk 14 corrective diagnostic queue increased measured static BSS by 8 KiB.
-The current static total is 1,080,496 bytes against the 1,310,720-byte absolute limit.
-The closed `PeerRegistry` ownership interface and platform-neutral effect drain add 3,072 bytes of target code without changing any fixed storage capacity.
+The Task 6 adapter-owner measurement is 1,395,858 static bytes, a 258,941-byte NSO, and a 260,001-byte NSP against absolute limits of 1,572,864, 294,912, and 294,912 bytes.
+This controlled increase includes the fixed lwIP allocator, pbuf pools, protocol tables, and one composed adapter owner.
 The diagnostic queue is intentionally fixed and drops the oldest queued diagnostic line when full.

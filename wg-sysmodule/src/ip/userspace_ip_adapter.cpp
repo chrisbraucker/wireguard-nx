@@ -74,8 +74,10 @@ void UserspaceIpAdapter::Reset() {
         m_netif = {};
         m_netif_added = false;
     }
-    ClearReassembly();
-    sys_timeouts_init();
+    if (g_lwip_initialized) {
+        ClearReassembly();
+        sys_timeouts_init();
+    }
     ClearOutboundPackets();
     ClearInboundDatagrams();
     if (g_lwip_owner == this) {
@@ -210,6 +212,10 @@ std::span<const UserspaceIpPacket> UserspaceIpAdapter::OutboundPackets() const {
 
 std::span<const UserspaceIpDatagram> UserspaceIpAdapter::InboundDatagrams() const {
     return std::span<const UserspaceIpDatagram>(m_inbound_datagrams).first(m_inbound_datagram_count);
+}
+
+bool UserspaceIpAdapter::IsInitialized() const {
+    return m_netif_added;
 }
 
 std::uint32_t UserspaceIpAdapter::Epoch() const {

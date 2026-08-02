@@ -7,6 +7,7 @@
 #include "runtime/packet_channel.hpp"
 #include "runtime/packet_data_plane.hpp"
 #include "runtime/tunnel_flow_plane.hpp"
+#include "runtime/userspace_ip_adapter_owner.hpp"
 #include "runtime/peer_configuration.hpp"
 #include "runtime/peer/peer_runtime.hpp"
 #include "runtime/runtime_coordinator.hpp"
@@ -76,6 +77,7 @@ class DaemonRuntime {
     static void ResolverWorkCallback(wgnx::platform::work_struct* work);
     static void PayloadSubmissionWorkCallback(wgnx::platform::work_struct* work);
     static void InnerPacketSubmissionWorkCallback(wgnx::platform::work_struct* work);
+    static void UserspaceIpAdapterWorkCallback(wgnx::platform::work_struct* work);
     static void PendingDatagramTransmitWorkCallback(wgnx::platform::work_struct* work);
     static void ReceiveWorkCallback(wgnx::platform::work_struct* work);
     static void ProtocolTimerCallback(wgnx::wireguard::TimerHook hook, const wgnx::wireguard::TimerToken& token);
@@ -107,6 +109,7 @@ class DaemonRuntime {
     runtime::RuntimeCoordinator m_runtime_coordinator;
     runtime::PacketDataPlane m_packet_data_plane;
     runtime::TunnelFlowPlane m_tunnel_flow_plane{};
+    runtime::UserspaceIpAdapterOwner m_userspace_ip_adapter_owner{};
     runtime::DebugProbeRunner m_debug_probe_runner{};
     platform::horizon::NetworkPathService m_network_path_service{};
     runtime::PeerConfigurationLoader m_peer_configuration_loader{};
@@ -318,6 +321,12 @@ void DaemonRuntime::InnerPacketSubmissionWorkCallback(wgnx::platform::work_struc
     s_instance->m_effect_executor.RunInnerPacketSubmission();
 }
 
+void DaemonRuntime::UserspaceIpAdapterWorkCallback(wgnx::platform::work_struct* work) {
+    AMS_ABORT_UNLESS(s_instance != nullptr);
+    static_cast<void>(work);
+    s_instance->m_userspace_ip_adapter_owner.Run();
+}
+
 void DaemonRuntime::PendingDatagramTransmitWorkCallback(wgnx::platform::work_struct* work) {
     AMS_ABORT_UNLESS(s_instance != nullptr);
     static_cast<void>(work);
@@ -345,6 +354,7 @@ void DaemonRuntime::InitializeHorizonDispatcher() {
         .resolve = ResolverWorkCallback,
         .submit_debug_payload = PayloadSubmissionWorkCallback,
         .submit_inner_packet = InnerPacketSubmissionWorkCallback,
+        .run_userspace_ip_adapter = UserspaceIpAdapterWorkCallback,
         .transmit_datagram = PendingDatagramTransmitWorkCallback,
         .receive = ReceiveWorkCallback,
     });
@@ -357,7 +367,7 @@ void DaemonRuntime::InitializeHorizonDispatcher() {
     );
 
     logger::Log("Started endpoint resolver worker");
-    logger::Log("Started shared payload and inner packet submission worker");
+    logger::Log("Started shared payload, inner packet, and userspace IP submission worker");
     logger::Log("Started serialized encrypted datagram transmit worker");
     logger::Log("Started UDP receive worker");
     logger::Log("NIFM network-path requests are event-driven and activation-owned");
@@ -840,6 +850,11 @@ void DaemonRuntime::Shutdown() {
     }
     m_timer_scheduler.CancelAllProtocolTimers();
     m_timer_scheduler.CancelDebugProbeTimeout();
+    {
+        std::scoped_lock lock(m_state_mutex);
+        m_userspace_ip_adapter_owner.QueueReset();
+    }
+    m_horizon_dispatcher.QueueUserspaceIpAdapter();
     logger::Flush();
 }
 
