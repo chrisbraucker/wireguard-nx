@@ -82,7 +82,6 @@ void UserspaceIpAdapter::Reset() {
     }
     if (g_lwip_initialized) {
         ClearReassembly();
-        sys_timeouts_init();
     }
     ClearOutboundPackets();
     ClearInboundDatagrams();

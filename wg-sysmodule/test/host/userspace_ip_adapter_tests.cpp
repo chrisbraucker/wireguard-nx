@@ -147,6 +147,17 @@ void TestUserspaceIpAdapter(TestContext& context) {
     overflow.token = UserspaceIpAdapter::MaximumFlows + 1;
     overflow.local.port = static_cast<std::uint16_t>(Flow.local.port + overflow.token);
     WGNX_TEST_REQUIRE(context, adapter.OpenFlow(overflow) == UserspaceIpResult::FlowQuotaExhausted, "adapter did not bound PCB capacity");
+    bool repeated_reset_succeeded = true;
+    for (std::size_t index = 0; index < 32; ++index) {
+        adapter.Reset();
+        repeated_reset_succeeded =
+            repeated_reset_succeeded && adapter.Initialize(Local, 1420) && adapter.OpenFlow(Flow) == UserspaceIpResult::Success;
+    }
+    WGNX_TEST_REQUIRE(
+        context,
+        repeated_reset_succeeded,
+        "adapter reset reinitialized lwIP timeout state until the fixed timeout pool overflowed"
+    );
     adapter.ClearOutboundPackets();
     WGNX_TEST_REQUIRE(context, adapter.SetMtu(1420), "adapter did not restore the unfragmented MTU");
     for (std::size_t index = 0; index < UserspaceIpAdapter::OutboundPacketCapacity; ++index) {

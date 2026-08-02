@@ -188,6 +188,7 @@ opaque WireGuard encryption and outer UDP transport
   The adapter queries `sys_timeouts_sleeptime()` after every serialized operation, and the existing timer scheduler arms one auxiliary timer in the same monotonic-millisecond unit.
   Its timer callback only coalesces a `RunTimeouts` owner operation and queues the existing `wgnx-submit` work item, where `sys_check_timeouts()` runs without the daemon mutex.
   Peer deactivation queues the owner reset before the next activation can use the adapter, which increments the adapter epoch and clears every PCB, result collector, and retained reassembly state.
+  Adapter reset does not rerun `sys_timeouts_init()`, because lwIP initializes its cyclic timeout list once in `lwip_init()` and repeated initialization exhausts the fixed timeout pool.
   The next accounting item records reset and retained-fragment dispositions without changing lwIP internals.
 
 - [x] **12. Add bounded pressure, reassembly, callback, and lifecycle accounting.**
@@ -212,6 +213,7 @@ opaque WireGuard encryption and outer UDP transport
   The 52-case host suite now covers owner timeout coalescing, tagged input, lwIP reassembly, zero UDP checksums, retained fragments, callback pressure, adapter accounting, and generation-checked callback delivery.
   `adapter_input_fuzz` executes the production adapter and its vendored lwIP source set with a fresh reset around every input.
   On 2026-08-02, warnings, ASan/UBSan, TSAN, static analysis, clang-tidy, formatting, a five-second run per fuzz target, target build, stack checks, and the footprint gate passed.
+  The adapter fuzzer first exposed repeated timeout initialization and then completed a 1.88-million-input post-fix run without a fault.
 
 - [ ] **14. Cut over once, remove the handmade codec, and synchronize architecture documentation.**
 
