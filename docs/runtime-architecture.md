@@ -48,7 +48,9 @@ The IPC and WireGuard wire contracts remain unchanged; the separation is interna
   A decrypted input records peer identity, flow-policy generation, and adapter epoch in that same bounded slot.
   The owner worker revalidates those identities immediately before its post-lock lwIP input call, so stale input never allocates a pbuf or joins a new reassembly epoch.
   After lwIP returns and releases pbufs, the worker validates copied UDP callback records against flow and client state before publishing an inbound completion.
+  lwIP is the sole tunnel UDP and IPv4 construction, validation, fragmentation, reassembly, and checksum implementation.
   Unfragmented packets with no callback record use the existing raw packet consumer, while callback-copy pressure, stale callback records, and fragments still retained by lwIP are dropped.
+  The raw consumer is a generic complete-IP fallback and never invokes a second tunnel UDP parser.
   The owner rearms one auxiliary Horizon timer from `sys_timeouts_sleeptime()` after each operation.
   That timer only queues coalesced timeout work to `wgnx-submit`, where the owner runs `sys_check_timeouts()` without the daemon mutex.
   It retains bounded adapter-local pressure, fragment, callback, reset, timeout, and first-rejection accounting and emits a summary only at reset boundaries.

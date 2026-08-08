@@ -215,12 +215,18 @@ opaque WireGuard encryption and outer UDP transport
   On 2026-08-02, warnings, ASan/UBSan, TSAN, static analysis, clang-tidy, formatting, a five-second run per fuzz target, target build, stack checks, and the footprint gate passed.
   The adapter fuzzer first exposed repeated timeout initialization and then completed a 1.88-million-input post-fix run without a fault.
 
-- [ ] **14. Cut over once, remove the handmade codec, and synchronize architecture documentation.**
+- [x] **14. Cut over once, remove the handmade codec, and synchronize architecture documentation.**
 
   Delete `BuildUdpPacket`, `ParseIpv4Endpoint`, local internet and UDP checksum helpers, `m_next_ipv4_identification`, and obsolete outbound packet storage after every production send and receive uses lwIP.
   Do not retain a runtime switch or fallback to the handmade path because two authoritative packet implementations would duplicate correctness and test ownership.
   Re-run the local aggregate gate after deletion so no test or target-only path still depends on the removed codec.
   Update `docs/runtime-architecture.md`, `docs/runtime-resource-budgets.md`, `docs/packet-api.md`, `TASK_4_TODO.md`, and `HORIZON_INTEGRATION_PLAN.md` with the measured adapter ownership, capacities, lifecycle, fallback order, and diagnostics.
+  `TunnelFlowPlane` now retains only project-owned flow, policy, tuple-quarantine, completion, and accounting state.
+  The legacy inbound IPv4 parser, UDP checksum validation, checksum helpers, packet-identification state, and their test-only packet builders are removed.
+  The host flow-plane test now reaches it only through the generation-tagged UDP callback contract, while the production lwIP adapter test remains authoritative for IPv4 validation, UDP checksum handling, fragmentation, and reassembly.
+  The 52-case host suite, ASan/UBSan, warnings, formatting, static analysis, clang-tidy, and five-second fuzz sweep pass after this cutover.
+  The target build, stack checks, and footprint gate also pass, with 1,387,986 static bytes, a 269,218-byte NSO, and a 270,278-byte NSP.
+  Item 15 remains the complete on-device acceptance gate.
 
 - [ ] **15. Run the complete on-device functional, lifecycle, fragmentation, pressure, latency, and throughput matrix.**
 

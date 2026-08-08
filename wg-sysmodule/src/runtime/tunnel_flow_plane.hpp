@@ -136,9 +136,6 @@ class TunnelFlowPlane {
     [[nodiscard]] wgnx::tunnel::FlowStateResult GetFlowState(TunnelClientId client, wgnx::tunnel::FlowHandle flow) const;
     [[nodiscard]] wgnx::tunnel::ProtocolStatus CloseFlow(TunnelClientId client, wgnx::tunnel::FlowHandle flow, wgnx::platform::ktime_t now);
 
-    [[nodiscard]] TunnelInboundOutcome DeliverDecryptedIpv4Packet(
-        const PeerIdentity& peer, std::span<const std::uint8_t> packet, wgnx::platform::ktime_t now
-    );
     [[nodiscard]] TunnelInboundOutcome DeliverInboundUdpDatagram(
         const PeerIdentity& peer,
         std::uint32_t policy_generation,
@@ -256,20 +253,8 @@ class TunnelFlowPlane {
 
     [[nodiscard]] bool ParseAndNormalizePolicy(const TunnelPolicyInput& input);
     [[nodiscard]] static bool ParseIpv4Cidr(const char* text, std::array<std::uint8_t, 4>* out_address, std::uint8_t* out_prefix);
-    [[nodiscard]] static bool ParseIpv4Endpoint(
-        std::span<const std::uint8_t> packet,
-        std::size_t ipv4_header_size,
-        wgnx::tunnel::Ipv4Endpoint* out_source,
-        std::array<std::uint8_t, 4>* out_destination,
-        std::uint16_t* out_destination_port,
-        std::span<const std::uint8_t>* out_payload
-    );
     [[nodiscard]] static bool RouteMatches(const NormalizedRoute& route, const std::uint8_t address[4]);
     [[nodiscard]] const NormalizedRoute* SelectRoute(const wgnx::tunnel::Ipv4Endpoint& remote) const;
-    [[nodiscard]] static std::uint16_t ComputeInternetChecksum(std::span<const std::uint8_t> bytes);
-    [[nodiscard]] static std::uint16_t ComputeUdpChecksum(
-        const std::uint8_t source[4], const std::uint8_t destination[4], std::span<const std::uint8_t> udp
-    );
 
     std::array<ClientSlot, wgnx::tunnel::MaximumClientContexts> m_clients{};
     std::array<FlowSlot, wgnx::tunnel::MaximumFlows> m_flows{};
@@ -284,7 +269,6 @@ class TunnelFlowPlane {
     std::uint32_t m_next_client_generation{1};
     std::uint32_t m_next_flow_generation{1};
     std::uint16_t m_next_virtual_source_port{49152};
-    std::uint16_t m_next_ipv4_identification{1};
     std::uint16_t m_effective_inner_mtu{wgnx::tunnel::DefaultEffectiveInnerMtu};
     bool m_policy_available{false};
     bool m_policy_leak_protection{false};

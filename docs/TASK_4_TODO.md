@@ -4,7 +4,8 @@ This document records review findings and brief implementation notes discovered 
 
 The current Task 4 acceptance sequence and definition of done remain authoritative in `HORIZON_INTEGRATION_PLAN.md`.
 
-Do not begin target-side lwIP integration until the high-priority correctness items below are resolved and covered by deterministic host tests.
+Task 6 now owns tunnel-side IPv4 and UDP through lwIP.
+Its remaining device acceptance is documented separately in `docs/task-6-userspace-ip-adapter.md` item 15.
 
 ## Current Acceptance Work
 
@@ -175,7 +176,7 @@ The MITM owns BSD socket and whole-datagram semantics while the WireGuard IP ada
 
 - [x] Assign the userspace IP stack and Layer 3 ownership to the WireGuard sysmodule.
 - [x] Record the selected ownership model in `HORIZON_INTEGRATION_PLAN.md`, `HORIZON_INTEGRATION_SPEC.md`, and workspace guidance.
-- [ ] Do not retain both the current manual UDP/IP implementation and an lwIP implementation after the migration is complete.
+- [x] Do not retain both the current manual UDP/IP implementation and an lwIP implementation after the migration is complete.
 
 The intended minimal boundary is:
 
@@ -198,12 +199,12 @@ WireGuard packet boundary
 
 ## Host-Only lwIP Fit Prototype
 
-- [ ] Initialize or retrieve the exact pinned lwIP source used by the local `wg-nx` reference.
-- [ ] Record the revision, BSD license, integrity hash, and refresh procedure before importing source.
-- [ ] Build a host-only NO_SYS prototype before integrating lwIP into the target runtime.
-- [ ] Compile only the IPv4, pbuf, timeout, netif, UDP, checksum, fragmentation, and reassembly pieces required for the UDP path.
-- [ ] Exclude TCP, DNS, DHCP, netconn, sockets, and application-facing lwIP APIs from this slice.
-- [ ] Replace the manual UDP packet builder, IPv4 and UDP parser, and checksum helpers behind the existing flow API.
+- [x] Initialize the pinned stable lwIP source set and record its provenance.
+- [x] Record the revision, BSD license, integrity hash, and refresh procedure beside the import.
+- [x] Build and test the host-only NO_SYS adapter before target deployment.
+- [x] Compile only the IPv4, pbuf, timeout, netif, UDP, checksum, fragmentation, and reassembly pieces required for the UDP path.
+- [x] Exclude TCP, DNS, DHCP, netconn, sockets, and application-facing lwIP APIs from this slice.
+- [x] Replace the manual UDP packet builder, IPv4 and UDP parser, and checksum helpers behind the existing flow API.
 
 Implementation note: use `wg-nx` for its minimal Switch build and NO_SYS configuration ideas.
 
@@ -213,21 +214,21 @@ Implementation note: do not copy their hardcoded MTU, global mutable ownership, 
 
 ## lwIP Runtime Ownership
 
-- [ ] Serialize every lwIP call through one existing post-lock work owner.
-- [ ] Do not call lwIP, run callbacks, allocate pbufs, or process lwIP timeouts while holding the daemon state mutex.
-- [ ] Avoid adding a new thread or a global lwIP mutex unless measurements prove the existing serialized work boundary insufficient.
-- [ ] Keep flow handles, policy generations, tuple quarantine, queue ordering, and completion slabs project-owned.
-- [ ] Invalidate fragment and PCB state across flow close, policy refresh, peer restart, and activation teardown.
+- [x] Serialize every lwIP call through one existing post-lock work owner.
+- [x] Do not call lwIP, run callbacks, allocate pbufs, or process lwIP timeouts while holding the daemon state mutex.
+- [x] Avoid a new thread and global lwIP mutex by using the existing serialized work boundary.
+- [x] Keep flow handles, policy generations, tuple quarantine, queue ordering, and completion slabs project-owned.
+- [x] Invalidate fragment and PCB state across flow close, policy refresh, peer restart, and activation teardown.
 
 ## Fragmentation Acceptance Cases
 
-- [ ] Fragment outbound IPv4 UDP datagrams at the effective inner MTU with valid IP and UDP checksums.
-- [ ] Reassemble valid inbound fragments into exactly one UDP datagram.
-- [ ] Cover out-of-order, duplicate, overlapping, missing, expired, malformed, and resource-exhausted fragments.
-- [ ] Produce either one delivery or one bounded observable drop for every reassembly attempt.
-- [ ] Verify stale reassembly cannot cross flow closure, policy-generation change, peer restart, or activation teardown.
-- [ ] Measure pbuf, fragment, timer, stack, completion, and total memory bounds under exhaustion.
-- [ ] Add sanitizer coverage and fuzz the inner IPv4 input boundary.
+- [x] Fragment outbound IPv4 UDP datagrams at the effective inner MTU with valid IP and UDP checksums.
+- [x] Reassemble valid inbound fragments into exactly one UDP datagram.
+- [x] Cover out-of-order, duplicate, overlapping, missing, expired, malformed, and resource-exhausted fragments in host tests and fuzzing.
+- [x] Produce either one delivery or one bounded observable drop for every reassembly attempt.
+- [x] Verify stale reassembly cannot cross flow closure, policy-generation change, peer restart, or activation teardown.
+- [x] Measure pbuf, fragment, timer, stack, completion, and total memory bounds under host exhaustion.
+- [x] Add sanitizer coverage and fuzz the inner IPv4 input boundary.
 - [ ] Repeat target throughput, latency, path-transition, and lifecycle benchmarks after replacement of the manual adapter.
 
 ## Datagram Size Contract
@@ -249,3 +250,6 @@ Implementation note: the first fragmentation milestone need not promise the full
 6. Replace the manual UDP/IP adapter behind the existing flow contract.
 7. Repeat host, target, resource, and path-transition validation.
 8. Consider TCP only after the UDP adapter is stable and its bounds are demonstrated.
+
+Implementation note: Task 6 item 14 removed the legacy flow-plane IPv4 and UDP codec, so lwIP is now the only tunnel-side IP and UDP implementation.
+The remaining Task 6 device work is the focused fragmentation, pressure, lifecycle, latency, and throughput matrix in item 15.

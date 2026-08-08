@@ -400,7 +400,8 @@ Use a clean deployment of requester, `wg-sysmodule`, `mitm-sysmodule`, and each 
 Build the measurement binaries with requester, WireGuard, and MITM packet-granularity diagnostics disabled so SD-card logging cannot become the workload bottleneck.
 Keep state-transition and flow-summary logging enabled.
 Use a 1200-byte UDP payload for all echo and burst comparisons while the remote peer advertises an effective inner MTU of 1280 bytes.
-Larger replies fragment on that peer and are intentionally unsupported until a later fragmentation design exists.
+Treat this as the unfragmented Task 4 control workload.
+Task 6 item 15 separately exercises larger replies that force two and three inner IPv4 fragments through lwIP.
 
 1. Start the controlled harness in quiet echo mode on a destination reachable both directly and through the peer, such as `192.168.203.24:29000` in the current topology.
    Record the harness source tuple and its per-workload and per-flow summary when it stops.
@@ -491,8 +492,8 @@ Urgency: required before TCP or broader IP protocol work.
 
 The actionable implementation sequence is documented in [Task 6 Userspace IP Adapter Implementation Guide](docs/task-6-userspace-ip-adapter.md).
 
-Keep the current UDP flow IPC and MITM socket contract as the behavioral baseline while replacing the manual WireGuard-side UDP and IPv4 adapter.
-Start with a host-only NO_SYS lwIP fit prototype that compiles only the IPv4, pbuf, timeout, netif, UDP, checksum, fragmentation, and reassembly components required by this path.
+Keep the current UDP flow IPC and MITM socket contract as the behavioral baseline while lwIP provides the WireGuard-side UDP and IPv4 adapter.
+The NO_SYS lwIP implementation compiles only the IPv4, pbuf, timeout, netif, UDP, checksum, fragmentation, and reassembly components required by this path.
 Do not include TCP, DNS, DHCP, netconn, lwIP sockets, or application-facing lwIP APIs in the first slice.
 
 The adapter owns UDP endpoint state, IPv4 and UDP construction and validation, effective-MTU application, outbound fragmentation, inbound reassembly, and delivery to the existing flow completion contract.
@@ -510,7 +511,7 @@ Do not copy their relay architecture, global mutable ownership, hardcoded MTU, o
 Definition of done:
 
 - the source revision, BSD license, integrity hash, selected source list, and refresh procedure are recorded
-- the manual UDP and IPv4 construction, parsing, and checksum code is removed once lwIP becomes authoritative
+- the manual tunnel UDP and IPv4 construction, parsing, and checksum code is removed, leaving lwIP authoritative
 - outbound datagrams fragment at the effective inner MTU and inbound valid fragments produce exactly one datagram completion
 - out-of-order, duplicate, overlapping, missing, expired, malformed, and resource-exhausted fragment cases have deterministic bounded outcomes
 - fragment and PCB state cannot cross flow closure, policy-generation change, peer restart, or activation teardown

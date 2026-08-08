@@ -4,15 +4,10 @@
 #include "runtime/tunnel_flow_plane.hpp"
 
 #include <array>
-#include <cstring>
 
 namespace wgnx::test {
 
 namespace {
-
-constexpr std::size_t Ipv4HeaderSize = 20;
-constexpr std::size_t UdpHeaderSize = 8;
-constexpr std::uint8_t UdpProtocol = 17;
 
 struct NotificationCounter {
     std::uint32_t count{0};
@@ -22,110 +17,6 @@ void Notify(void* context) {
     if (context != nullptr) {
         ++static_cast<NotificationCounter*>(context)->count;
     }
-}
-
-void StoreBigEndian16(std::uint8_t* out, std::uint16_t value) {
-    out[0] = static_cast<std::uint8_t>(value >> 8U);
-    out[1] = static_cast<std::uint8_t>(value & 0xFFU);
-}
-
-std::uint16_t LoadBigEndian16(const std::uint8_t* in) {
-    return static_cast<std::uint16_t>((static_cast<std::uint16_t>(in[0]) << 8U) | static_cast<std::uint16_t>(in[1]));
-}
-
-std::uint32_t AddChecksum(std::uint32_t sum, const std::uint8_t* bytes, std::size_t size) {
-    std::size_t offset = 0;
-    while (offset + 1 < size) {
-        sum += (static_cast<std::uint32_t>(bytes[offset]) << 8U) | bytes[offset + 1];
-        offset += 2;
-    }
-    if (offset < size) {
-        sum += static_cast<std::uint32_t>(bytes[offset]) << 8U;
-    }
-    return sum;
-}
-
-std::uint16_t FinishChecksum(std::uint32_t sum) {
-    while ((sum >> 16U) != 0) {
-        sum = (sum & 0xFFFFU) + (sum >> 16U);
-    }
-    return static_cast<std::uint16_t>(~sum & 0xFFFFU);
-}
-
-std::uint16_t Checksum(const std::uint8_t* bytes, std::size_t size) {
-    return FinishChecksum(AddChecksum(0, bytes, size));
-}
-
-std::uint16_t UdpChecksum(const std::uint8_t source[4], const std::uint8_t destination[4], const std::uint8_t* udp, std::size_t udp_size) {
-    const std::array<std::uint8_t, 4> pseudo_tail = {
-        0,
-        UdpProtocol,
-        static_cast<std::uint8_t>(udp_size >> 8U),
-        static_cast<std::uint8_t>(udp_size & 0xFFU),
-    };
-    std::uint32_t sum = AddChecksum(0, source, 4);
-    sum = AddChecksum(sum, destination, 4);
-    sum = AddChecksum(sum, pseudo_tail.data(), pseudo_tail.size());
-    return FinishChecksum(AddChecksum(sum, udp, udp_size));
-}
-
-std::size_t BuildReply(std::span<std::uint8_t> out, std::span<const std::uint8_t> request, std::span<const std::uint8_t> payload) {
-    if (request.size() < Ipv4HeaderSize + UdpHeaderSize || out.size() < Ipv4HeaderSize + UdpHeaderSize + payload.size()) {
-        return 0;
-    }
-    const std::size_t packet_size = Ipv4HeaderSize + UdpHeaderSize + payload.size();
-    std::fill_n(out.begin(), packet_size, std::uint8_t{0});
-    out[0] = 0x45;
-    StoreBigEndian16(out.data() + 2, static_cast<std::uint16_t>(packet_size));
-    StoreBigEndian16(out.data() + 6, 0x4000U);
-    out[8] = 64;
-    out[9] = UdpProtocol;
-    std::memcpy(out.data() + 12, request.data() + 16, 4);
-    std::memcpy(out.data() + 16, request.data() + 12, 4);
-    StoreBigEndian16(out.data() + 10, Checksum(out.data(), Ipv4HeaderSize));
-    std::uint8_t* udp = out.data() + Ipv4HeaderSize;
-    StoreBigEndian16(udp, LoadBigEndian16(request.data() + Ipv4HeaderSize + 2));
-    StoreBigEndian16(udp + 2, LoadBigEndian16(request.data() + Ipv4HeaderSize));
-    StoreBigEndian16(udp + 4, static_cast<std::uint16_t>(UdpHeaderSize + payload.size()));
-    std::memcpy(udp + UdpHeaderSize, payload.data(), payload.size());
-    std::uint16_t checksum = UdpChecksum(out.data() + 12, out.data() + 16, udp, UdpHeaderSize + payload.size());
-    if (checksum == 0) {
-        checksum = 0xFFFFU;
-    }
-    StoreBigEndian16(udp + 6, checksum);
-    return packet_size;
-}
-
-std::size_t BuildRequest(
-    std::span<std::uint8_t> out,
-    const wgnx::tunnel::Ipv4Endpoint& source,
-    const wgnx::tunnel::Ipv4Endpoint& destination,
-    std::span<const std::uint8_t> payload
-) {
-    if (out.size() < Ipv4HeaderSize + UdpHeaderSize + payload.size()) {
-        return 0;
-    }
-    const std::size_t packet_size = Ipv4HeaderSize + UdpHeaderSize + payload.size();
-    std::fill_n(out.begin(), packet_size, std::uint8_t{0});
-    out[0] = 0x45;
-    StoreBigEndian16(out.data() + 2, static_cast<std::uint16_t>(packet_size));
-    StoreBigEndian16(out.data() + 6, 0x4000U);
-    out[8] = 64;
-    out[9] = UdpProtocol;
-    std::memcpy(out.data() + 12, source.address, 4);
-    std::memcpy(out.data() + 16, destination.address, 4);
-    StoreBigEndian16(out.data() + 10, Checksum(out.data(), Ipv4HeaderSize));
-    std::uint8_t* udp = out.data() + Ipv4HeaderSize;
-    StoreBigEndian16(udp, source.port);
-    StoreBigEndian16(udp + 2, destination.port);
-    StoreBigEndian16(udp + 4, static_cast<std::uint16_t>(UdpHeaderSize + payload.size()));
-    std::memcpy(udp + UdpHeaderSize, payload.data(), payload.size());
-    std::uint16_t checksum = UdpChecksum(out.data() + 12, out.data() + 16, udp, UdpHeaderSize + payload.size());
-    if (checksum == 0) {
-        checksum = 0xFFFFU;
-    }
-    StoreBigEndian16(udp + 6, checksum);
-    return packet_size;
 }
 
 } // namespace
@@ -302,18 +193,14 @@ void TestTunnelFlowPlane(TestContext& context) {
         "flow send did not enforce transport availability or retain the stable adapter flow token"
     );
 
-    std::array<std::uint8_t, wgnx::MaxInnerIpv4PacketSize> request{};
-    std::array<std::uint8_t, wgnx::MaxInnerIpv4PacketSize> reply{};
-    const std::size_t request_size = BuildRequest(request, opened_state.advertised_local, open.remote, Payload);
-    const std::size_t reply_size = BuildReply(reply, std::span<const std::uint8_t>(request.data(), request_size), Payload);
-    const auto foreign = plane.DeliverDecryptedIpv4Packet(
+    const auto foreign = plane.DeliverInboundUdpDatagram(
         {.peer_index = PeerIndex{0}, .activation_generation = ActivationGeneration{8}},
-        std::span<const std::uint8_t>(reply.data(), reply_size),
+        plane.PolicyGeneration(),
+        opened.flow.value,
+        open.remote,
+        Payload,
         149
     );
-    reply[Ipv4HeaderSize + 6] ^= 0xFFU;
-    const auto malformed = plane.DeliverDecryptedIpv4Packet(first_peer, std::span<const std::uint8_t>(reply.data(), reply_size), 149);
-    reply[Ipv4HeaderSize + 6] ^= 0xFFU;
     const auto delivered =
         plane.DeliverInboundUdpDatagram(first_peer, plane.PolicyGeneration(), opened.flow.value, open.remote, Payload, 150);
     std::array<CompletionRecord, MaximumBatchEntries> completions{};
@@ -321,41 +208,25 @@ void TestTunnelFlowPlane(TestContext& context) {
     const auto received = plane.ReceiveCompletions(client, completions, received_payload);
     WGNX_TEST_REQUIRE(
         context,
-        reply_size != 0 && foreign.disposition == TunnelInboundDisposition::NotClaimed &&
-            malformed.disposition == TunnelInboundDisposition::DroppedMalformed &&
-            delivered.disposition == TunnelInboundDisposition::Delivered && received.status == ProtocolStatus::Success &&
-            received.count >= 1 && completions[0].type == CompletionType::PolicyChanged &&
+        foreign.disposition == TunnelInboundDisposition::DroppedStale && delivered.disposition == TunnelInboundDisposition::Delivered &&
+            received.status == ProtocolStatus::Success && received.count >= 1 && completions[0].type == CompletionType::PolicyChanged &&
             completions[1].type == CompletionType::InboundDatagram && completions[1].flow.value == opened.flow.value &&
             completions[1].payload_size == Payload.size() && std::equal(Payload.begin(), Payload.end(), received_payload.begin()),
-        "flow receive did not retain the policy edge and matching UDP reply in completion order"
+        "flow receive did not retain the policy edge and generation-checked UDP callback in completion order"
     );
 
     const auto second_send = plane.PrepareSend(client, descriptor, Payload, TransportReady, 160);
-    const std::size_t second_reply_size = BuildReply(reply, std::span<const std::uint8_t>(request.data(), request_size), Payload);
-    static_cast<void>(plane.DeliverDecryptedIpv4Packet(first_peer, std::span<const std::uint8_t>(reply.data(), second_reply_size), 170));
+    const auto second_delivery =
+        plane.DeliverInboundUdpDatagram(first_peer, plane.PolicyGeneration(), opened.flow.value, open.remote, Payload, 170);
     std::array<std::uint8_t, 1> too_small{};
     const auto insufficient = plane.ReceiveCompletions(client, completions, too_small);
     const auto after_insufficient = plane.ReceiveCompletions(client, completions, received_payload);
     WGNX_TEST_REQUIRE(
         context,
-        second_send.IsPrepared() && insufficient.status == ProtocolStatus::OutputBufferTooSmall &&
-            after_insufficient.status == ProtocolStatus::Success && after_insufficient.count == 1 &&
-            completions[0].type == CompletionType::InboundDatagram,
+        second_send.IsPrepared() && second_delivery.disposition == TunnelInboundDisposition::Delivered &&
+            insufficient.status == ProtocolStatus::OutputBufferTooSmall && after_insufficient.status == ProtocolStatus::Success &&
+            after_insufficient.count == 1 && completions[0].type == CompletionType::InboundDatagram,
         "completion draining emitted a partial datagram or lost it after an undersized buffer"
-    );
-
-    const auto zero_checksum_send = plane.PrepareSend(client, descriptor, Payload, TransportReady, 171);
-    const std::size_t zero_checksum_reply_size = BuildReply(reply, std::span<const std::uint8_t>(request.data(), request_size), Payload);
-    StoreBigEndian16(reply.data() + Ipv4HeaderSize + 6, 0);
-    const auto accepted_zero_checksum =
-        plane.DeliverDecryptedIpv4Packet(first_peer, std::span<const std::uint8_t>(reply.data(), zero_checksum_reply_size), 172);
-    const auto zero_checksum_completion = plane.ReceiveCompletions(client, completions, received_payload);
-    WGNX_TEST_REQUIRE(
-        context,
-        zero_checksum_send.IsPrepared() && accepted_zero_checksum.disposition == TunnelInboundDisposition::Delivered &&
-            zero_checksum_completion.status == ProtocolStatus::Success && zero_checksum_completion.count == 1 &&
-            completions[0].type == CompletionType::InboundDatagram,
-        "IPv4 UDP zero checksum was not accepted while invalid nonzero checksums remained rejected"
     );
 
     const std::uint32_t notifications_before_writable = notifications.count;
@@ -422,14 +293,14 @@ void TestTunnelFlowPlane(TestContext& context) {
     };
     const auto second_reuse_send =
         client_reuse_plane.PrepareSend(second_reuse_client, second_reuse_descriptor, Payload, TransportReady, 205);
-    const auto second_reuse_state = client_reuse_plane.GetFlowState(second_reuse_client, second_reuse_flow.flow);
-    const std::uint16_t second_reuse_port = second_reuse_state.advertised_local.port;
-    const std::size_t second_reuse_request_size = BuildRequest(request, second_reuse_state.advertised_local, open.remote, Payload);
-    const std::size_t second_reuse_reply_size =
-        BuildReply(reply, std::span<const std::uint8_t>(request.data(), second_reuse_request_size), Payload);
-    const auto second_reuse_delivery = client_reuse_plane.DeliverDecryptedIpv4Packet(
+    const std::uint16_t second_reuse_port =
+        client_reuse_plane.GetFlowState(second_reuse_client, second_reuse_flow.flow).advertised_local.port;
+    const auto second_reuse_delivery = client_reuse_plane.DeliverInboundUdpDatagram(
         first_peer,
-        std::span<const std::uint8_t>(reply.data(), second_reuse_reply_size),
+        client_reuse_plane.PolicyGeneration(),
+        second_reuse_flow.flow.value,
+        open.remote,
+        Payload,
         206
     );
     const auto second_reuse_received = client_reuse_plane.ReceiveCompletions(second_reuse_client, completions, received_payload);
@@ -515,13 +386,12 @@ void TestTunnelFlowPlane(TestContext& context) {
         };
         const auto outbound = bounded_plane.PrepareSend(bounded_client, bounded_descriptor, Payload, TransportReady, 210 + sequence);
         all_bounded_prepared = all_bounded_prepared && outbound.IsPrepared();
-        const auto bounded_state = bounded_plane.GetFlowState(bounded_client, bounded_descriptor.flow);
-        const std::size_t bounded_request_size = BuildRequest(request, bounded_state.advertised_local, open.remote, Payload);
-        const std::size_t bounded_reply_size =
-            BuildReply(reply, std::span<const std::uint8_t>(request.data(), bounded_request_size), Payload);
-        const auto inbound = bounded_plane.DeliverDecryptedIpv4Packet(
+        const auto inbound = bounded_plane.DeliverInboundUdpDatagram(
             first_peer,
-            std::span<const std::uint8_t>(reply.data(), bounded_reply_size),
+            bounded_plane.PolicyGeneration(),
+            bounded_descriptor.flow.value,
+            open.remote,
+            Payload,
             220 + sequence
         );
         delivered_count += inbound.disposition == TunnelInboundDisposition::Delivered ? 1U : 0U;

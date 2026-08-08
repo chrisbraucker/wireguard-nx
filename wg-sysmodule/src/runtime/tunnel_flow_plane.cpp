@@ -1,7 +1,6 @@
 #include "runtime/tunnel_flow_plane.hpp"
 
 #include "logger.hpp"
-#include "wireguard/inner_packet.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -12,9 +11,6 @@ namespace wgnx::sysmodule::runtime {
 
 namespace {
 
-constexpr std::size_t Ipv4HeaderSize = 20;
-constexpr std::size_t UdpHeaderSize = 8;
-constexpr std::uint8_t UdpProtocol = 17;
 constexpr std::uint8_t InvalidSlabSlot = 0xFF;
 
 std::uint32_t AllocateNonZero(std::uint32_t& next) {
@@ -24,29 +20,6 @@ std::uint32_t AllocateNonZero(std::uint32_t& next) {
         next = 1;
     }
     return value == 0 ? AllocateNonZero(next) : value;
-}
-
-std::uint16_t LoadBigEndian16(const std::uint8_t* in) {
-    return static_cast<std::uint16_t>((static_cast<std::uint16_t>(in[0]) << 8U) | static_cast<std::uint16_t>(in[1]));
-}
-
-std::uint32_t AddChecksum(std::uint32_t sum, std::span<const std::uint8_t> bytes) {
-    std::size_t offset = 0;
-    while (offset + 1 < bytes.size()) {
-        sum += (static_cast<std::uint32_t>(bytes[offset]) << 8U) | bytes[offset + 1];
-        offset += 2;
-    }
-    if (offset < bytes.size()) {
-        sum += static_cast<std::uint32_t>(bytes[offset]) << 8U;
-    }
-    return sum;
-}
-
-std::uint16_t FinishChecksum(std::uint32_t sum) {
-    while ((sum >> 16U) != 0) {
-        sum = (sum & 0xFFFFU) + (sum >> 16U);
-    }
-    return static_cast<std::uint16_t>(~sum & 0xFFFFU);
 }
 
 bool EndpointEqual(const wgnx::tunnel::Ipv4Endpoint& lhs, const wgnx::tunnel::Ipv4Endpoint& rhs) {
@@ -626,152 +599,6 @@ TunnelInboundOutcome TunnelFlowPlane::DeliverInboundUdpDatagram(
     return outcome;
 }
 
-TunnelInboundOutcome TunnelFlowPlane::DeliverDecryptedIpv4Packet(
-    const PeerIdentity& peer, std::span<const std::uint8_t> packet, wgnx::platform::ktime_t now
-) {
-    TunnelInboundOutcome outcome{};
-    if (wgnx::wireguard::ValidateInnerIpv4Packet(packet) != wgnx::wireguard::InnerIpv4ValidationError::None ||
-        packet.size() < Ipv4HeaderSize) {
-        return outcome;
-    }
-    const std::size_t header_size = static_cast<std::size_t>(packet[0] & 0x0FU) * 4U;
-    if (packet[9] != UdpProtocol || (LoadBigEndian16(packet.data() + 6) & 0x3FFFU) != 0) {
-        return outcome;
-    }
-    wgnx::tunnel::Ipv4Endpoint remote{};
-    std::array<std::uint8_t, 4> tunnel_destination{};
-    std::uint16_t tunnel_destination_port = 0;
-    std::span<const std::uint8_t> payload{};
-    if (!ParseIpv4Endpoint(packet, header_size, &remote, &tunnel_destination, &tunnel_destination_port, &payload)) {
-        outcome.disposition = TunnelInboundDisposition::DroppedMalformed;
-        return outcome;
-    }
-
-    const FlowSlot* closest_flow = nullptr;
-    std::size_t closest_slot = 0;
-    std::size_t live_flow_count = 0;
-    std::size_t peer_matches = 0;
-    std::size_t tunnel_address_matches = 0;
-    std::size_t tunnel_port_matches = 0;
-    std::size_t remote_matches = 0;
-    std::size_t closest_match_count = 0;
-    for (std::size_t index = 0; index < m_flows.size(); ++index) {
-        FlowSlot& flow = m_flows[index];
-        if (!flow.allocated || flow.closed || flow.pending) {
-            continue;
-        }
-        ++live_flow_count;
-        const bool peer_matches_flow = flow.peer == peer;
-        const bool tunnel_address_matches_flow = flow.tunnel_source == tunnel_destination;
-        const bool tunnel_port_matches_flow = flow.virtual_source_port == tunnel_destination_port;
-        const bool remote_matches_flow = EndpointEqual(flow.remote, remote);
-        peer_matches += peer_matches_flow ? 1U : 0U;
-        tunnel_address_matches += tunnel_address_matches_flow ? 1U : 0U;
-        tunnel_port_matches += tunnel_port_matches_flow ? 1U : 0U;
-        remote_matches += remote_matches_flow ? 1U : 0U;
-        const std::size_t match_count = static_cast<std::size_t>(peer_matches_flow) +
-                                        static_cast<std::size_t>(tunnel_address_matches_flow) +
-                                        static_cast<std::size_t>(tunnel_port_matches_flow) + static_cast<std::size_t>(remote_matches_flow);
-        if (closest_flow == nullptr || match_count > closest_match_count) {
-            closest_flow = std::addressof(flow);
-            closest_slot = index;
-            closest_match_count = match_count;
-        }
-        if (!peer_matches_flow || !tunnel_port_matches_flow || !tunnel_address_matches_flow || !remote_matches_flow) {
-            continue;
-        }
-        outcome.client = {.slot = flow.client_slot, .generation = flow.client_generation};
-        outcome.flow = MakeFlowHandle(index, flow);
-        outcome.payload_size = payload.size();
-        if (flow.inbound_occupancy >= wgnx::tunnel::MaximumInboundDatagramsPerFlow) {
-            ++flow.inbound_dropped;
-            outcome.disposition = TunnelInboundDisposition::DroppedQueueFull;
-            return outcome;
-        }
-        const std::uint8_t slab_slot = AllocateInboundSlab();
-        if (slab_slot == InvalidSlabSlot) {
-            ++flow.inbound_dropped;
-            outcome.disposition = TunnelInboundDisposition::DroppedQueueFull;
-            return outcome;
-        }
-        InboundSlab& slab = m_inbound_slabs[slab_slot];
-        slab.size = static_cast<std::uint16_t>(payload.size());
-        std::memcpy(slab.bytes.data(), payload.data(), payload.size());
-        ++flow.inbound_occupancy;
-        flow.last_activity_at = now;
-        outcome.disposition =
-            EnqueueDataCompletion(index, slab_slot) ? TunnelInboundDisposition::Delivered : TunnelInboundDisposition::DroppedQueueFull;
-        if (outcome.disposition == TunnelInboundDisposition::Delivered) {
-            ++flow.inbound_delivered;
-        } else {
-            ++flow.inbound_dropped;
-        }
-        return outcome;
-    }
-
-    if (IsTombstoned(tunnel_destination, tunnel_destination_port, remote, now)) {
-        outcome.disposition = TunnelInboundDisposition::DroppedStale;
-        return outcome;
-    }
-
-    char remote_text[16] = {};
-    char tunnel_destination_text[16] = {};
-    FormatIpv4Text({remote.address[0], remote.address[1], remote.address[2], remote.address[3]}, remote_text, sizeof(remote_text));
-    FormatIpv4Text(tunnel_destination, tunnel_destination_text, sizeof(tunnel_destination_text));
-    if (closest_flow == nullptr) {
-        logger::Log(
-            "Tunnel UDP reverse lookup miss peer=%u activation=%u remote=%s:%u tunnel_destination=%s:%u live_flows=0",
-            peer.peer_index.Value(),
-            peer.activation_generation.Value(),
-            remote_text,
-            static_cast<unsigned int>(remote.port),
-            tunnel_destination_text,
-            static_cast<unsigned int>(tunnel_destination_port)
-        );
-        return outcome;
-    }
-
-    char expected_remote_text[16] = {};
-    char expected_tunnel_source_text[16] = {};
-    FormatIpv4Text(
-        {closest_flow->remote.address[0],
-         closest_flow->remote.address[1],
-         closest_flow->remote.address[2],
-         closest_flow->remote.address[3]},
-        expected_remote_text,
-        sizeof(expected_remote_text)
-    );
-    FormatIpv4Text(closest_flow->tunnel_source, expected_tunnel_source_text, sizeof(expected_tunnel_source_text));
-    logger::Log(
-        "Tunnel UDP reverse lookup miss peer=%u activation=%u remote=%s:%u tunnel_destination=%s:%u live_flows=%zu "
-        "matches(peer=%zu,address=%zu,port=%zu,remote=%zu) closest(slot=%zu flow=%llu client=%u/%u peer=%u/%u "
-        "remote=%s:%u tunnel_source=%s:%u matched_fields=%zu)",
-        peer.peer_index.Value(),
-        peer.activation_generation.Value(),
-        remote_text,
-        static_cast<unsigned int>(remote.port),
-        tunnel_destination_text,
-        static_cast<unsigned int>(tunnel_destination_port),
-        live_flow_count,
-        peer_matches,
-        tunnel_address_matches,
-        tunnel_port_matches,
-        remote_matches,
-        closest_slot,
-        static_cast<unsigned long long>(MakeFlowHandle(closest_slot, *closest_flow).value),
-        static_cast<unsigned int>(closest_flow->client_slot),
-        closest_flow->client_generation,
-        closest_flow->peer.peer_index.Value(),
-        closest_flow->peer.activation_generation.Value(),
-        expected_remote_text,
-        static_cast<unsigned int>(closest_flow->remote.port),
-        expected_tunnel_source_text,
-        static_cast<unsigned int>(closest_flow->virtual_source_port),
-        closest_match_count
-    );
-    return outcome;
-}
-
 void TunnelFlowPlane::InvalidatePeerActivation(
     const PeerIdentity& peer, wgnx::tunnel::FlowTerminalReason reason, wgnx::platform::ktime_t now
 ) {
@@ -1258,34 +1085,6 @@ bool TunnelFlowPlane::ParseIpv4Cidr(const char* text, std::array<std::uint8_t, 4
     return true;
 }
 
-bool TunnelFlowPlane::ParseIpv4Endpoint(
-    std::span<const std::uint8_t> packet,
-    std::size_t ipv4_header_size,
-    wgnx::tunnel::Ipv4Endpoint* out_source,
-    std::array<std::uint8_t, 4>* out_destination,
-    std::uint16_t* out_destination_port,
-    std::span<const std::uint8_t>* out_payload
-) {
-    if (out_source == nullptr || out_destination == nullptr || out_destination_port == nullptr || out_payload == nullptr ||
-        ipv4_header_size < Ipv4HeaderSize || packet.size() < ipv4_header_size + UdpHeaderSize) {
-        return false;
-    }
-    const std::uint8_t* udp = packet.data() + ipv4_header_size;
-    const std::size_t udp_size = LoadBigEndian16(udp + 4);
-    if (udp_size < UdpHeaderSize || udp_size != packet.size() - ipv4_header_size ||
-        (LoadBigEndian16(udp + 6) != 0 &&
-         ComputeUdpChecksum(packet.data() + 12, packet.data() + 16, std::span<const std::uint8_t>(udp, udp_size)) != 0)) {
-        return false;
-    }
-    std::copy_n(packet.data() + 12, 4, out_source->address);
-    out_source->port = LoadBigEndian16(udp);
-    out_source->reserved = 0;
-    std::copy_n(packet.data() + 16, 4, out_destination->begin());
-    *out_destination_port = LoadBigEndian16(udp + 2);
-    *out_payload = std::span<const std::uint8_t>(udp + UdpHeaderSize, udp_size - UdpHeaderSize);
-    return true;
-}
-
 bool TunnelFlowPlane::RouteMatches(const NormalizedRoute& route, const std::uint8_t address[4]) {
     for (std::size_t byte = 0; byte < route.network.size(); ++byte) {
         const std::size_t bits_before = byte * 8U;
@@ -1310,25 +1109,6 @@ const TunnelFlowPlane::NormalizedRoute* TunnelFlowPlane::SelectRoute(const wgnx:
         }
     }
     return nullptr;
-}
-
-std::uint16_t TunnelFlowPlane::ComputeInternetChecksum(std::span<const std::uint8_t> bytes) {
-    return FinishChecksum(AddChecksum(0, bytes));
-}
-
-std::uint16_t TunnelFlowPlane::ComputeUdpChecksum(
-    const std::uint8_t source[4], const std::uint8_t destination[4], std::span<const std::uint8_t> udp
-) {
-    std::array<std::uint8_t, 4> pseudo_tail = {
-        0,
-        UdpProtocol,
-        static_cast<std::uint8_t>(udp.size() >> 8U),
-        static_cast<std::uint8_t>(udp.size() & 0xFFU),
-    };
-    std::uint32_t sum = AddChecksum(0, std::span<const std::uint8_t>(source, 4));
-    sum = AddChecksum(sum, std::span<const std::uint8_t>(destination, 4));
-    sum = AddChecksum(sum, pseudo_tail);
-    return FinishChecksum(AddChecksum(sum, udp));
 }
 
 } // namespace wgnx::sysmodule::runtime

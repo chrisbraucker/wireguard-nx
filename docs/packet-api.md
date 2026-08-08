@@ -65,6 +65,7 @@ Submissions must contain exactly one complete IPv4 packet:
 - valid IPv4 header checksum
 
 Transport checksums and protocol-specific payloads are intentionally not changed by this boundary.
+The debug API neither constructs nor parses tunnel UDP packets, which remain solely inside the userspace IP adapter.
 Keepalives remain internal WireGuard transport messages and are not valid packet API submissions.
 The diagnostic packet API submits a caller-constructed packet to the currently active peer and intentionally does not perform destination `AllowedIPs` selection.
 It is therefore a privileged development bypass, not the future application flow API or a route-selection authority.

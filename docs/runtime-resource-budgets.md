@@ -103,6 +103,7 @@ The stack-chain configuration and footprint baseline live under `tools/baselines
 Updating either is a reviewed budget change, not routine build churn.
 
 The post-Chunk 14 corrective diagnostic queue increased measured static BSS by 8 KiB.
-The Task 6 lwIP accounting-adapter measurement is 1,388,050 static bytes, a 269,278-byte NSO, and a 270,338-byte NSP against absolute limits of 1,572,864, 294,912, and 294,912 bytes.
-This controlled increase includes the fixed lwIP allocator, pbuf pools, protocol tables, one composed adapter owner, the tagged decrypted-input copy, and the temporary handmade inbound parser that Task 6 will remove after the lwIP receive cutover.
+The post-item-14 Task 6 lwIP cutover measurement is 1,387,986 static bytes, a 269,218-byte NSO, and a 270,278-byte NSP against absolute limits of 1,572,864, 294,912, and 294,912 bytes.
+This controlled increase includes the fixed lwIP allocator, pbuf pools, protocol tables, one composed adapter owner, and the tagged decrypted-input copy.
+No handmade tunnel UDP or IPv4 parser, checksum implementation, or packet-identification storage remains in the runtime budget.
 The diagnostic queue is intentionally fixed and drops the oldest queued diagnostic line when full.
