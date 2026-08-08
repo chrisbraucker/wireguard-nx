@@ -6,7 +6,7 @@ namespace wgnx::mitm {
 
 constexpr inline std::uint64_t WireGuardProgramId = 0x010000000000EAD0ULL;
 constexpr inline std::uint64_t MitmProgramId = 0x010000000000EAD3ULL;
-constexpr inline std::uint64_t RequesterForwarderProgramId = 0x0515C00B3A04A000;
+constexpr inline std::uint64_t RequesterForwarderProgramId = 0x0593336457159000;
 
 enum class BsdSystemClient : std::uint8_t {
     Unknown,

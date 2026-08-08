@@ -82,29 +82,40 @@ void TestUserspaceIpAdapterOwner(TestContext& context) {
     constexpr std::array<std::uint8_t, 20> InputPacket = {
         0x45, 0x00, 0x00, 0x14, 0x00, 0x01, 0x00, 0x00, 0x40, 0x11, 0x66, 0xD6, 0x0A, 0xFB, 0x00, 0x02, 0x0A, 0x0D, 0x0D, 0x08,
     };
-    sysmodule::runtime::UserspaceIpAdapterOwner::OperationTicket input_ticket{};
-    const sysmodule::runtime::PeerIdentity input_peer{
-        .peer_index = sysmodule::runtime::PeerIndex{1},
-        .activation_generation = sysmodule::runtime::ActivationGeneration{2},
+    const auto queue_input = [&owner, &InputPacket](
+                                 sysmodule::runtime::PeerIndex peer_index,
+                                 sysmodule::runtime::ActivationGeneration activation_generation,
+                                 sysmodule::runtime::UserspaceIpAdapterOwner::OperationTicket& out_ticket
+                             ) {
+        const sysmodule::runtime::PeerIdentity input_peer{
+            .peer_index = peer_index,
+            .activation_generation = activation_generation,
+        };
+        const bool input_queued = owner.QueueInputPacketLocked(input_peer, 3, owner.AdapterEpochLocked(), InputPacket, &out_ticket) ==
+                                  sysmodule::runtime::UserspaceIpAdapterOwner::QueueResult::Queued;
+        const auto input_operation = owner.TakeNextLocked();
+        const bool input_tagged = input_operation.has_value() &&
+                                  input_operation->kind == sysmodule::runtime::UserspaceIpAdapterOwner::OperationKind::InputPacket &&
+                                  input_operation->peer == input_peer && input_operation->policy_generation == 3 &&
+                                  input_operation->adapter_epoch == owner.AdapterEpochLocked();
+        if (input_operation) {
+            owner.CompleteLocked(*input_operation, sysmodule::ip::UserspaceIpResult::Stale);
+        }
+        const auto copied_input = owner.InputPacketLocked(out_ticket);
+        const auto stale_input = owner.TakeResultLocked(out_ticket);
+        return input_queued && input_tagged && copied_input.size() == InputPacket.size() &&
+               std::equal(copied_input.begin(), copied_input.end(), InputPacket.begin()) &&
+               stale_input == sysmodule::ip::UserspaceIpResult::Stale;
     };
-    const bool input_queued = owner.QueueInputPacketLocked(input_peer, 3, owner.AdapterEpochLocked(), InputPacket, &input_ticket) ==
-                              sysmodule::runtime::UserspaceIpAdapterOwner::QueueResult::Queued;
-    const auto input_operation = owner.TakeNextLocked();
-    const bool input_tagged = input_operation.has_value() &&
-                              input_operation->kind == sysmodule::runtime::UserspaceIpAdapterOwner::OperationKind::InputPacket &&
-                              input_operation->peer == input_peer && input_operation->policy_generation == 3 &&
-                              input_operation->adapter_epoch == owner.AdapterEpochLocked();
-    if (input_operation) {
-        owner.CompleteLocked(*input_operation, sysmodule::ip::UserspaceIpResult::Stale);
-    }
-    const auto copied_input = owner.InputPacketLocked(input_ticket);
-    const auto stale_input = owner.TakeResultLocked(input_ticket);
+    sysmodule::runtime::UserspaceIpAdapterOwner::OperationTicket input_ticket{};
+    const bool input_queued = queue_input(sysmodule::runtime::PeerIndex{1}, sysmodule::runtime::ActivationGeneration{2}, input_ticket);
+    sysmodule::runtime::UserspaceIpAdapterOwner::OperationTicket zero_input_ticket{};
+    const bool zero_input_queued =
+        queue_input(sysmodule::runtime::PeerIndex{0}, sysmodule::runtime::ActivationGeneration{1}, zero_input_ticket);
     WGNX_TEST_REQUIRE(
         context,
-        input_queued && input_tagged && copied_input.size() == InputPacket.size() &&
-            std::equal(copied_input.begin(), copied_input.end(), InputPacket.begin()) &&
-            stale_input == sysmodule::ip::UserspaceIpResult::Stale,
-        "adapter owner did not retain one tagged copied IPv4 input operation"
+        input_queued && zero_input_queued,
+        "adapter owner did not accept and retain one tagged copied IPv4 input operation for peers 0 and 1"
     );
     owner.QueueResetLocked();
     RunOwner(owner);

@@ -81,9 +81,9 @@ UserspaceIpAdapterOwner::QueueResult UserspaceIpAdapterOwner::QueueInputPacketLo
     std::span<const std::uint8_t> packet,
     OperationTicket* out_ticket
 ) {
-    if (out_ticket == nullptr || peer.peer_index.IsZero() || peer.activation_generation.IsZero() || policy_generation == 0 ||
-        adapter_epoch == 0 || packet.empty() || packet.size() > m_data_operation.payload.size() || m_data_operation.pending ||
-        m_data_operation.running || m_data_operation.complete) {
+    if (out_ticket == nullptr || peer.activation_generation.IsZero() || policy_generation == 0 || adapter_epoch == 0 || packet.empty() ||
+        packet.size() > m_data_operation.payload.size() || m_data_operation.pending || m_data_operation.running ||
+        m_data_operation.complete) {
         return QueueResult::QueueFull;
     }
     m_data_operation.operation = {
