@@ -73,7 +73,8 @@ constexpr std::uint32_t CapabilityMask(Capability capability) {
     return static_cast<std::uint32_t>(capability);
 }
 
-constexpr inline std::uint32_t SupportedCapabilityMask = CapabilityMask(Capability::ConnectedIpv4Udp);
+constexpr inline std::uint32_t SupportedCapabilityMask =
+    CapabilityMask(Capability::ConnectedIpv4Udp) | CapabilityMask(Capability::ConnectedIpv4Tcp);
 
 enum class ProtocolStatus : std::uint32_t {
     Success = 0,

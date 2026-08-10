@@ -152,11 +152,20 @@ void TestPacketDataPlane(TestContext& context) {
     };
     const auto atomic_admission = data_plane.SubmitInternalIpPacketBatch(admitted_fragments, timer_facts, 4'200, effects);
     static_cast<void>(coordinator.SnapshotPacketState(peer));
+    const auto pinned_peer_rejection = data_plane.SubmitInternalIpPacketBatchForPeer(
+        {.peer_index = PeerIndex{0}, .activation_generation = ActivationGeneration{2}},
+        admitted_fragments,
+        timer_facts,
+        4'250,
+        effects
+    );
+    const bool pinned_rejection_preserved_depth = peer.staged_packet_count == 2;
     WGNX_TEST_REQUIRE(
         context,
         atomic_rejection.status == PacketSubmissionStatus::QueueFull && rejected_without_partial_stage &&
-            atomic_admission.status == PacketSubmissionStatus::Queued && peer.staged_packet_count == 2,
-        "packet data plane did not atomically reject or admit an internal packet batch"
+            atomic_admission.status == PacketSubmissionStatus::Queued &&
+            pinned_peer_rejection.status == PacketSubmissionStatus::TunnelUnavailable && pinned_rejection_preserved_depth,
+        "packet data plane did not atomically admit batches only for the resolved active peer"
     );
 
     const auto stale_packet = data_plane.DeliverDecryptedPacket(identity, Ipv4Packet);

@@ -87,27 +87,30 @@ ams::Result TunnelClientService::SendUdpDatagramBatch(
 ams::Result TunnelClientService::OpenConnectedTcpFlow(
     ams::sf::Out<wgnx::tunnel::OpenConnectedFlowResult> out, const wgnx::tunnel::OpenConnectedFlowRequest& request
 ) {
-    out.SetValue({
-        .status =
-            request.remote.port == 0 ? wgnx::tunnel::ProtocolStatus::MalformedInput : wgnx::tunnel::ProtocolStatus::UnsupportedOperation,
-    });
+    out.SetValue(runtime::OpenTunnelConnectedTcpFlow(m_client, request));
     R_SUCCEED();
 }
 
 ams::Result TunnelClientService::WriteTcpStream(
     ams::sf::Out<wgnx::tunnel::PayloadResult> out, const wgnx::tunnel::PayloadRange& range, const ams::sf::InMapAliasBuffer& payload
 ) {
-    out.SetValue({
-        .client_tag = range.client_tag,
-        .status = IsPayloadRangeValid(range, payload) ? wgnx::tunnel::ProtocolStatus::UnsupportedOperation
-                                                      : wgnx::tunnel::ProtocolStatus::MalformedInput,
-        .accepted_bytes = 0,
-    });
+    if (!IsPayloadRangeValid(range, payload)) {
+        out.SetValue({.client_tag = range.client_tag, .status = wgnx::tunnel::ProtocolStatus::MalformedInput, .accepted_bytes = 0});
+        R_SUCCEED();
+    }
+    out.SetValue(
+        runtime::WriteTunnelTcpStream(
+            m_client,
+            range,
+            std::span<const std::uint8_t>(static_cast<const std::uint8_t*>(payload.GetPointer()), payload.GetSize())
+                .subspan(range.payload_offset, range.payload_size)
+        )
+    );
     R_SUCCEED();
 }
 
 ams::Result TunnelClientService::ShutdownTcpWrite(ams::sf::Out<wgnx::tunnel::ProtocolStatus> out, const wgnx::tunnel::FlowHandle& flow) {
-    out.SetValue(flow.value == 0 ? wgnx::tunnel::ProtocolStatus::MalformedInput : wgnx::tunnel::ProtocolStatus::UnsupportedOperation);
+    out.SetValue(runtime::ShutdownTunnelTcpWrite(m_client, flow));
     R_SUCCEED();
 }
 

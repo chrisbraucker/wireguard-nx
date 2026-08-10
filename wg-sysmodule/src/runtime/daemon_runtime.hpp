@@ -30,9 +30,16 @@ wgnx::tunnel::RoutingPolicySnapshot CopyTunnelRoutingPolicy(std::span<wgnx::tunn
 wgnx::tunnel::OpenConnectedFlowResult OpenTunnelConnectedUdpFlow(
     TunnelClientId client, const wgnx::tunnel::OpenConnectedFlowRequest& request
 );
+wgnx::tunnel::OpenConnectedFlowResult OpenTunnelConnectedTcpFlow(
+    TunnelClientId client, const wgnx::tunnel::OpenConnectedFlowRequest& request
+);
 wgnx::tunnel::ProtocolStatus SendTunnelUdpDatagram(
     TunnelClientId client, const wgnx::tunnel::PayloadRange& descriptor, std::span<const std::uint8_t> payload
 );
+wgnx::tunnel::PayloadResult WriteTunnelTcpStream(
+    TunnelClientId client, const wgnx::tunnel::PayloadRange& range, std::span<const std::uint8_t> payload
+);
+wgnx::tunnel::ProtocolStatus ShutdownTunnelTcpWrite(TunnelClientId client, wgnx::tunnel::FlowHandle flow);
 TunnelCompletionDrainOutcome ReceiveTunnelCompletions(
     TunnelClientId client,
     std::span<wgnx::tunnel::CompletionRecord> records,

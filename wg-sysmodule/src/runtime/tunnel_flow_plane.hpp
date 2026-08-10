@@ -62,6 +62,16 @@ struct PreparedTunnelDatagram {
     }
 };
 
+struct TunnelTcpOutputRoute {
+    PeerIdentity peer{};
+    wgnx::tunnel::FlowHandle flow{};
+    std::uint32_t policy_generation{};
+
+    [[nodiscard]] constexpr bool IsResolved() const {
+        return flow.value != 0 && !peer.activation_generation.IsZero() && policy_generation != 0;
+    }
+};
+
 struct TunnelCompletionDrainOutcome {
     wgnx::tunnel::ProtocolStatus status{wgnx::tunnel::ProtocolStatus::QueueEmpty};
     std::uint32_t count{0};
@@ -114,9 +124,18 @@ class TunnelFlowPlane {
         wgnx::platform::ktime_t now,
         TunnelTransportAvailability availability
     );
+    [[nodiscard]] TunnelFlowReservation ReserveConnectedTcpFlow(
+        TunnelClientId client,
+        const wgnx::tunnel::OpenConnectedFlowRequest& request,
+        wgnx::platform::ktime_t now,
+        TunnelTransportAvailability availability
+    );
     [[nodiscard]] bool CommitFlowReservation(const TunnelFlowReservation& reservation);
     void CancelFlowReservation(const TunnelFlowReservation& reservation);
     [[nodiscard]] bool GetFlowAdapterToken(TunnelClientId client, wgnx::tunnel::FlowHandle flow, std::uint64_t* out_token) const;
+    [[nodiscard]] TunnelTcpOutputRoute ResolveTcpOutput(
+        const wgnx::tunnel::Ipv4Endpoint& local, const wgnx::tunnel::Ipv4Endpoint& remote
+    ) const;
     [[nodiscard]] std::uint32_t CopyClientAdapterTokens(TunnelClientId client, std::span<std::uint64_t> out) const;
     [[nodiscard]] PreparedTunnelDatagram PrepareSend(
         TunnelClientId client,
@@ -124,6 +143,12 @@ class TunnelFlowPlane {
         std::span<const std::uint8_t> payload,
         TunnelTransportAvailability availability,
         wgnx::platform::ktime_t now
+    );
+    [[nodiscard]] PreparedTunnelDatagram PrepareTcpWrite(
+        TunnelClientId client, const wgnx::tunnel::PayloadRange& range, std::span<const std::uint8_t> payload, wgnx::platform::ktime_t now
+    );
+    [[nodiscard]] PreparedTunnelDatagram PrepareTcpShutdown(
+        TunnelClientId client, wgnx::tunnel::FlowHandle flow, wgnx::platform::ktime_t now
     );
     void CompleteSend(const PreparedTunnelDatagram& datagram, wgnx::tunnel::ProtocolStatus completion_status);
     void NotifyOutboundCapacityAvailable(const PeerIdentity& peer);
@@ -144,6 +169,19 @@ class TunnelFlowPlane {
         std::span<const std::uint8_t> payload,
         wgnx::platform::ktime_t now
     );
+    [[nodiscard]] TunnelInboundOutcome DeliverInboundTcpStream(
+        const PeerIdentity& peer,
+        std::uint32_t policy_generation,
+        std::uint64_t adapter_token,
+        std::span<const std::uint8_t> payload,
+        wgnx::platform::ktime_t now
+    );
+    [[nodiscard]] bool MarkTcpConnected(std::uint64_t adapter_token, wgnx::platform::ktime_t now);
+    [[nodiscard]] bool MarkTcpLocalWriteClosed(std::uint64_t adapter_token, wgnx::platform::ktime_t now);
+    [[nodiscard]] bool MarkTcpRemoteWriteClosed(std::uint64_t adapter_token, wgnx::platform::ktime_t now);
+    [[nodiscard]] bool MarkTcpReset(std::uint64_t adapter_token, wgnx::platform::ktime_t now);
+    [[nodiscard]] bool MarkTcpWriteBlocked(std::uint64_t adapter_token);
+    [[nodiscard]] bool MarkTcpWritable(std::uint64_t adapter_token);
     void InvalidatePeerActivation(const PeerIdentity& peer, wgnx::tunnel::FlowTerminalReason reason, wgnx::platform::ktime_t now);
 
   private:
@@ -173,11 +211,14 @@ class TunnelFlowPlane {
         bool allocated{false};
         bool closed{false};
         bool pending{false};
+        wgnx::tunnel::FlowState state{wgnx::tunnel::FlowState::Open};
+        std::uint32_t stream_flags{wgnx::tunnel::FlowStreamFlagNone};
         std::uint8_t client_slot{0xFF};
         std::uint32_t client_generation{0};
         std::uint32_t allocation_generation{0};
         PeerIdentity peer{};
         std::uint32_t policy_generation{0};
+        wgnx::tunnel::FlowKind kind{wgnx::tunnel::FlowKind::Udp};
         wgnx::tunnel::Ipv4Endpoint remote{};
         std::array<std::uint8_t, 4> tunnel_source{};
         std::uint16_t virtual_source_port{0};
@@ -228,6 +269,13 @@ class TunnelFlowPlane {
 
     void ClearExpiredTombstones(wgnx::platform::ktime_t now);
     [[nodiscard]] bool HasTombstoneReservation(wgnx::platform::ktime_t now);
+    [[nodiscard]] TunnelFlowReservation ReserveConnectedFlow(
+        TunnelClientId client,
+        const wgnx::tunnel::OpenConnectedFlowRequest& request,
+        wgnx::platform::ktime_t now,
+        TunnelTransportAvailability availability,
+        wgnx::tunnel::FlowKind kind
+    );
     [[nodiscard]] std::uint32_t AllocateFlowGeneration();
     [[nodiscard]] bool AllocateVirtualTuple(const wgnx::tunnel::Ipv4Endpoint& remote, std::uint16_t* out_port, wgnx::platform::ktime_t now);
     void QuarantineTuple(const FlowSlot& flow, wgnx::platform::ktime_t now);

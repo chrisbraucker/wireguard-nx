@@ -3,6 +3,7 @@
 #include "ip/lwip_platform.hpp"
 #include "ip/userspace_ip_adapter.hpp"
 #include "test_framework.hpp"
+#include "wireguard/inner_packet.hpp"
 
 #include <algorithm>
 #include <array>
@@ -72,12 +73,18 @@ void TestUserspaceIpAdapter(TestContext& context) {
     );
     adapter.CloseFlow(Flow.token);
     adapter.ClearOutboundPackets();
+    wgnx::wireguard::InnerIpv4TcpTuple tcp_tuple{};
     WGNX_TEST_REQUIRE(
         context,
         adapter.OpenTcpFlow(Flow) == UserspaceIpResult::Success && adapter.OutboundPackets().size() == 1 &&
             adapter.OutboundPackets().front().bytes[9] == 6 && adapter.WriteTcp(Flow.token, Small) == UserspaceIpResult::TransportError &&
-            adapter.ShutdownTcpWrite(Flow.token) == UserspaceIpResult::TransportError,
-        "adapter did not open one bounded TCP PCB and emit its SYN through the packet collector"
+            adapter.ShutdownTcpWrite(Flow.token) == UserspaceIpResult::TransportError &&
+            wgnx::wireguard::ParseInnerIpv4TcpTuple(
+                std::span<const std::uint8_t>(adapter.OutboundPackets().front().bytes).first(adapter.OutboundPackets().front().size),
+                &tcp_tuple
+            ) &&
+            tcp_tuple.source_port == Flow.local.port && tcp_tuple.destination_port == Flow.remote.port,
+        "adapter did not open one bounded TCP PCB or retain a parseable pinned output tuple"
     );
     adapter.CloseFlow(Flow.token);
     WGNX_TEST_REQUIRE(context, adapter.OpenFlow(Flow) == UserspaceIpResult::Success, "adapter did not release a closed PCB for reuse");

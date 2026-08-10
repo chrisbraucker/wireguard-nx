@@ -27,8 +27,10 @@ const char* GetQueueDispositionName(QueueDisposition disposition) {
 namespace {
 
 constexpr std::size_t MinimumIpv4HeaderSize = 20;
+constexpr std::size_t MinimumTcpHeaderSize = 20;
 constexpr std::size_t Ipv6HeaderSize = 40;
 constexpr std::size_t MaximumPaddingSize = 15;
+constexpr std::uint8_t Ipv4TcpProtocol = 6;
 
 struct AllowedIp {
     std::array<std::uint8_t, 16> address{};
@@ -277,6 +279,28 @@ InnerIpv4ValidationError ValidateInnerIpv4Packet(std::span<const std::uint8_t> p
     }
 
     return InnerIpv4ValidationError::None;
+}
+
+bool ParseInnerIpv4TcpTuple(std::span<const std::uint8_t> packet, InnerIpv4TcpTuple* out) {
+    if (out == nullptr || ValidateInnerIpv4Packet(packet) != InnerIpv4ValidationError::None) {
+        return false;
+    }
+    const std::size_t ipv4_header_size = static_cast<std::size_t>(packet[0] & 0x0FU) * 4U;
+    const std::uint16_t fragment = LoadBigEndian16(packet.data() + 6);
+    if (packet[9] != Ipv4TcpProtocol || (fragment & 0x3FFFU) != 0 || packet.size() < ipv4_header_size + MinimumTcpHeaderSize) {
+        return false;
+    }
+    const std::size_t tcp_header_size = static_cast<std::size_t>(packet[ipv4_header_size + 12] >> 4U) * 4U;
+    if (tcp_header_size < MinimumTcpHeaderSize || packet.size() < ipv4_header_size + tcp_header_size) {
+        return false;
+    }
+    *out = {
+        .source_address = {packet[12], packet[13], packet[14], packet[15]},
+        .destination_address = {packet[16], packet[17], packet[18], packet[19]},
+        .source_port = LoadBigEndian16(packet.data() + ipv4_header_size),
+        .destination_port = LoadBigEndian16(packet.data() + ipv4_header_size + 2),
+    };
+    return true;
 }
 
 InnerIpValidationError ValidateInnerIpPacket(std::span<const std::uint8_t> packet, InnerIpVersion* out_version) {

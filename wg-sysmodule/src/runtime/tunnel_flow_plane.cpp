@@ -183,6 +183,25 @@ TunnelFlowReservation TunnelFlowPlane::ReserveConnectedUdpFlow(
     wgnx::platform::ktime_t now,
     TunnelTransportAvailability availability
 ) {
+    return ReserveConnectedFlow(client, request, now, availability, wgnx::tunnel::FlowKind::Udp);
+}
+
+TunnelFlowReservation TunnelFlowPlane::ReserveConnectedTcpFlow(
+    TunnelClientId client,
+    const wgnx::tunnel::OpenConnectedFlowRequest& request,
+    wgnx::platform::ktime_t now,
+    TunnelTransportAvailability availability
+) {
+    return ReserveConnectedFlow(client, request, now, availability, wgnx::tunnel::FlowKind::Tcp);
+}
+
+TunnelFlowReservation TunnelFlowPlane::ReserveConnectedFlow(
+    TunnelClientId client,
+    const wgnx::tunnel::OpenConnectedFlowRequest& request,
+    wgnx::platform::ktime_t now,
+    TunnelTransportAvailability availability,
+    wgnx::tunnel::FlowKind kind
+) {
     TunnelFlowReservation reservation{};
     wgnx::tunnel::OpenConnectedFlowResult& result = reservation.result;
     result.routing_policy_generation = m_policy_generation;
@@ -236,11 +255,16 @@ TunnelFlowReservation TunnelFlowPlane::ReserveConnectedUdpFlow(
         .allocated = true,
         .closed = false,
         .pending = true,
+        .state = wgnx::tunnel::FlowState::Connecting,
+        .stream_flags = kind == wgnx::tunnel::FlowKind::Tcp
+                            ? wgnx::tunnel::FlowStreamFlagLocalWriteOpen | wgnx::tunnel::FlowStreamFlagRemoteWriteOpen
+                            : wgnx::tunnel::FlowStreamFlagNone,
         .client_slot = client.slot,
         .client_generation = client.generation,
         .allocation_generation = AllocateFlowGeneration(),
         .peer = m_policy_peer,
         .policy_generation = m_policy_generation,
+        .kind = kind,
         .remote = request.remote,
         .tunnel_source = m_tunnel_source,
         .virtual_source_port = source_port,
@@ -269,8 +293,9 @@ TunnelFlowReservation TunnelFlowPlane::ReserveConnectedUdpFlow(
     );
     FormatIpv4Text(flow.tunnel_source, tunnel_source_text, sizeof(tunnel_source_text));
     logger::Log(
-        "Opened tunnel UDP flow=%llu slot=%zu client=%u/%u peer=%u activation=%u policy=%u remote=%s:%u "
+        "Opened tunnel %s flow=%llu slot=%zu client=%u/%u peer=%u activation=%u policy=%u remote=%s:%u "
         "tunnel_source=%s virtual_source_port=%u tag=%llu",
+        kind == wgnx::tunnel::FlowKind::Tcp ? "TCP" : "UDP",
         static_cast<unsigned long long>(result.flow.value),
         slot,
         static_cast<unsigned int>(flow.client_slot),
@@ -319,6 +344,7 @@ bool TunnelFlowPlane::CommitFlowReservation(const TunnelFlowReservation& reserva
         return false;
     }
     flow->pending = false;
+    flow->state = flow->kind == wgnx::tunnel::FlowKind::Tcp ? wgnx::tunnel::FlowState::Connecting : wgnx::tunnel::FlowState::Open;
     return true;
 }
 
@@ -339,6 +365,27 @@ bool TunnelFlowPlane::GetFlowAdapterToken(TunnelClientId client, wgnx::tunnel::F
     }
     *out_token = flow_handle.value;
     return true;
+}
+
+TunnelTcpOutputRoute TunnelFlowPlane::ResolveTcpOutput(
+    const wgnx::tunnel::Ipv4Endpoint& local, const wgnx::tunnel::Ipv4Endpoint& remote
+) const {
+    for (std::size_t index = 0; index < m_flows.size(); ++index) {
+        const FlowSlot& flow = m_flows[index];
+        if (!flow.allocated || flow.closed || flow.pending || flow.kind != wgnx::tunnel::FlowKind::Tcp ||
+            !EndpointEqual(flow.remote, remote) || flow.virtual_source_port != local.port ||
+            !std::equal(flow.tunnel_source.begin(), flow.tunnel_source.end(), std::begin(local.address)) ||
+            FindClient({.slot = flow.client_slot, .generation = flow.client_generation}) == nullptr || !m_policy_available ||
+            flow.peer != m_policy_peer || flow.policy_generation != m_policy_generation) {
+            continue;
+        }
+        return {
+            .peer = flow.peer,
+            .flow = MakeFlowHandle(index, flow),
+            .policy_generation = flow.policy_generation,
+        };
+    }
+    return {};
 }
 
 std::uint32_t TunnelFlowPlane::CopyClientAdapterTokens(TunnelClientId client, std::span<std::uint64_t> out) const {
@@ -406,6 +453,66 @@ PreparedTunnelDatagram TunnelFlowPlane::PrepareSend(
     outcome.status = wgnx::tunnel::ProtocolStatus::Success;
     outcome.peer = flow->peer;
     outcome.adapter_token = descriptor.flow.value;
+    return outcome;
+}
+
+PreparedTunnelDatagram TunnelFlowPlane::PrepareTcpWrite(
+    TunnelClientId client, const wgnx::tunnel::PayloadRange& range, std::span<const std::uint8_t> payload, wgnx::platform::ktime_t now
+) {
+    PreparedTunnelDatagram outcome{.flow = range.flow};
+    if (range.payload_size != payload.size()) {
+        outcome.status = wgnx::tunnel::ProtocolStatus::MalformedInput;
+        return outcome;
+    }
+    if (payload.size() > wgnx::tunnel::MaximumTcpWriteStorageBytes) {
+        outcome.status = wgnx::tunnel::ProtocolStatus::PayloadTooLarge;
+        return outcome;
+    }
+    FlowSlot* flow = FindFlow(client, range.flow);
+    if (flow == nullptr) {
+        outcome.status = wgnx::tunnel::ProtocolStatus::StaleHandle;
+    } else if (flow->kind != wgnx::tunnel::FlowKind::Tcp) {
+        outcome.status = wgnx::tunnel::ProtocolStatus::WrongFlowKind;
+    } else if (flow->closed) {
+        outcome.status = wgnx::tunnel::ProtocolStatus::FlowClosed;
+    } else if (flow->state != wgnx::tunnel::FlowState::Open) {
+        outcome.status = wgnx::tunnel::ProtocolStatus::NotConnected;
+    } else if ((flow->stream_flags & wgnx::tunnel::FlowStreamFlagLocalWriteOpen) == 0) {
+        outcome.status = wgnx::tunnel::ProtocolStatus::LocalWriteClosed;
+    } else if (!m_policy_available || flow->peer != m_policy_peer || flow->policy_generation != m_policy_generation) {
+        outcome.status = wgnx::tunnel::ProtocolStatus::PeerUnavailable;
+    } else {
+        flow->last_activity_at = now;
+        outcome.status = wgnx::tunnel::ProtocolStatus::Success;
+        outcome.peer = flow->peer;
+        outcome.adapter_token = range.flow.value;
+    }
+    return outcome;
+}
+
+PreparedTunnelDatagram TunnelFlowPlane::PrepareTcpShutdown(
+    TunnelClientId client, wgnx::tunnel::FlowHandle flow_handle, wgnx::platform::ktime_t now
+) {
+    PreparedTunnelDatagram outcome{.flow = flow_handle};
+    FlowSlot* flow = FindFlow(client, flow_handle);
+    if (flow == nullptr) {
+        outcome.status = wgnx::tunnel::ProtocolStatus::StaleHandle;
+    } else if (flow->kind != wgnx::tunnel::FlowKind::Tcp) {
+        outcome.status = wgnx::tunnel::ProtocolStatus::WrongFlowKind;
+    } else if (flow->closed) {
+        outcome.status = wgnx::tunnel::ProtocolStatus::FlowClosed;
+    } else if (flow->state != wgnx::tunnel::FlowState::Open && flow->state != wgnx::tunnel::FlowState::Closing) {
+        outcome.status = wgnx::tunnel::ProtocolStatus::NotConnected;
+    } else if ((flow->stream_flags & wgnx::tunnel::FlowStreamFlagLocalWriteOpen) == 0) {
+        outcome.status = wgnx::tunnel::ProtocolStatus::Success;
+        outcome.peer = flow->peer;
+        outcome.adapter_token = flow_handle.value;
+    } else {
+        flow->last_activity_at = now;
+        outcome.status = wgnx::tunnel::ProtocolStatus::Success;
+        outcome.peer = flow->peer;
+        outcome.adapter_token = flow_handle.value;
+    }
     return outcome;
 }
 
@@ -518,13 +625,15 @@ wgnx::tunnel::FlowStateResult TunnelFlowPlane::GetFlowState(TunnelClientId clien
         return result;
     }
     result.status = flow->closed ? wgnx::tunnel::ProtocolStatus::FlowClosed : wgnx::tunnel::ProtocolStatus::Success;
-    result.state = flow->closed ? wgnx::tunnel::FlowState::Closed : wgnx::tunnel::FlowState::Open;
+    result.state = flow->closed ? wgnx::tunnel::FlowState::Closed : flow->state;
     result.terminal_reason = flow->terminal_reason;
+    result.flow_kind = flow->kind;
     result.peer_activation_generation = flow->peer.activation_generation.Value();
     result.routing_policy_generation = flow->policy_generation;
     std::copy(flow->tunnel_source.begin(), flow->tunnel_source.end(), std::begin(result.advertised_local.address));
     result.advertised_local.port = flow->virtual_source_port;
     result.diagnostic_tag = flow->diagnostic_tag;
+    result.stream_flags = flow->stream_flags;
     return result;
 }
 
@@ -563,9 +672,9 @@ TunnelInboundOutcome TunnelFlowPlane::DeliverInboundUdpDatagram(
         outcome.client = {.slot = flow.client_slot, .generation = flow.client_generation};
         outcome.flow = MakeFlowHandle(index, flow);
         outcome.payload_size = payload.size();
-        if (flow.closed || flow.pending || FindClient(outcome.client) == nullptr || flow.peer != peer ||
-            flow.policy_generation != policy_generation || m_policy_generation != policy_generation || m_policy_peer != peer ||
-            !EndpointEqual(flow.remote, remote)) {
+        if (flow.closed || flow.pending || flow.kind != wgnx::tunnel::FlowKind::Udp || FindClient(outcome.client) == nullptr ||
+            flow.peer != peer || flow.policy_generation != policy_generation || m_policy_generation != policy_generation ||
+            m_policy_peer != peer || !EndpointEqual(flow.remote, remote)) {
             outcome.disposition = TunnelInboundDisposition::DroppedStale;
             return outcome;
         }
@@ -596,6 +705,197 @@ TunnelInboundOutcome TunnelFlowPlane::DeliverInboundUdpDatagram(
     }
     outcome.disposition = TunnelInboundDisposition::DroppedUnknown;
     return outcome;
+}
+
+TunnelInboundOutcome TunnelFlowPlane::DeliverInboundTcpStream(
+    const PeerIdentity& peer,
+    std::uint32_t policy_generation,
+    std::uint64_t adapter_token,
+    std::span<const std::uint8_t> payload,
+    wgnx::platform::ktime_t now
+) {
+    TunnelInboundOutcome outcome{};
+    if (adapter_token == 0 || payload.size() > wgnx::tunnel::MaximumTcpWriteStorageBytes) {
+        outcome.disposition = TunnelInboundDisposition::DroppedMalformed;
+        return outcome;
+    }
+    for (std::size_t index = 0; index < m_flows.size(); ++index) {
+        FlowSlot& flow = m_flows[index];
+        if (!flow.allocated || MakeFlowHandle(index, flow).value != adapter_token) {
+            continue;
+        }
+        outcome.client = {.slot = flow.client_slot, .generation = flow.client_generation};
+        outcome.flow = MakeFlowHandle(index, flow);
+        outcome.payload_size = payload.size();
+        if (flow.closed || flow.pending || flow.kind != wgnx::tunnel::FlowKind::Tcp || FindClient(outcome.client) == nullptr ||
+            flow.peer != peer || flow.policy_generation != policy_generation || m_policy_generation != policy_generation ||
+            m_policy_peer != peer) {
+            outcome.disposition = TunnelInboundDisposition::DroppedStale;
+            return outcome;
+        }
+        if (flow.inbound_occupancy >= wgnx::tunnel::MaximumInboundDatagramsPerFlow) {
+            ++flow.inbound_dropped;
+            outcome.disposition = TunnelInboundDisposition::DroppedQueueFull;
+            return outcome;
+        }
+        const std::uint8_t slab_slot = AllocateInboundSlab();
+        if (slab_slot == InvalidSlabSlot) {
+            ++flow.inbound_dropped;
+            outcome.disposition = TunnelInboundDisposition::DroppedQueueFull;
+            return outcome;
+        }
+        InboundSlab& slab = m_inbound_slabs[slab_slot];
+        slab.size = static_cast<std::uint16_t>(payload.size());
+        std::memcpy(slab.bytes.data(), payload.data(), payload.size());
+        ++flow.inbound_occupancy;
+        flow.last_activity_at = now;
+        outcome.disposition =
+            EnqueueDataCompletion(index, slab_slot) ? TunnelInboundDisposition::Delivered : TunnelInboundDisposition::DroppedQueueFull;
+        if (outcome.disposition == TunnelInboundDisposition::Delivered) {
+            ++flow.inbound_delivered;
+        } else {
+            ++flow.inbound_dropped;
+        }
+        return outcome;
+    }
+    outcome.disposition = TunnelInboundDisposition::DroppedUnknown;
+    return outcome;
+}
+
+bool TunnelFlowPlane::MarkTcpConnected(std::uint64_t adapter_token, wgnx::platform::ktime_t now) {
+    for (std::size_t index = 0; index < m_flows.size(); ++index) {
+        FlowSlot& flow = m_flows[index];
+        if (!flow.allocated || MakeFlowHandle(index, flow).value != adapter_token) {
+            continue;
+        }
+        if (flow.closed || flow.pending || flow.kind != wgnx::tunnel::FlowKind::Tcp || flow.state != wgnx::tunnel::FlowState::Connecting) {
+            return false;
+        }
+        flow.state = wgnx::tunnel::FlowState::Open;
+        flow.last_activity_at = now;
+        wgnx::tunnel::CompletionRecord completion{};
+        completion.type = wgnx::tunnel::CompletionType::FlowStateChanged;
+        completion.status = wgnx::tunnel::ProtocolStatus::Success;
+        completion.flow = MakeFlowHandle(index, flow);
+        completion.peer_activation_generation = flow.peer.activation_generation.Value();
+        completion.routing_policy_generation = flow.policy_generation;
+        completion.flow_state = flow.state;
+        completion.flow_kind = flow.kind;
+        EnqueueControlCompletion({.slot = flow.client_slot, .generation = flow.client_generation}, completion);
+        return true;
+    }
+    return false;
+}
+
+bool TunnelFlowPlane::MarkTcpLocalWriteClosed(std::uint64_t adapter_token, wgnx::platform::ktime_t now) {
+    for (std::size_t index = 0; index < m_flows.size(); ++index) {
+        FlowSlot& flow = m_flows[index];
+        if (!flow.allocated || MakeFlowHandle(index, flow).value != adapter_token) {
+            continue;
+        }
+        if (flow.closed || flow.pending || flow.kind != wgnx::tunnel::FlowKind::Tcp) {
+            return false;
+        }
+        flow.stream_flags &= ~wgnx::tunnel::FlowStreamFlagLocalWriteOpen;
+        flow.state = wgnx::tunnel::FlowState::Closing;
+        flow.last_activity_at = now;
+        wgnx::tunnel::CompletionRecord completion{};
+        completion.type = wgnx::tunnel::CompletionType::FlowStateChanged;
+        completion.status = wgnx::tunnel::ProtocolStatus::Success;
+        completion.flow = MakeFlowHandle(index, flow);
+        completion.peer_activation_generation = flow.peer.activation_generation.Value();
+        completion.routing_policy_generation = flow.policy_generation;
+        completion.flow_state = flow.state;
+        completion.flow_kind = flow.kind;
+        EnqueueControlCompletion({.slot = flow.client_slot, .generation = flow.client_generation}, completion);
+        return true;
+    }
+    return false;
+}
+
+bool TunnelFlowPlane::MarkTcpRemoteWriteClosed(std::uint64_t adapter_token, wgnx::platform::ktime_t now) {
+    for (std::size_t index = 0; index < m_flows.size(); ++index) {
+        FlowSlot& flow = m_flows[index];
+        if (!flow.allocated || MakeFlowHandle(index, flow).value != adapter_token) {
+            continue;
+        }
+        if (flow.closed || flow.pending || flow.kind != wgnx::tunnel::FlowKind::Tcp) {
+            return false;
+        }
+        flow.stream_flags &= ~wgnx::tunnel::FlowStreamFlagRemoteWriteOpen;
+        flow.state = wgnx::tunnel::FlowState::Closing;
+        flow.last_activity_at = now;
+        wgnx::tunnel::CompletionRecord completion{};
+        completion.type = wgnx::tunnel::CompletionType::FlowStateChanged;
+        completion.status = wgnx::tunnel::ProtocolStatus::Success;
+        completion.flow = MakeFlowHandle(index, flow);
+        completion.peer_activation_generation = flow.peer.activation_generation.Value();
+        completion.routing_policy_generation = flow.policy_generation;
+        completion.flow_state = flow.state;
+        completion.flow_kind = flow.kind;
+        EnqueueControlCompletion({.slot = flow.client_slot, .generation = flow.client_generation}, completion);
+        return true;
+    }
+    return false;
+}
+
+bool TunnelFlowPlane::MarkTcpReset(std::uint64_t adapter_token, wgnx::platform::ktime_t now) {
+    for (std::size_t index = 0; index < m_flows.size(); ++index) {
+        FlowSlot& flow = m_flows[index];
+        if (!flow.allocated || MakeFlowHandle(index, flow).value != adapter_token) {
+            continue;
+        }
+        if (flow.closed || flow.pending || flow.kind != wgnx::tunnel::FlowKind::Tcp) {
+            return false;
+        }
+        CloseFlowSlot(
+            index,
+            flow.state == wgnx::tunnel::FlowState::Connecting ? wgnx::tunnel::FlowTerminalReason::ResetDuringConnect
+                                                              : wgnx::tunnel::FlowTerminalReason::ResetAfterConnect,
+            now,
+            true
+        );
+        return true;
+    }
+    return false;
+}
+
+bool TunnelFlowPlane::MarkTcpWriteBlocked(std::uint64_t adapter_token) {
+    for (std::size_t index = 0; index < m_flows.size(); ++index) {
+        FlowSlot& flow = m_flows[index];
+        if (flow.allocated && !flow.closed && !flow.pending && flow.kind == wgnx::tunnel::FlowKind::Tcp &&
+            MakeFlowHandle(index, flow).value == adapter_token) {
+            flow.writable_waiter = true;
+            ++flow.send_queue_full;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool TunnelFlowPlane::MarkTcpWritable(std::uint64_t adapter_token) {
+    for (std::size_t index = 0; index < m_flows.size(); ++index) {
+        FlowSlot& flow = m_flows[index];
+        if (!flow.allocated || flow.closed || flow.pending || flow.kind != wgnx::tunnel::FlowKind::Tcp ||
+            MakeFlowHandle(index, flow).value != adapter_token) {
+            continue;
+        }
+        if (!flow.writable_waiter) {
+            return true;
+        }
+        flow.writable_waiter = false;
+        wgnx::tunnel::CompletionRecord completion{};
+        completion.type = wgnx::tunnel::CompletionType::Writable;
+        completion.status = wgnx::tunnel::ProtocolStatus::Success;
+        completion.flow = MakeFlowHandle(index, flow);
+        completion.peer_activation_generation = flow.peer.activation_generation.Value();
+        completion.routing_policy_generation = flow.policy_generation;
+        completion.flow_state = flow.state;
+        completion.flow_kind = flow.kind;
+        EnqueueControlCompletion({.slot = flow.client_slot, .generation = flow.client_generation}, completion);
+        return true;
+    }
+    return false;
 }
 
 void TunnelFlowPlane::InvalidatePeerActivation(
@@ -815,6 +1115,7 @@ void TunnelFlowPlane::CloseFlowSlot(
     }
     QuarantineTuple(flow, now);
     flow.closed = true;
+    flow.state = wgnx::tunnel::FlowState::Closed;
     flow.terminal_reason = reason;
     flow.inbound_occupancy = 0;
     flow.last_activity_at = now;
@@ -827,9 +1128,10 @@ void TunnelFlowPlane::CloseFlowSlot(
     );
     FormatIpv4Text(flow.tunnel_source, tunnel_source_text, sizeof(tunnel_source_text));
     logger::Log(
-        "Closed tunnel UDP flow=%llu slot=%zu client=%u/%u peer=%u activation=%u policy=%u reason=%u remote=%s:%u "
+        "Closed tunnel %s flow=%llu slot=%zu client=%u/%u peer=%u activation=%u policy=%u reason=%u remote=%s:%u "
         "tunnel_source=%s virtual_source_port=%u send_attempts=%llu send_admitted=%llu send_queue_full=%llu "
         "inbound_delivered=%llu inbound_dropped=%llu",
+        flow.kind == wgnx::tunnel::FlowKind::Tcp ? "TCP" : "UDP",
         static_cast<unsigned long long>(MakeFlowHandle(flow_slot, flow).value),
         flow_slot,
         static_cast<unsigned int>(flow.client_slot),
@@ -857,6 +1159,7 @@ void TunnelFlowPlane::CloseFlowSlot(
         completion.routing_policy_generation = flow.policy_generation;
         completion.flow_state = wgnx::tunnel::FlowState::Closed;
         completion.terminal_reason = reason;
+        completion.flow_kind = flow.kind;
         EnqueueControlCompletion(client, completion);
     }
 }
@@ -878,7 +1181,8 @@ bool TunnelFlowPlane::EnqueueDataCompletion(std::size_t flow_slot, std::uint8_t 
     client->completions[insert] = {
         .record =
             {
-                .type = wgnx::tunnel::CompletionType::InboundUdpDatagram,
+                .type = flow.kind == wgnx::tunnel::FlowKind::Tcp ? wgnx::tunnel::CompletionType::InboundTcpStream
+                                                                 : wgnx::tunnel::CompletionType::InboundUdpDatagram,
                 .status = wgnx::tunnel::ProtocolStatus::Success,
                 .flow = MakeFlowHandle(flow_slot, flow),
                 .remote = flow.remote,
@@ -886,9 +1190,9 @@ bool TunnelFlowPlane::EnqueueDataCompletion(std::size_t flow_slot, std::uint8_t 
                 .payload_size = m_inbound_slabs[inbound_slab_slot].size,
                 .peer_activation_generation = flow.peer.activation_generation.Value(),
                 .routing_policy_generation = flow.policy_generation,
-                .flow_state = wgnx::tunnel::FlowState::Open,
+                .flow_state = flow.state,
                 .terminal_reason = wgnx::tunnel::FlowTerminalReason::None,
-                .flow_kind = wgnx::tunnel::FlowKind::Udp,
+                .flow_kind = flow.kind,
             },
         .inbound_slab_slot = inbound_slab_slot,
     };

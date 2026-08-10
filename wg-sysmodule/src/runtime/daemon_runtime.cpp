@@ -63,9 +63,16 @@ class DaemonRuntime {
     wgnx::tunnel::OpenConnectedFlowResult OpenTunnelConnectedUdpFlow(
         runtime::TunnelClientId client, const wgnx::tunnel::OpenConnectedFlowRequest& request
     );
+    wgnx::tunnel::OpenConnectedFlowResult OpenTunnelConnectedTcpFlow(
+        runtime::TunnelClientId client, const wgnx::tunnel::OpenConnectedFlowRequest& request
+    );
     wgnx::tunnel::ProtocolStatus SendTunnelUdpDatagram(
         runtime::TunnelClientId client, const wgnx::tunnel::PayloadRange& descriptor, std::span<const std::uint8_t> payload
     );
+    wgnx::tunnel::PayloadResult WriteTunnelTcpStream(
+        runtime::TunnelClientId client, const wgnx::tunnel::PayloadRange& range, std::span<const std::uint8_t> payload
+    );
+    wgnx::tunnel::ProtocolStatus ShutdownTunnelTcpWrite(runtime::TunnelClientId client, wgnx::tunnel::FlowHandle flow);
     runtime::TunnelCompletionDrainOutcome ReceiveTunnelCompletions(
         runtime::TunnelClientId client,
         std::span<wgnx::tunnel::CompletionRecord> records,
@@ -101,6 +108,8 @@ class DaemonRuntime {
     void InitializeHorizonDispatcher();
     void RefreshTunnelPolicyLocked();
     void DeliverUserspaceIpInputLocked(const runtime::UserspaceIpAdapterOwner::Operation& operation);
+    void PublishUserspaceTcpOutputLocked(runtime::EffectBatch& effects);
+    void DeliverUserspaceTcpCallbacksLocked(const runtime::UserspaceIpAdapterOwner::Operation& operation);
 
     static DaemonRuntime* s_instance;
     DaemonState m_state{};
@@ -115,6 +124,8 @@ class DaemonRuntime {
     runtime::PacketDataPlane m_packet_data_plane;
     runtime::TunnelFlowPlane m_tunnel_flow_plane{};
     runtime::UserspaceIpAdapterOwner m_userspace_ip_adapter_owner{};
+    std::optional<runtime::TunnelFlowReservation> m_pending_tcp_open{};
+    std::uint64_t m_orphaned_tcp_close_token{};
     runtime::DebugProbeRunner m_debug_probe_runner{};
     platform::horizon::NetworkPathService m_network_path_service{};
     runtime::PeerConfigurationLoader m_peer_configuration_loader{};
@@ -374,12 +385,39 @@ void DaemonRuntime::UserspaceIpAdapterWorkCallback(wgnx::platform::work_struct* 
         } else {
             s_instance->m_timer_scheduler.ArmUserspaceIpTimeout(timeout_delay_ms);
         }
+        runtime::EffectBatch effects{};
         {
             std::scoped_lock lock(s_instance->m_state_mutex);
             s_instance->m_userspace_ip_adapter_owner.CompleteLocked(*operation, result);
-            if (operation->kind == runtime::UserspaceIpAdapterOwner::OperationKind::InputPacket) {
+            if (operation->kind == runtime::UserspaceIpAdapterOwner::OperationKind::OpenTcpFlow) {
+                const bool is_pending_open =
+                    s_instance->m_pending_tcp_open.has_value() && s_instance->m_pending_tcp_open->adapter_token == operation->flow.token;
+                if (is_pending_open) {
+                    bool close_stale_pcb = false;
+                    if (result == ip::UserspaceIpResult::Success &&
+                        s_instance->m_tunnel_flow_plane.CommitFlowReservation(*s_instance->m_pending_tcp_open)) {
+                        s_instance->PublishUserspaceTcpOutputLocked(effects);
+                    } else {
+                        s_instance->m_tunnel_flow_plane.CancelFlowReservation(*s_instance->m_pending_tcp_open);
+                        close_stale_pcb = result == ip::UserspaceIpResult::Success;
+                    }
+                    s_instance->m_pending_tcp_open.reset();
+                    static_cast<void>(s_instance->m_userspace_ip_adapter_owner.TakeResultLocked(operation->ticket));
+                    if (close_stale_pcb) {
+                        runtime::UserspaceIpAdapterOwner::OperationTicket close_ticket{};
+                        if (s_instance->m_userspace_ip_adapter_owner.QueueCloseFlowLocked(operation->flow.token, &close_ticket) ==
+                            runtime::UserspaceIpAdapterOwner::QueueResult::Queued) {
+                            s_instance->m_orphaned_tcp_close_token = operation->flow.token;
+                        }
+                    }
+                } else {
+                    static_cast<void>(s_instance->m_userspace_ip_adapter_owner.TakeResultLocked(operation->ticket));
+                }
+            } else if (operation->kind == runtime::UserspaceIpAdapterOwner::OperationKind::InputPacket) {
                 if (result == ip::UserspaceIpResult::Success) {
                     s_instance->DeliverUserspaceIpInputLocked(*operation);
+                    s_instance->DeliverUserspaceTcpCallbacksLocked(*operation);
+                    s_instance->PublishUserspaceTcpOutputLocked(effects);
                 } else if (result == ip::UserspaceIpResult::Stale) {
                     logger::Log(
                         "Dropped decrypted inner packet peer=%u activation=%u reason=stale_adapter_input",
@@ -388,7 +426,22 @@ void DaemonRuntime::UserspaceIpAdapterWorkCallback(wgnx::platform::work_struct* 
                     );
                 }
                 static_cast<void>(s_instance->m_userspace_ip_adapter_owner.TakeResultLocked(operation->ticket));
+            } else if (operation->kind == runtime::UserspaceIpAdapterOwner::OperationKind::RunTimeouts &&
+                       result == ip::UserspaceIpResult::Success) {
+                s_instance->DeliverUserspaceTcpCallbacksLocked(*operation);
+                s_instance->PublishUserspaceTcpOutputLocked(effects);
+            } else if ((operation->kind == runtime::UserspaceIpAdapterOwner::OperationKind::WriteTcpStream ||
+                        operation->kind == runtime::UserspaceIpAdapterOwner::OperationKind::ShutdownTcpWrite) &&
+                       result == ip::UserspaceIpResult::Success) {
+                s_instance->PublishUserspaceTcpOutputLocked(effects);
+            } else if (operation->kind == runtime::UserspaceIpAdapterOwner::OperationKind::CloseFlow &&
+                       s_instance->m_orphaned_tcp_close_token == operation->flow.token) {
+                static_cast<void>(s_instance->m_userspace_ip_adapter_owner.TakeResultLocked(operation->ticket));
+                s_instance->m_orphaned_tcp_close_token = 0;
             }
+        }
+        if (!effects.Empty()) {
+            s_instance->ExecuteRuntimeEffects(effects);
         }
     }
 }
@@ -397,6 +450,8 @@ void DaemonRuntime::DeliverUserspaceIpInputLocked(const runtime::UserspaceIpAdap
     const auto packet = m_userspace_ip_adapter_owner.InputPacketLocked(operation.ticket);
     AMS_ABORT_UNLESS(!packet.empty());
     const auto datagrams = m_userspace_ip_adapter_owner.InboundDatagramsLocked(operation.ticket);
+    const auto streams = m_userspace_ip_adapter_owner.InboundStreamsLocked(operation.ticket);
+    const auto tcp_events = m_userspace_ip_adapter_owner.TcpEventsLocked(operation.ticket);
     if (datagrams.empty() && (m_userspace_ip_adapter_owner.HadInboundDatagramRejectionLocked(operation.ticket) ||
                               m_userspace_ip_adapter_owner.HadInputRejectionLocked(operation.ticket) ||
                               m_userspace_ip_adapter_owner.HasPendingInboundFragmentLocked(operation.ticket))) {
@@ -407,7 +462,7 @@ void DaemonRuntime::DeliverUserspaceIpInputLocked(const runtime::UserspaceIpAdap
         );
         return;
     }
-    if (datagrams.empty()) {
+    if (datagrams.empty() && streams.empty() && tcp_events.empty()) {
         const auto delivery = m_packet_data_plane.DeliverDecryptedPacket(operation.peer, packet);
         if (delivery.status == runtime::PacketDeliveryStatus::Queued) {
             logger::Log(
@@ -419,6 +474,9 @@ void DaemonRuntime::DeliverUserspaceIpInputLocked(const runtime::UserspaceIpAdap
                 delivery.queue_depth
             );
         }
+        return;
+    }
+    if (datagrams.empty()) {
         return;
     }
     AMS_ABORT_UNLESS(datagrams.size() == 1);
@@ -471,6 +529,82 @@ void DaemonRuntime::DeliverUserspaceIpInputLocked(const runtime::UserspaceIpAdap
             operation.peer.activation_generation.Value()
         );
         return;
+    }
+}
+
+void DaemonRuntime::DeliverUserspaceTcpCallbacksLocked(const runtime::UserspaceIpAdapterOwner::Operation& operation) {
+    const auto now = GetRuntimeNowNs();
+    if (operation.kind == runtime::UserspaceIpAdapterOwner::OperationKind::InputPacket) {
+        for (const auto& stream : m_userspace_ip_adapter_owner.InboundStreamsLocked(operation.ticket)) {
+            static_cast<void>(m_tunnel_flow_plane.DeliverInboundTcpStream(
+                operation.peer,
+                operation.policy_generation,
+                stream.token,
+                std::span<const std::uint8_t>(stream.payload).first(stream.size),
+                now
+            ));
+        }
+    }
+    const auto tcp_events = operation.kind == runtime::UserspaceIpAdapterOwner::OperationKind::RunTimeouts
+                                ? m_userspace_ip_adapter_owner.TcpEventsLocked()
+                                : m_userspace_ip_adapter_owner.TcpEventsLocked(operation.ticket);
+    for (const auto& event : tcp_events) {
+        switch (event.type) {
+        case ip::UserspaceIpTcpEventType::Connected:
+            static_cast<void>(m_tunnel_flow_plane.MarkTcpConnected(event.token, now));
+            break;
+        case ip::UserspaceIpTcpEventType::RemoteWriteClosed:
+            static_cast<void>(m_tunnel_flow_plane.MarkTcpRemoteWriteClosed(event.token, now));
+            break;
+        case ip::UserspaceIpTcpEventType::Reset:
+            static_cast<void>(m_tunnel_flow_plane.MarkTcpReset(event.token, now));
+            break;
+        case ip::UserspaceIpTcpEventType::Writable:
+            static_cast<void>(m_tunnel_flow_plane.MarkTcpWritable(event.token));
+            break;
+        }
+    }
+}
+
+void DaemonRuntime::PublishUserspaceTcpOutputLocked(runtime::EffectBatch& effects) {
+    const auto packets = m_userspace_ip_adapter_owner.OutboundPacketsLocked();
+    if (packets.empty() || packets.size() > runtime::MaximumInnerPacketBatchSize) {
+        return;
+    }
+    std::array<runtime::SynchronousPacketView, runtime::MaximumInnerPacketBatchSize> packet_views{
+        runtime::SynchronousPacketView{std::span<const std::uint8_t>{}},
+        runtime::SynchronousPacketView{std::span<const std::uint8_t>{}},
+        runtime::SynchronousPacketView{std::span<const std::uint8_t>{}},
+    };
+    runtime::TunnelTcpOutputRoute route{};
+    for (std::size_t index = 0; index < packets.size(); ++index) {
+        const auto packet = std::span<const std::uint8_t>(packets[index].bytes).first(packets[index].size);
+        wgnx::wireguard::InnerIpv4TcpTuple tuple{};
+        if (!wgnx::wireguard::ParseInnerIpv4TcpTuple(packet, &tuple)) {
+            logger::LogPacket("Dropped lwip TCP output reason=malformed_tuple");
+            return;
+        }
+        wgnx::tunnel::Ipv4Endpoint local{.port = tuple.source_port};
+        wgnx::tunnel::Ipv4Endpoint remote{.port = tuple.destination_port};
+        std::copy(tuple.source_address.begin(), tuple.source_address.end(), std::begin(local.address));
+        std::copy(tuple.destination_address.begin(), tuple.destination_address.end(), std::begin(remote.address));
+        const runtime::TunnelTcpOutputRoute resolved = m_tunnel_flow_plane.ResolveTcpOutput(local, remote);
+        if (!resolved.IsResolved() || (route.IsResolved() && route.peer != resolved.peer)) {
+            logger::LogPacket("Dropped lwip TCP output reason=unowned_tuple");
+            return;
+        }
+        route = resolved;
+        packet_views[index] = runtime::SynchronousPacketView{packet};
+    }
+    const auto submission = m_packet_data_plane.SubmitInternalIpPacketBatchForPeer(
+        route.peer,
+        std::span<const runtime::SynchronousPacketView>(packet_views).first(packets.size()),
+        runtime::CaptureTimerFacts(),
+        GetRuntimeNowNs(),
+        effects
+    );
+    if (submission.status != runtime::PacketSubmissionStatus::Queued) {
+        logger::LogPacket("Dropped lwip TCP output reason=packet_admission status=%u", static_cast<unsigned int>(submission.status));
     }
 }
 
@@ -1009,6 +1143,57 @@ wgnx::tunnel::OpenConnectedFlowResult DaemonRuntime::OpenTunnelConnectedUdpFlow(
     return reservation.result;
 }
 
+wgnx::tunnel::OpenConnectedFlowResult DaemonRuntime::OpenTunnelConnectedTcpFlow(
+    runtime::TunnelClientId client, const wgnx::tunnel::OpenConnectedFlowRequest& request
+) {
+    EnsureInitialized();
+    runtime::TunnelFlowReservation reservation{};
+    runtime::UserspaceIpAdapterOwner::OperationTicket ticket{};
+    {
+        std::scoped_lock lock(m_state_mutex);
+        RefreshTunnelPolicyLocked();
+        if (m_pending_tcp_open.has_value()) {
+            return {.status = wgnx::tunnel::ProtocolStatus::QueueFull};
+        }
+        runtime::PeerPacketStateSnapshot peer{};
+        const bool packet_state_available = m_runtime_coordinator.SnapshotPacketState(peer);
+        reservation = m_tunnel_flow_plane.ReserveConnectedTcpFlow(
+            client,
+            request,
+            GetRuntimeNowNs(),
+            {
+                .protocol_available = packet_state_available && peer.protocol_instantiated,
+                .staging_available = packet_state_available && peer.protocol_instantiated && peer.can_stage_packet,
+            }
+        );
+        if (!reservation.IsReserved()) {
+            return reservation.result;
+        }
+        m_userspace_ip_adapter_owner.QueueConfigureLocked(
+            {reservation.local.address[0], reservation.local.address[1], reservation.local.address[2], reservation.local.address[3]},
+            m_tunnel_flow_plane.GetCapabilities().effective_inner_mtu
+        );
+        if (m_userspace_ip_adapter_owner.QueueOpenTcpFlowLocked(
+                {.token = reservation.adapter_token, .local = reservation.local, .remote = reservation.remote},
+                &ticket
+            ) != runtime::UserspaceIpAdapterOwner::QueueResult::Queued) {
+            m_tunnel_flow_plane.CancelFlowReservation(reservation);
+            return {.status = wgnx::tunnel::ProtocolStatus::QueueFull};
+        }
+        m_pending_tcp_open = reservation;
+    }
+    const auto queue_result = m_horizon_dispatcher.QueueUserspaceIpAdapter();
+    if (queue_result == wgnx::platform::queue_work_result::capacity_exhausted ||
+        queue_result == wgnx::platform::queue_work_result::unavailable) {
+        std::scoped_lock lock(m_state_mutex);
+        m_userspace_ip_adapter_owner.CancelLocked(ticket);
+        m_tunnel_flow_plane.CancelFlowReservation(reservation);
+        m_pending_tcp_open.reset();
+        return {.status = wgnx::tunnel::ProtocolStatus::QueueFull};
+    }
+    return reservation.result;
+}
+
 wgnx::tunnel::ProtocolStatus DaemonRuntime::SendTunnelUdpDatagram(
     runtime::TunnelClientId client, const wgnx::tunnel::PayloadRange& descriptor, std::span<const std::uint8_t> payload
 ) {
@@ -1099,6 +1284,89 @@ wgnx::tunnel::ProtocolStatus DaemonRuntime::SendTunnelUdpDatagram(
     }
     ExecuteRuntimeEffects(effects);
     return status;
+}
+
+wgnx::tunnel::PayloadResult DaemonRuntime::WriteTunnelTcpStream(
+    runtime::TunnelClientId client, const wgnx::tunnel::PayloadRange& range, std::span<const std::uint8_t> payload
+) {
+    EnsureInitialized();
+    wgnx::tunnel::PayloadResult result{.client_tag = range.client_tag, .status = wgnx::tunnel::ProtocolStatus::TransportUnavailable};
+    runtime::PreparedTunnelDatagram prepared{};
+    runtime::UserspaceIpAdapterOwner::OperationTicket ticket{};
+    {
+        std::scoped_lock lock(m_state_mutex);
+        RefreshTunnelPolicyLocked();
+        prepared = m_tunnel_flow_plane.PrepareTcpWrite(client, range, payload, GetRuntimeNowNs());
+        result.status = prepared.status;
+        if (!prepared.IsPrepared()) {
+            return result;
+        }
+        if (m_userspace_ip_adapter_owner.QueueWriteTcpLocked(prepared.adapter_token, payload, &ticket) !=
+            runtime::UserspaceIpAdapterOwner::QueueResult::Queued) {
+            result.status = wgnx::tunnel::ProtocolStatus::QueueFull;
+            return result;
+        }
+    }
+    const auto queue_result = m_horizon_dispatcher.QueueUserspaceIpAdapter();
+    if (queue_result == wgnx::platform::queue_work_result::capacity_exhausted ||
+        queue_result == wgnx::platform::queue_work_result::unavailable) {
+        std::scoped_lock lock(m_state_mutex);
+        m_userspace_ip_adapter_owner.CancelLocked(ticket);
+        result.status = wgnx::tunnel::ProtocolStatus::QueueFull;
+        return result;
+    }
+    m_horizon_dispatcher.FlushSubmissionWork();
+    std::scoped_lock lock(m_state_mutex);
+    const auto adapter_result = m_userspace_ip_adapter_owner.TakeResultLocked(ticket);
+    if (!adapter_result.has_value()) {
+        result.status = wgnx::tunnel::ProtocolStatus::TransportUnavailable;
+    } else if (*adapter_result == ip::UserspaceIpResult::Success) {
+        result.status = wgnx::tunnel::ProtocolStatus::Success;
+        result.accepted_bytes = range.payload_size;
+    } else if (*adapter_result == ip::UserspaceIpResult::QueueFull) {
+        static_cast<void>(m_tunnel_flow_plane.MarkTcpWriteBlocked(prepared.adapter_token));
+        result.status = wgnx::tunnel::ProtocolStatus::QueueFull;
+    } else {
+        result.status = wgnx::tunnel::ProtocolStatus::TransportUnavailable;
+    }
+    return result;
+}
+
+wgnx::tunnel::ProtocolStatus DaemonRuntime::ShutdownTunnelTcpWrite(runtime::TunnelClientId client, wgnx::tunnel::FlowHandle flow) {
+    EnsureInitialized();
+    runtime::PreparedTunnelDatagram prepared{};
+    runtime::UserspaceIpAdapterOwner::OperationTicket ticket{};
+    {
+        std::scoped_lock lock(m_state_mutex);
+        RefreshTunnelPolicyLocked();
+        prepared = m_tunnel_flow_plane.PrepareTcpShutdown(client, flow, GetRuntimeNowNs());
+        if (!prepared.IsPrepared()) {
+            return prepared.status;
+        }
+        if (m_userspace_ip_adapter_owner.QueueShutdownTcpWriteLocked(prepared.adapter_token, &ticket) !=
+            runtime::UserspaceIpAdapterOwner::QueueResult::Queued) {
+            return wgnx::tunnel::ProtocolStatus::QueueFull;
+        }
+    }
+    const auto queue_result = m_horizon_dispatcher.QueueUserspaceIpAdapter();
+    if (queue_result == wgnx::platform::queue_work_result::capacity_exhausted ||
+        queue_result == wgnx::platform::queue_work_result::unavailable) {
+        std::scoped_lock lock(m_state_mutex);
+        m_userspace_ip_adapter_owner.CancelLocked(ticket);
+        return wgnx::tunnel::ProtocolStatus::QueueFull;
+    }
+    m_horizon_dispatcher.FlushSubmissionWork();
+    std::scoped_lock lock(m_state_mutex);
+    const auto adapter_result = m_userspace_ip_adapter_owner.TakeResultLocked(ticket);
+    if (!adapter_result.has_value()) {
+        return wgnx::tunnel::ProtocolStatus::TransportUnavailable;
+    }
+    if (*adapter_result == ip::UserspaceIpResult::Success) {
+        static_cast<void>(m_tunnel_flow_plane.MarkTcpLocalWriteClosed(prepared.adapter_token, GetRuntimeNowNs()));
+        return wgnx::tunnel::ProtocolStatus::Success;
+    }
+    return *adapter_result == ip::UserspaceIpResult::QueueFull ? wgnx::tunnel::ProtocolStatus::QueueFull
+                                                               : wgnx::tunnel::ProtocolStatus::TransportUnavailable;
 }
 
 runtime::TunnelCompletionDrainOutcome DaemonRuntime::ReceiveTunnelCompletions(
@@ -1262,10 +1530,26 @@ wgnx::tunnel::OpenConnectedFlowResult OpenTunnelConnectedUdpFlow(
     return g_daemon_runtime.OpenTunnelConnectedUdpFlow(client, request);
 }
 
+wgnx::tunnel::OpenConnectedFlowResult OpenTunnelConnectedTcpFlow(
+    TunnelClientId client, const wgnx::tunnel::OpenConnectedFlowRequest& request
+) {
+    return g_daemon_runtime.OpenTunnelConnectedTcpFlow(client, request);
+}
+
 wgnx::tunnel::ProtocolStatus SendTunnelUdpDatagram(
     TunnelClientId client, const wgnx::tunnel::PayloadRange& descriptor, std::span<const std::uint8_t> payload
 ) {
     return g_daemon_runtime.SendTunnelUdpDatagram(client, descriptor, payload);
+}
+
+wgnx::tunnel::PayloadResult WriteTunnelTcpStream(
+    TunnelClientId client, const wgnx::tunnel::PayloadRange& range, std::span<const std::uint8_t> payload
+) {
+    return g_daemon_runtime.WriteTunnelTcpStream(client, range, payload);
+}
+
+wgnx::tunnel::ProtocolStatus ShutdownTunnelTcpWrite(TunnelClientId client, wgnx::tunnel::FlowHandle flow) {
+    return g_daemon_runtime.ShutdownTunnelTcpWrite(client, flow);
 }
 
 TunnelCompletionDrainOutcome ReceiveTunnelCompletions(

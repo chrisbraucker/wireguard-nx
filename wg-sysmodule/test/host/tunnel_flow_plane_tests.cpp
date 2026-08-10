@@ -131,6 +131,11 @@ void TestTunnelFlowPlane(TestContext& context) {
     const auto opened = plane.OpenConnectedUdpFlow(client, open, 120);
     const auto unavailable_result = plane.OpenConnectedUdpFlow(client, open, 125, TransportUnavailable);
     const auto opened_state = plane.GetFlowState(client, opened.flow);
+    const auto tcp_reservation = plane.ReserveConnectedTcpFlow(client, open, 121, TransportReady);
+    const auto unresolved_tcp_route = plane.ResolveTcpOutput(tcp_reservation.local, tcp_reservation.remote);
+    const bool tcp_committed = plane.CommitFlowReservation(tcp_reservation);
+    const auto resolved_tcp_route = plane.ResolveTcpOutput(tcp_reservation.local, tcp_reservation.remote);
+    const auto tcp_state = plane.GetFlowState(client, tcp_reservation.result.flow);
     TunnelFlowPlane reservation_plane{};
     const TunnelClientId reservation_client = reservation_plane.CreateClient(nullptr, nullptr);
     reservation_plane.RefreshPolicy({.configuration = &config, .peer = first_peer, .selected = true}, 121);
@@ -158,8 +163,11 @@ void TestTunnelFlowPlane(TestContext& context) {
     const RoutingPolicySnapshot policy_after_second_refresh = plane.CopyRoutingPolicy(routes);
     WGNX_TEST_REQUIRE(
         context,
-        uncovered_result.status == ProtocolStatus::RouteNotCovered && opened.status == ProtocolStatus::Success && hidden_before_commit &&
-            committed && stale_rejected && unavailable_result.status == ProtocolStatus::TransportUnavailable &&
+        uncovered_result.status == ProtocolStatus::RouteNotCovered && opened.status == ProtocolStatus::Success &&
+            tcp_reservation.IsReserved() && !unresolved_tcp_route.IsResolved() && tcp_committed && resolved_tcp_route.IsResolved() &&
+            resolved_tcp_route.flow.value == tcp_reservation.result.flow.value && resolved_tcp_route.peer == first_peer &&
+            tcp_state.flow_kind == FlowKind::Tcp && tcp_state.state == FlowState::Connecting && hidden_before_commit && committed &&
+            stale_rejected && unavailable_result.status == ProtocolStatus::TransportUnavailable &&
             opened.peer_activation_generation == first_peer.activation_generation.Value() &&
             opened_state.advertised_local.address[0] == 10 && opened_state.advertised_local.address[1] == 13 &&
             opened_state.advertised_local.address[2] == 13 && opened_state.advertised_local.address[3] == 8 &&

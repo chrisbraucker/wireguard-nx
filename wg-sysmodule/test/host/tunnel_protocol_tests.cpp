@@ -57,7 +57,7 @@ void TestTunnelProtocolContract(TestContext& context) {
     );
     WGNX_TEST_REQUIRE(
         context,
-        SupportedCapabilityMask == 0x01U && CapabilityMask(Capability::ConnectedIpv4Udp) == 0x01U &&
+        SupportedCapabilityMask == 0x03U && CapabilityMask(Capability::ConnectedIpv4Udp) == 0x01U &&
             CapabilityMask(Capability::ConnectedIpv4Tcp) == 0x02U,
         "tunnel capability bits changed"
     );

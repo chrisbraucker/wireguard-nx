@@ -30,8 +30,11 @@ class UserspaceIpAdapterOwner {
         Configure = 0,
         Reset,
         OpenFlow,
+        OpenTcpFlow,
         CloseFlow,
         SendDatagram,
+        WriteTcpStream,
+        ShutdownTcpWrite,
         InputPacket,
         RunTimeouts,
     };
@@ -51,10 +54,13 @@ class UserspaceIpAdapterOwner {
     void QueueResetLocked();
     void QueueRunTimeoutsLocked();
     [[nodiscard]] QueueResult QueueOpenFlowLocked(const ip::UserspaceIpFlow& flow, OperationTicket* out_ticket);
+    [[nodiscard]] QueueResult QueueOpenTcpFlowLocked(const ip::UserspaceIpFlow& flow, OperationTicket* out_ticket);
     [[nodiscard]] QueueResult QueueCloseFlowLocked(std::uint64_t token, OperationTicket* out_ticket);
     [[nodiscard]] QueueResult QueueSendDatagramLocked(
         std::uint64_t token, std::span<const std::uint8_t> payload, OperationTicket* out_ticket
     );
+    [[nodiscard]] QueueResult QueueWriteTcpLocked(std::uint64_t token, std::span<const std::uint8_t> payload, OperationTicket* out_ticket);
+    [[nodiscard]] QueueResult QueueShutdownTcpWriteLocked(std::uint64_t token, OperationTicket* out_ticket);
     [[nodiscard]] QueueResult QueueInputPacketLocked(
         const PeerIdentity& peer,
         std::uint32_t policy_generation,
@@ -68,8 +74,12 @@ class UserspaceIpAdapterOwner {
     [[nodiscard]] std::optional<ip::UserspaceIpResult> PeekResultLocked(OperationTicket ticket) const;
     [[nodiscard]] std::optional<ip::UserspaceIpResult> TakeResultLocked(OperationTicket ticket);
     [[nodiscard]] std::span<const ip::UserspaceIpPacket> OutboundPacketsLocked(OperationTicket ticket) const;
+    [[nodiscard]] std::span<const ip::UserspaceIpPacket> OutboundPacketsLocked() const;
     [[nodiscard]] std::span<const std::uint8_t> InputPacketLocked(OperationTicket ticket) const;
     [[nodiscard]] std::span<const ip::UserspaceIpDatagram> InboundDatagramsLocked(OperationTicket ticket) const;
+    [[nodiscard]] std::span<const ip::UserspaceIpStreamData> InboundStreamsLocked(OperationTicket ticket) const;
+    [[nodiscard]] std::span<const ip::UserspaceIpTcpEvent> TcpEventsLocked(OperationTicket ticket) const;
+    [[nodiscard]] std::span<const ip::UserspaceIpTcpEvent> TcpEventsLocked() const;
     [[nodiscard]] bool HadInboundDatagramRejectionLocked(OperationTicket ticket) const;
     [[nodiscard]] bool HadInputRejectionLocked(OperationTicket ticket) const;
     [[nodiscard]] bool HasPendingInboundFragmentLocked(OperationTicket ticket) const;

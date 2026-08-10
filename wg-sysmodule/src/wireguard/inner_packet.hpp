@@ -31,6 +31,13 @@ enum class InnerIpValidationError : std::uint8_t {
     InvalidPadding,
 };
 
+struct InnerIpv4TcpTuple {
+    std::array<std::uint8_t, 4> source_address{};
+    std::array<std::uint8_t, 4> destination_address{};
+    std::uint16_t source_port{};
+    std::uint16_t destination_port{};
+};
+
 using InnerIpv4ValidationError = InnerIpValidationError;
 
 InnerIpv4ValidationError ValidateInnerIpv4Packet(std::span<const std::uint8_t> packet);
@@ -39,6 +46,7 @@ InnerIpValidationError ValidateInnerIpPacket(std::span<const std::uint8_t> packe
 InnerIpValidationError ValidatePaddedInnerIpPacket(
     std::span<const std::uint8_t> payload, std::size_t* out_packet_size, InnerIpVersion* out_version = nullptr
 );
+bool ParseInnerIpv4TcpTuple(std::span<const std::uint8_t> packet, InnerIpv4TcpTuple* out);
 bool AllowedIpsContainSource(std::span<const std::uint8_t> packet, std::string_view allowed_ips);
 const char* GetInnerIpValidationErrorName(InnerIpValidationError error);
 inline const char* GetInnerIpv4ValidationErrorName(InnerIpv4ValidationError error) {

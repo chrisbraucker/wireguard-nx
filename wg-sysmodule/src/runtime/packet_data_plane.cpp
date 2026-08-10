@@ -64,6 +64,21 @@ PacketSubmissionOutcome PacketDataPlane::SubmitInternalIpPacketBatch(
     wgnx::platform::ktime_t occurred_at,
     EffectBatch& out_effects
 ) {
+    PeerPacketStateSnapshot peer{};
+    if (!m_coordinator.SnapshotPacketState(peer)) {
+        out_effects.Clear();
+        return {.status = PacketSubmissionStatus::TunnelUnavailable};
+    }
+    return SubmitInternalIpPacketBatchForPeer(peer.identity, packets, timer_facts, occurred_at, out_effects);
+}
+
+PacketSubmissionOutcome PacketDataPlane::SubmitInternalIpPacketBatchForPeer(
+    const PeerIdentity& peer_identity,
+    std::span<const SynchronousPacketView> packets,
+    const TimerFacts& timer_facts,
+    wgnx::platform::ktime_t occurred_at,
+    EffectBatch& out_effects
+) {
     out_effects.Clear();
     PacketSubmissionOutcome outcome{.status = PacketSubmissionStatus::InternalError};
     if (packets.empty() || packets.size() > MaximumInnerPacketBatchSize) {
@@ -79,7 +94,7 @@ PacketSubmissionOutcome PacketDataPlane::SubmitInternalIpPacketBatch(
         }
     }
     PeerPacketStateSnapshot peer{};
-    if (!m_coordinator.SnapshotPacketState(peer)) {
+    if (!m_coordinator.SnapshotPacketState(peer) || peer.identity != peer_identity) {
         outcome.status = PacketSubmissionStatus::TunnelUnavailable;
         return outcome;
     }

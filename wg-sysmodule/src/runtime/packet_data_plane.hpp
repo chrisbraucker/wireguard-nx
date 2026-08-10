@@ -103,6 +103,13 @@ class PacketDataPlane {
         wgnx::platform::ktime_t occurred_at,
         EffectBatch& out_effects
     );
+    [[nodiscard]] PacketSubmissionOutcome SubmitInternalIpPacketBatchForPeer(
+        const PeerIdentity& peer,
+        std::span<const SynchronousPacketView> packets,
+        const TimerFacts& timer_facts,
+        wgnx::platform::ktime_t occurred_at,
+        EffectBatch& out_effects
+    );
 
     [[nodiscard]] PacketDeliveryOutcome DeliverDecryptedPacket(const PeerIdentity& peer, std::span<const std::uint8_t> packet);
     [[nodiscard]] PacketReceiveOutcome ReceivePacket(std::span<std::uint8_t> packet, ProcessId consumer_id);
