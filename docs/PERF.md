@@ -155,10 +155,39 @@ The Switch download measurements agree closely enough to establish an approximat
 The current 1 MiB native upload is a short-transfer measurement and does not establish a sustained Switch transmit or Wi-Fi ceiling.
 A Switch-initiated 30 MiB upload to `ctest-ul-lp1.cdn.nintendo.net/1m`, measured at both endpoints, is required before comparing sustained one-way direct-WGNX and MITM-WGNX throughput with the native control.
 
+## 2026-08-10 Task 6 lwIP UDP Regression
+
+The Task 6 performance-regression evidence is archived under `workspace/reports_task6_perf`.
+It used WireGuard build `0.0.1-dev-564407a-dirty`, MITM build `0.0.1-dev-1cfafdc-dirty`, requester build `0.1.0-dc2204b-dirty`, and the same Wi-Fi peer topology as the earlier measurements.
+Each path completed six 32-datagram, 1,200-byte echoed latency runs and six one-way 4,096-datagram, 1,380-byte throughput runs.
+Each throughput run therefore offered 5,652,480 bytes, or 5.65 MB.
+
+| Path                  | Median echo RTT from requester run means | Median sender rate | Median receiver goodput | Delivery |
+|-----------------------|------------------------------------------:|-------------------:|------------------------:|---------:|
+| Direct `wgnx:tun`     |                                  4.876 ms |         2.071 MB/s |              2.070 MB/s |     100% |
+| BSD MITM to WireGuard |                                  5.257 ms |         1.189 MB/s |              1.190 MB/s |     100% |
+
+Each latency path completed 192 echoed packets with no loss, duplication, reordering, admission failure, or queue pressure.
+The full BSD MITM path added 0.381 ms, or about 8 percent, to the median direct-path RTT.
+Every throughput run delivered all 4,096 datagrams exactly once and in order.
+Requester and harness rates agree within normal local-clock timing variation, so the result has no hidden downstream loss or delivery delay.
+
+The direct path reported 4,087 `QueueFull` events in every throughput run.
+The MITM path reported 4,086 requester retries and 4,087 downstream events in every throughput run.
+Those outcomes are the expected bounded-pressure and `Writable` recovery path rather than loss or a send failure.
+All six MITM per-flow accounting invariants pass, with no rejected operations, discarded sends, send failures, inbound drops, or over-sized packets.
+The one-way runs correctly have no lwIP inbound callback or reassembly activity, while the prior Task 6 functional matrix covers inbound fragmentation and reassembly.
+
+The current direct goodput is about 20 percent below the earlier 2.584 MB/s quiet-build median.
+The current MITM goodput is about 7 percent below the earlier 1.273 MB/s quiet-build median.
+This is a repeatable difference in these six-run samples, but it cannot be attributed to lwIP alone because the measurements use different WireGuard and requester revisions and were collected at different times on Wi-Fi.
+The larger direct-path change rules out the MITM worker as the primary explanation.
+The logs show successful handshakes, clean flow closure, and no sysmodule fatal or crash evidence.
+
 ## Task 5 Interpretation And Next Measurement
 
 The corrected results support a Task 5 feasibility conclusion of viable with optimization.
 The architecture moves sustained data without loss or instability, while the direct and MITM rates leave clear performance work before media-sized traffic should be considered production-ready.
 The evidence does not yet justify shared-memory transport because ordinary CMIF is functional and its isolated ceiling has not been measured.
 The next high-signal experiment is the Task 5 auxiliary net-probe IPC sink, comparing the existing IP-sized contract with fewer calls carrying larger experimental payloads before changing the production `wgnx:tun` contract.
-Repeat the throughput and latency matrix after the userspace IP adapter replaces the manual UDP path.
+The Task 6 matrix now provides the post-lwIP baseline, so future optimization work should compare against the 2026-08-10 rates above under the same topology and workload.

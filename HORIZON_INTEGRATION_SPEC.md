@@ -111,7 +111,7 @@ It returns `OutputBufferTooSmall` with no partial record in that case.
 | Flows per client                 |                     4 | A context may not consume all global flow capacity.                                                   |
 | Global flows                     |                    16 | The product of the client and per-client limits.                                                      |
 | Default effective inner MTU      |            1420 bytes | Conventional WireGuard interface MTU for a 1500-byte Ethernet path when `[Interface] MTU` is omitted. |
-| Maximum UDP payload              | 1392 bytes by default | Active effective inner MTU minus 20 IPv4 header bytes and 8 UDP header bytes.                         |
+| Maximum UDP payload              |            1472 bytes | Measured fixed first-release bound, while the active effective inner MTU determines lwIP fragmentation. |
 | Outbound packet slabs            |                    16 | Global payload ownership for client-to-tunnel packets.                                                |
 | Inbound packet slabs             |                    16 | Global payload ownership for tunnel-to-client packets.                                                |
 | Inbound datagrams per flow       |                     4 | A per-flow quota in addition to global slab capacity.                                                 |
@@ -205,15 +205,12 @@ Resource exhaustion, inactive transport, stale flow state, and closed flow state
 When peer-owned outbound staging is full, the direct-flow API rejects the new datagram with `QueueFull`, retains no submitted payload, and emits a coalesced `Writable` completion for each waiting flow whenever a staged packet retires and frees admission capacity.
 This includes both a successful outer UDP submission and a nonterminal outer transport drop.
 This differs intentionally from WireGuard's netdevice boundary, where upstream implementations may evict queued packets, because the separate MITM must own any packet-drop policy and preserve an explicit backpressure signal to its IPC client.
-For v1, the maximum UDP payload is the effective inner MTU minus the IPv4 and UDP header sizes.
-An omitted `[Interface] MTU` resolves to 1420 bytes.
-An explicit value must be in the IPv4-safe 576 to 1500-byte range.
-The 1500-byte packet slabs are storage capacity only and must not be interpreted as a client-visible transmission guarantee.
-The transport writer follows wireguard-go's 16-byte padding calculation and never pads the final active-MTU unit beyond the effective inner MTU.
-Larger payloads return `DatagramTooLarge` until an explicit fragmentation contract is designed and implemented.
-That later contract is owned by the WireGuard userspace IP adapter rather than the MITM.
-It must preserve BSD UDP send atomicity for every advertised size, apply the effective inner MTU, and expose a measured bounded maximum through capabilities.
-The maximum may remain below 65,507 bytes until IPC transfer and target memory measurements justify the full theoretical IPv4 UDP size.
+For v3, the maximum UDP payload is the measured 1472-byte bounded contract maximum.
+An omitted `[Interface] MTU` resolves to 1420 bytes, and an explicit value must be in the IPv4-safe 576 to 1500-byte range.
+The WireGuard-owned lwIP adapter applies that MTU to each constructed IPv4 packet and fragments it as necessary while preserving one BSD UDP datagram admission and completion.
+The transport writer follows wireguard-go's 16-byte padding calculation for every emitted fragment and never pads a fragment beyond the active effective inner MTU.
+Payloads above 1472 bytes return `DatagramTooLarge`.
+The maximum remains below 65,507 bytes until IPC transfer and target memory measurements justify a larger bounded design.
 
 The receive path parses and validates decrypted inner packets before reverse-flow matching.
 The shared packet plane first verifies that the decrypted source address belongs to the authenticating peer's AllowedIPs before the IP adapter or any other plaintext consumer can observe the packet.

@@ -292,10 +292,10 @@ Compare requester, remote-harness, MITM, and WireGuard counters to locate loss, 
 Increase offered load only within explicitly configured fixed resource bounds, and record the first observed saturation point and its reported disposition rather than treating drops as an opaque performance result.
 
 The initial MITM submits UDP flow metadata and whole payloads rather than inner IPv4 packets.
-The current WireGuard flow layer constructs one unfragmented inner IPv4 packet, so the payload must fit the effective inner MTU after IPv4 and UDP headers and larger datagrams fail explicitly with `EMSGSIZE`.
-An omitted `[Interface] MTU` uses the 1420-byte WireGuard default, which limits UDP payloads to 1392 bytes.
-The next fragmentation milestone moves IPv4 fragmentation and reassembly into a separate WireGuard-owned userspace IP adapter, while the MITM remains responsible only for BSD datagram atomicity and error translation.
-The first fragmented-datagram contract may advertise a measured maximum below the theoretical 65,507-byte IPv4 UDP limit and must return `EMSGSIZE` above that bound.
+The WireGuard-owned lwIP adapter accepts whole UDP payloads up to the measured 1,472-byte bounded contract maximum and applies the active effective inner MTU when it constructs and fragments the resulting IPv4 packet.
+An omitted `[Interface] MTU` uses the 1420-byte WireGuard default, while a configured 1280- or 576-byte MTU causes lwIP to emit the required two or three fragments without changing the BSD datagram boundary.
+The MITM remains responsible only for BSD datagram atomicity and error translation.
+The first fragmented-datagram contract remains deliberately below the theoretical 65,507-byte IPv4 UDP limit and returns `EMSGSIZE` above its 1,472-byte bound.
 Do not enlarge every MITM FIFO slot or WireGuard flow slot to 64 KiB without a measured target memory budget and an explicit bounded transfer design.
 
 The tunnel-facing admission boundary follows a bounded peer-owned ready-to-encrypt FIFO with one serialized encrypted datagram in flight.
@@ -522,6 +522,8 @@ Definition of done:
 ### 7. Discover And Implement A First TCP Path
 
 Urgency: required for useful general application coverage after UDP feasibility is established.
+
+The actionable contract, direct Toolbox, and WireGuard-owned lwIP TCP foundation sequence is documented in [Task 7 TCP Flow Foundation Implementation Guide](docs/task-7-tcp-flow-foundation.md).
 
 Use the stable UDP flow and BSD MITM path as the lifecycle baseline before attempting TCP.
 TCP must not be represented as a sequence of UDP-like datagram submissions because its Horizon-visible socket semantics require ordered byte-stream delivery, connection establishment and failure reporting, half-close behavior, backpressure, and transport-specific teardown.

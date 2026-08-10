@@ -17,17 +17,17 @@ The local `workspace/repos/wg-nx` reference pins newer development commit `8e75a
 
 The existing code already has the correct external architecture, but `TunnelFlowPlane` currently combines tested flow state with the codec that Task 6 must replace.
 
-| Current source | Responsibility to preserve | Task 6 change |
-| --- | --- | --- |
-| `common/include/wgnx/tunnel_protocol.hpp` | Current API version 3 records, statuses, capabilities, flow handles, batches, completions, and fixed storage maxima | Change the contract when that produces a cleaner lwIP boundary, increment `TunApiVersion` for incompatible changes, and advertise a larger measured datagram maximum only after the fragment path passes its gates. |
-| `wg-sysmodule/src/tunnel_service.cpp` | CMIF buffer validation and single or batched UDP commands | Submit one adapter operation per CMIF batch and retain the current ordered per-descriptor dispositions. |
-| `wg-sysmodule/src/runtime/tunnel_flow_plane.*` | Clients, routes, virtual tuples, generations, tombstones, completion reservation, inbound slabs, counters, and writable state | Retain these owners, but remove IPv4 and UDP construction, parsing, checksums, packet identifiers, and outbound packet slabs once lwIP is authoritative. |
-| `wg-sysmodule/src/runtime/daemon_runtime.cpp` | State-lock boundary and composition | Split flow operations into a locked validation or reservation phase, a post-lock adapter phase, and a generation-checked locked commit. |
-| `wg-sysmodule/src/runtime/runtime_effect_executor.*` | Decrypted packet publication after peer authentication | Copy authorized plaintext into bounded adapter work, then return before lwIP input, callbacks, or pbuf lifetime begins. |
-| `wg-sysmodule/src/runtime/horizon_dispatcher.*` | Existing ordered `wgnx-submit` work lane | Add one adapter work item to this lane and do not create another thread. |
-| `wg-sysmodule/src/runtime/packet_data_plane.*` and `runtime/peer/*` | Complete inner-IP validation and bounded peer staging | Add an all-or-none internal packet-batch admission needed to stage every fragment of one UDP datagram atomically. |
-| `wg-sysmodule/src/runtime/timer_scheduler.*` | Concrete timer expiry and ordered timer work | Use one auxiliary timer only to enqueue timeout work onto `wgnx-submit`, where `sys_check_timeouts()` remains serialized with every other lwIP call. |
-| `wg-sysmodule/src/wireguard/inner_packet.*` | Generic complete-IP validation and the experimental raw packet API | Keep this boundary independent of lwIP and do not expose lwIP types to the WireGuard protocol core. |
+| Current source                                                      | Responsibility to preserve                                                                                                    | Task 6 change                                                                                                                                                                                                        |
+|---------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `common/include/wgnx/tunnel_protocol.hpp`                           | Current API version 3 records, statuses, capabilities, flow handles, batches, completions, and fixed storage maxima           | Change the contract when that produces a cleaner lwIP boundary, increment `TunApiVersion` for incompatible changes, and advertise the measured 1,472-byte datagram maximum independently of the active fragment MTU. |
+| `wg-sysmodule/src/tunnel_service.cpp`                               | CMIF buffer validation and single or batched UDP commands                                                                     | Submit one adapter operation per CMIF batch and retain the current ordered per-descriptor dispositions.                                                                                                              |
+| `wg-sysmodule/src/runtime/tunnel_flow_plane.*`                      | Clients, routes, virtual tuples, generations, tombstones, completion reservation, inbound slabs, counters, and writable state | Retain these owners, but remove IPv4 and UDP construction, parsing, checksums, packet identifiers, and outbound packet slabs once lwIP is authoritative.                                                             |
+| `wg-sysmodule/src/runtime/daemon_runtime.cpp`                       | State-lock boundary and composition                                                                                           | Split flow operations into a locked validation or reservation phase, a post-lock adapter phase, and a generation-checked locked commit.                                                                              |
+| `wg-sysmodule/src/runtime/runtime_effect_executor.*`                | Decrypted packet publication after peer authentication                                                                        | Copy authorized plaintext into bounded adapter work, then return before lwIP input, callbacks, or pbuf lifetime begins.                                                                                              |
+| `wg-sysmodule/src/runtime/horizon_dispatcher.*`                     | Existing ordered `wgnx-submit` work lane                                                                                      | Add one adapter work item to this lane and do not create another thread.                                                                                                                                             |
+| `wg-sysmodule/src/runtime/packet_data_plane.*` and `runtime/peer/*` | Complete inner-IP validation and bounded peer staging                                                                         | Add an all-or-none internal packet-batch admission needed to stage every fragment of one UDP datagram atomically.                                                                                                    |
+| `wg-sysmodule/src/runtime/timer_scheduler.*`                        | Concrete timer expiry and ordered timer work                                                                                  | Use one auxiliary timer only to enqueue timeout work onto `wgnx-submit`, where `sys_check_timeouts()` remains serialized with every other lwIP call.                                                                 |
+| `wg-sysmodule/src/wireguard/inner_packet.*`                         | Generic complete-IP validation and the experimental raw packet API                                                            | Keep this boundary independent of lwIP and do not expose lwIP types to the WireGuard protocol core.                                                                                                                  |
 
 The required end-to-end ownership is:
 
@@ -131,12 +131,12 @@ opaque WireGuard encryption and outer UDP transport
   Make the netif output callback copy each emitted complete IPv4 packet into one bounded per-operation collector and return `ERR_BUF` before exceeding its packet or byte capacity.
   Do not submit from the callback because a later fragment failure would otherwise expose only part of one BSD datagram.
   Keep the first payload backing-store ceiling at 1,472 bytes, which requires no more than three IPv4 fragments at the supported 576-byte minimum MTU.
-  Keep advertising the current MTU-limited maximum until fragmentation passes every gate, then advertise the measured 1,472-byte maximum and return `DatagramTooLarge` above it.
+  Advertise the measured 1,472-byte maximum independently of the active fragment MTU and return `DatagramTooLarge` above it.
   `TunnelFlowPlane` now validates and reserves a send without constructing an IPv4 or UDP packet, and carries only the stable adapter token into the post-lock owner operation.
   The owner copies one payload into its bounded operation slot, calls `udp_send()` on the connected lwIP PCB, and exposes the complete netif output collector only after that call returns.
   `DaemonRuntime` converts that completed collector into the atomic packet batch before it executes WireGuard effects, so netif callbacks cannot publish partial fragments.
   The owner regression sends the 1,472-byte bounded payload at a 576-byte MTU and proves that lwIP produces exactly three collected IPv4 packets.
-  The private API continues to advertise the pre-existing MTU-limited maximum until the remaining fragment, pressure, and lifecycle gates pass.
+  The private API now advertises the measured 1,472-byte maximum, while lwIP applies the active effective inner MTU solely as its fragmentation threshold.
 
 - [x] **8. Add atomic fragment-batch admission and preserve writable backpressure.**
 
@@ -156,7 +156,7 @@ opaque WireGuard encryption and outer UDP transport
   Revalidate those identities immediately before `netif->input`, not only when publishing the result, so a stale queued fragment can never join new-generation reassembly state.
   Drop stale work with an explicit aggregate disposition and do not allocate a pbuf or mutate lwIP state for it.
   Allocate and populate the raw-input pbuf only on the serialized adapter owner, then transfer ownership according to lwIP's `netif->input` contract.
-  `RuntimeEffectExecutor` now performs only AllowedIPs authorization and debug-probe handling before it copies a packet into the owner’s one bounded input slot.
+  `RuntimeEffectExecutor` now performs only AllowedIPs authorization and debug-probe handling before it copies a packet into the owner's one bounded input slot.
   The slot records peer identity, current flow-policy generation, and adapter epoch.
   The adapter worker revalidates all three under the daemon mutex directly before its post-lock `netif->input` call and explicitly drops stale input without allocating a pbuf.
   Item 10 consumes the copied lwIP UDP callback result after this fence.
@@ -235,6 +235,46 @@ opaque WireGuard encryption and outer UDP transport
   Disable packet logging and reconcile requester, harness, MITM, flow-plane, adapter, pbuf, fragment, completion, peer-staging, and WireGuard counters.
   Archive the first explicit pressure disposition and investigate every unexplained loss, timeout, stale delivery, or counter mismatch.
   Task 6 is complete only when device runs preserve BSD datagram atomicity and Task 4 lifecycle behavior, all local gates pass, the handmade codec is absent, and the final resource report records the bounded lwIP cost.
+
+### Condensed Regression Acceptance Matrix
+
+This matrix validates the lwIP cutover against the working UDP path before the separate throughput and latency characterization.
+It deliberately reuses the established requester, controlled echo harness, and Task 4 report helper.
+It does not require a new performance ceiling or a new packet generator.
+
+Before every run, deploy the matching `wg-sysmodule`, `mitm-sysmodule`, and toolbox build, with packet-granularity logging disabled and aggregate flow summaries enabled.
+Start the harness with `python3 tools/requester_harness.py --udp-ports 29000 --udp-quiet` on the remote host.
+Use a fresh workload ID and a separate report directory for every matrix row.
+Use the tunnel-reachable harness IPv4 address for direct `wgnx:tun` and routed BSD MITM rows.
+Keep `Echo replies=true`, one concurrent flow, a fixed payload seed, and a receive deadline that comfortably exceeds the observed Wi-Fi round-trip time.
+Select `Tunnel` data path for a direct WGNX row with `tunnel_udp.enabled=true` and `bsd_system_udp.enabled=false`.
+Select `bsd:s` data path for a routed MITM row with `tunnel_udp.enabled=false` and `bsd_system_udp.enabled=true`.
+For every routed row, activate the peer, enable the MITM, and confirm that its policy covers the configured destination before starting the toolbox.
+
+| ID  | Path and peer MTU                                            | Toolbox settings                                                                                               | Expected result                                                                                                                                                          |
+|-----|--------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| 150 | Direct WGNX, ordinary configured MTU                         | 1200 bytes, 32 datagrams, 5 ms pacing, echo                                                                    | 32 accepted and echoed datagrams with no timeout, duplicate, malformed, or unexpected harness record.                                                                    |
+| 151 | BSD MITM to WGNX, ordinary configured MTU                    | 1200 bytes, 32 datagrams, 5 ms pacing, echo                                                                    | The same 32 round trips, a non-any device-facing `GetSockName` endpoint, and a matching MITM `connect tunneled` record.                                                  |
+| 152 | Direct WGNX, both peers at 1280-byte effective inner MTU     | 1472 bytes, 16 datagrams, 5 ms pacing, echo                                                                    | Every datagram completes after two-fragment outbound and inbound traversal.                                                                                              |
+| 153 | BSD MITM to WGNX, both peers at 576-byte effective inner MTU | 1472 bytes, 8 datagrams, 10 ms pacing, echo                                                                    | Every datagram completes after three-fragment outbound and inbound traversal while BSD still reports one datagram per send and receive.                                  |
+| 154 | BSD MITM to WGNX, ordinary configured MTU                    | Terminal-closure mode, 1200 bytes, one datagram, one flow, echo                                                | After one echo, deactivate the peer or shut down WGNX and observe `POLLHUP` plus post-closure `ECONNABORTED`, then restart the components and rerun ID 151 successfully. |
+| 155 | BSD MITM to WGNX, ordinary configured MTU                    | The smallest previously known zero-pacing burst that triggers pressure, echo, `Require writable recovery=true` | At least one requester `EAGAIN`, a later `POLLOUT`, and successful retry of the same datagram without duplicate harness records.                                         |
+
+For IDs 152 and 153, change both peer configurations to the stated effective inner MTU, reconnect the tunnel, and confirm a fresh handshake before launching the workload.
+A 1472-byte UDP payload produces a 1500-byte IPv4 packet, which requires two fragments at 1280 bytes and three at 576 bytes.
+Configuring only the Switch proves outbound fragmentation but cannot prove lwIP inbound reassembly, so both peers must use the reduced MTU for those rows.
+Restore the ordinary peer MTU before IDs 154 and 155.
+Run the terminal-closure action only after the requester reports that it is waiting for the expected closure.
+If the current platform cannot reproduce pressure at the formerly observed burst, record the largest attempted burst and its clean accounting as inconclusive for ID 155 rather than calling writable recovery successful.
+
+After each row, archive the requester, harness, MITM, and WGNX logs without appending another run to them.
+After IDs 152 and 153, perform an orderly WGNX shutdown after collecting the flow summaries so the `lwip adapter reset summary` records nonzero reassembly activity and no unexpected input, callback, or pbuf rejection.
+Run `python3 tools/summarize_reports.py --check <toolbox.log> <harness.log> <mitm.log> <wgnx.log>` from `nx-reversing.git` for every routed BSD MITM row.
+Require exact requester, harness-unique, and harness-echoed counts, with zero duplicate, reordered, malformed, and unexpected records for every successful echo row.
+Require the MITM local-admission invariants to pass, and do not equate requester-visible retries with later WGNX `QueueFull` events.
+Treat any unexplained timeout, loss, stale completion, reassembly rejection, pbuf rejection, or accounting mismatch as a regression.
+Record the requester average echo latency for IDs 150 through 153 as a comparison point only, not a pass or fail performance threshold.
+Defer sustained throughput, large-volume transfer, path-transition, explicit missing or reordered fragment injection, and full latency characterization to the broader Item 15 campaign after this regression matrix passes.
 
 ## Scope Boundary After Completion
 
