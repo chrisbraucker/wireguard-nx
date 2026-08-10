@@ -222,6 +222,25 @@ void TestTunnelFlowPlane(TestContext& context) {
             completions[0].flow.value == tcp_open_reservation.result.flow.value && completions[0].flow_state == FlowState::Open,
         "a reserved TCP flow did not retain its virtual endpoint through one asynchronous connecting-to-open transition"
     );
+    constexpr std::array<std::uint8_t, 5> TcpPayload = {'t', 'c', 'p', '!', '!'};
+    const PayloadRange tcp_descriptor{
+        .flow = tcp_open_reservation.result.flow,
+        .payload_offset = 0,
+        .payload_size = static_cast<std::uint32_t>(TcpPayload.size()),
+        .client_tag = 0x544350,
+    };
+    const auto tcp_write = tcp_open_plane.PrepareTcpWrite(tcp_open_client, tcp_descriptor, TcpPayload, 1103);
+    const bool tcp_write_blocked = tcp_open_plane.MarkTcpWriteBlocked(tcp_open_reservation.adapter_token);
+    const bool tcp_writable_first = tcp_open_plane.MarkTcpWritable(tcp_open_reservation.adapter_token);
+    const bool tcp_writable_coalesced = tcp_open_plane.MarkTcpWritable(tcp_open_reservation.adapter_token);
+    const auto tcp_writable = tcp_open_plane.ReceiveCompletions(tcp_open_client, completions, received_payload);
+    WGNX_TEST_REQUIRE(
+        context,
+        tcp_write.status == ProtocolStatus::Success && tcp_write.adapter_token == tcp_open_reservation.adapter_token && tcp_write_blocked &&
+            tcp_writable_first && tcp_writable_coalesced && tcp_writable.status == ProtocolStatus::Success && tcp_writable.count == 1 &&
+            completions[0].type == CompletionType::Writable && completions[0].flow.value == tcp_open_reservation.result.flow.value,
+        "TCP write pressure did not retain the accepted flow or publish one coalesced writable recovery"
+    );
 
     config.leak_protection = true;
     TunnelFlowPlane protected_plane{};

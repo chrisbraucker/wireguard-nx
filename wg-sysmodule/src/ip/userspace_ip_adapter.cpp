@@ -278,9 +278,10 @@ UserspaceIpResult UserspaceIpAdapter::WriteTcp(std::uint64_t token, std::span<co
     if (written != ERR_OK) {
         return written == ERR_MEM || written == ERR_BUF ? UserspaceIpResult::QueueFull : UserspaceIpResult::TransportError;
     }
-    const err_t output = tcp_output(flow->tcp);
-    return output == ERR_OK ? UserspaceIpResult::Success
-                            : (output == ERR_MEM || output == ERR_BUF ? UserspaceIpResult::QueueFull : UserspaceIpResult::TransportError);
+    // tcp_write() owns the copied bytes after ERR_OK.
+    // A later output retry must never cause the client to duplicate that accepted stream range.
+    static_cast<void>(tcp_output(flow->tcp));
+    return UserspaceIpResult::Success;
 }
 
 UserspaceIpResult UserspaceIpAdapter::ShutdownTcpWrite(std::uint64_t token) {

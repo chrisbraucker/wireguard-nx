@@ -215,12 +215,17 @@ Advertise connected IPv4 UDP and connected IPv4 TCP independently.
   `GetFlowState` exposes the same virtual tuple from reservation through closure, while reservation failure, stale callback, reset, and timeout remain closed outcomes.
   Host coverage verifies the asynchronous `Connecting` to `Open` transition, its one completion, stream flags, and stable virtual endpoint.
 
-- [ ] **10. Implement bounded stream writes and writable recovery.**
+- [x] **10. Implement bounded stream writes and writable recovery.**
 
   Copy one caller chunk into owner storage, call `tcp_write(..., TCP_WRITE_FLAG_COPY)`, and call `tcp_output()` from the serialized owner.
   Admit the complete bounded chunk or return zero accepted bytes with `QueueFull` for the first contract.
   Record a writable waiter only after an actual capacity rejection and publish one coalesced writable completion when `tcp_sent` or another TCP transition restores sufficient capacity.
   Preserve byte order across retries, never duplicate accepted bytes, and reject writes while connecting, after local write shutdown, or after terminal closure with distinct statuses.
+
+  The owner copies one bounded write into its single data slot and calls `tcp_write(..., TCP_WRITE_FLAG_COPY)` followed by `tcp_output()` after leaving the daemon mutex.
+  Once `tcp_write()` succeeds, the write reports complete acceptance even when output is deferred, so a caller cannot duplicate bytes by retrying a range already owned by lwIP.
+  Capacity rejection reports `QueueFull`, marks one writable waiter, and the copied `tcp_sent` callback publishes one coalesced `Writable` completion when capacity returns.
+  Host coverage verifies the accepted TCP write identity and one writable recovery after repeated capacity notifications.
 
 - [ ] **11. Implement bounded receive delivery and TCP backpressure.**
 
