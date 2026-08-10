@@ -136,17 +136,13 @@ wgnx::tunnel::Capabilities TunnelFlowPlane::GetCapabilities() const {
         .capability_mask = wgnx::tunnel::SupportedCapabilityMask,
         .effective_inner_mtu = m_effective_inner_mtu,
         .maximum_udp_payload_bytes = static_cast<std::uint32_t>(wgnx::tunnel::MaximumUdpPayloadStorageBytes),
+        .maximum_tcp_write_bytes = static_cast<std::uint32_t>(wgnx::tunnel::MaximumTcpWriteStorageBytes),
         .maximum_client_contexts = wgnx::tunnel::MaximumClientContexts,
         .maximum_flows_per_client = wgnx::tunnel::MaximumFlowsPerClient,
         .maximum_flows = wgnx::tunnel::MaximumFlows,
-        .outbound_packet_slab_count = wgnx::tunnel::OutboundPacketSlabCount,
-        .inbound_packet_slab_count = wgnx::tunnel::InboundPacketSlabCount,
-        .maximum_inbound_datagrams_per_flow = wgnx::tunnel::MaximumInboundDatagramsPerFlow,
         .completion_queue_capacity = wgnx::tunnel::CompletionQueueCapacity,
         .maximum_batch_entries = wgnx::tunnel::MaximumBatchEntries,
         .maximum_policy_routes = wgnx::tunnel::MaximumPolicyRoutes,
-        .kernel_handles_per_client = wgnx::tunnel::KernelHandlesPerClient,
-        .reverse_tuple_quarantine_capacity = wgnx::tunnel::ReverseTupleQuarantineCapacity,
         .reserved = 0,
     };
 }
@@ -183,12 +179,12 @@ wgnx::tunnel::RoutingPolicySnapshot TunnelFlowPlane::CopyRoutingPolicy(std::span
 
 TunnelFlowReservation TunnelFlowPlane::ReserveConnectedUdpFlow(
     TunnelClientId client,
-    const wgnx::tunnel::OpenConnectedUdpFlowRequest& request,
+    const wgnx::tunnel::OpenConnectedFlowRequest& request,
     wgnx::platform::ktime_t now,
     TunnelTransportAvailability availability
 ) {
     TunnelFlowReservation reservation{};
-    wgnx::tunnel::OpenConnectedUdpFlowResult& result = reservation.result;
+    wgnx::tunnel::OpenConnectedFlowResult& result = reservation.result;
     result.routing_policy_generation = m_policy_generation;
     ClientSlot* client_slot = FindClient(client);
     if (client_slot == nullptr || request.remote.reserved != 0 || request.remote.port == 0 || IsZeroEndpoint(request.remote)) {
@@ -291,9 +287,9 @@ TunnelFlowReservation TunnelFlowPlane::ReserveConnectedUdpFlow(
     return reservation;
 }
 
-wgnx::tunnel::OpenConnectedUdpFlowResult TunnelFlowPlane::OpenConnectedUdpFlow(
+wgnx::tunnel::OpenConnectedFlowResult TunnelFlowPlane::OpenConnectedUdpFlow(
     TunnelClientId client,
-    const wgnx::tunnel::OpenConnectedUdpFlowRequest& request,
+    const wgnx::tunnel::OpenConnectedFlowRequest& request,
     wgnx::platform::ktime_t now,
     TunnelTransportAvailability availability
 ) {
@@ -366,7 +362,7 @@ std::uint32_t TunnelFlowPlane::CopyClientAdapterTokens(TunnelClientId client, st
 
 PreparedTunnelDatagram TunnelFlowPlane::PrepareSend(
     TunnelClientId client,
-    const wgnx::tunnel::DatagramDescriptor& descriptor,
+    const wgnx::tunnel::PayloadRange& descriptor,
     std::span<const std::uint8_t> payload,
     TunnelTransportAvailability availability,
     wgnx::platform::ktime_t now
@@ -377,7 +373,7 @@ PreparedTunnelDatagram TunnelFlowPlane::PrepareSend(
         return outcome;
     }
     if (payload.size() > wgnx::tunnel::MaximumUdpPayloadStorageBytes) {
-        outcome.status = wgnx::tunnel::ProtocolStatus::DatagramTooLarge;
+        outcome.status = wgnx::tunnel::ProtocolStatus::PayloadTooLarge;
         return outcome;
     }
     FlowSlot* flow = FindFlow(client, descriptor.flow);
@@ -509,10 +505,13 @@ wgnx::tunnel::FlowStateResult TunnelFlowPlane::GetFlowState(TunnelClientId clien
         .status = wgnx::tunnel::ProtocolStatus::StaleHandle,
         .state = wgnx::tunnel::FlowState::Closed,
         .terminal_reason = wgnx::tunnel::FlowTerminalReason::None,
+        .flow_kind = wgnx::tunnel::FlowKind::Udp,
         .peer_activation_generation = 0,
         .routing_policy_generation = m_policy_generation,
         .advertised_local = {},
         .diagnostic_tag = 0,
+        .stream_flags = wgnx::tunnel::FlowStreamFlagNone,
+        .reserved = 0,
     };
     const FlowSlot* flow = FindFlow(client, flow_handle);
     if (flow == nullptr) {
@@ -879,7 +878,7 @@ bool TunnelFlowPlane::EnqueueDataCompletion(std::size_t flow_slot, std::uint8_t 
     client->completions[insert] = {
         .record =
             {
-                .type = wgnx::tunnel::CompletionType::InboundDatagram,
+                .type = wgnx::tunnel::CompletionType::InboundUdpDatagram,
                 .status = wgnx::tunnel::ProtocolStatus::Success,
                 .flow = MakeFlowHandle(flow_slot, flow),
                 .remote = flow.remote,
@@ -889,6 +888,7 @@ bool TunnelFlowPlane::EnqueueDataCompletion(std::size_t flow_slot, std::uint8_t 
                 .routing_policy_generation = flow.policy_generation,
                 .flow_state = wgnx::tunnel::FlowState::Open,
                 .terminal_reason = wgnx::tunnel::FlowTerminalReason::None,
+                .flow_kind = wgnx::tunnel::FlowKind::Udp,
             },
         .inbound_slab_slot = inbound_slab_slot,
     };

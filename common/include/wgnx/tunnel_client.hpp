@@ -124,7 +124,7 @@ class ScopedClient {
     if (!root.IsOpen() || out_capabilities == nullptr) {
         return MAKERESULT(Module_Libnx, LibnxError_NotInitialized);
     }
-    return serviceDispatchOut(root.Get(), static_cast<std::uint32_t>(RootCommandId::GetTunApiVersion), *out_capabilities);
+    return serviceDispatchOut(root.Get(), static_cast<std::uint32_t>(RootCommandId::GetCapabilities), *out_capabilities);
 }
 
 [[nodiscard]] inline Result OpenTunnelClient(ScopedRootService& root, ScopedClient* out_client) {
@@ -163,8 +163,9 @@ class ScopedClient {
     return serviceDispatchOut(client.Get(), static_cast<std::uint32_t>(ClientCommandId::GetCapabilities), *out_capabilities);
 }
 
-[[nodiscard]] inline Result
-GetRoutingPolicySnapshot(ScopedClient& client, RouteRecord* routes, std::size_t route_capacity, RoutingPolicySnapshot* out_snapshot) {
+[[nodiscard]] inline Result GetRoutingPolicySnapshot(
+    ScopedClient& client, RouteRecord* routes, std::size_t route_capacity, RoutingPolicySnapshot* out_snapshot
+) {
     if (!client.IsOpen() || out_snapshot == nullptr || route_capacity > MaximumPolicyRoutes || (route_capacity != 0 && routes == nullptr)) {
         return MAKERESULT(Module_Libnx, LibnxError_BadInput);
     }
@@ -190,41 +191,22 @@ GetRoutingPolicySnapshot(ScopedClient& client, RouteRecord* routes, std::size_t 
     );
 }
 
-[[nodiscard]] inline Result
-OpenConnectedUdpFlow(ScopedClient& client, const OpenConnectedUdpFlowRequest& request, OpenConnectedUdpFlowResult* out_result) {
+[[nodiscard]] inline Result OpenConnectedUdpFlow(
+    ScopedClient& client, const OpenConnectedFlowRequest& request, OpenConnectedFlowResult* out_result
+) {
     if (!client.IsOpen() || out_result == nullptr) {
         return MAKERESULT(Module_Libnx, LibnxError_NotInitialized);
     }
     return serviceDispatchInOut(client.Get(), static_cast<std::uint32_t>(ClientCommandId::OpenConnectedUdpFlow), request, *out_result);
 }
 
-[[nodiscard]] inline Result SendUdpDatagram(
-    ScopedClient& client,
-    const DatagramDescriptor& descriptor,
-    const void* payload,
-    std::size_t payload_size,
-    DatagramDisposition* out_disposition
-) {
-    if (!client.IsOpen() || out_disposition == nullptr || (payload_size != 0 && payload == nullptr)) {
-        return MAKERESULT(Module_Libnx, LibnxError_NotInitialized);
-    }
-    return serviceDispatchInOut(
-        client.Get(),
-        static_cast<std::uint32_t>(ClientCommandId::SendUdpDatagram),
-        descriptor,
-        *out_disposition,
-        .buffer_attrs = {SfBufferAttr_HipcMapAlias | SfBufferAttr_In},
-        .buffers = {{payload, payload_size}}
-    );
-}
-
 [[nodiscard]] inline Result SendUdpDatagramBatch(
     ScopedClient& client,
-    const DatagramDescriptor* descriptors,
+    const PayloadRange* descriptors,
     std::size_t descriptor_count,
     const void* payload,
     std::size_t payload_size,
-    DatagramDisposition* out_dispositions,
+    PayloadResult* out_dispositions,
     std::size_t disposition_count
 ) {
     if (!client.IsOpen() || descriptor_count > MaximumBatchEntries || disposition_count < descriptor_count ||
@@ -239,11 +221,49 @@ OpenConnectedUdpFlow(ScopedClient& client, const OpenConnectedUdpFlowRequest& re
              SfBufferAttr_HipcMapAlias | SfBufferAttr_In,
              SfBufferAttr_HipcMapAlias | SfBufferAttr_Out},
         .buffers = {
-            {descriptors, descriptor_count * sizeof(DatagramDescriptor)},
+            {descriptors, descriptor_count * sizeof(PayloadRange)},
             {payload, payload_size},
-            {out_dispositions, disposition_count * sizeof(DatagramDisposition)}
+            {out_dispositions, disposition_count * sizeof(PayloadResult)}
         }
     );
+}
+
+[[nodiscard]] inline Result SendUdpDatagram(
+    ScopedClient& client, const PayloadRange& range, const void* payload, std::size_t payload_size, PayloadResult* out_result
+) {
+    return SendUdpDatagramBatch(client, std::addressof(range), 1, payload, payload_size, out_result, 1);
+}
+
+[[nodiscard]] inline Result OpenConnectedTcpFlow(
+    ScopedClient& client, const OpenConnectedFlowRequest& request, OpenConnectedFlowResult* out_result
+) {
+    if (!client.IsOpen() || out_result == nullptr) {
+        return MAKERESULT(Module_Libnx, LibnxError_NotInitialized);
+    }
+    return serviceDispatchInOut(client.Get(), static_cast<std::uint32_t>(ClientCommandId::OpenConnectedTcpFlow), request, *out_result);
+}
+
+[[nodiscard]] inline Result WriteTcpStream(
+    ScopedClient& client, const PayloadRange& range, const void* payload, std::size_t payload_size, PayloadResult* out_result
+) {
+    if (!client.IsOpen() || out_result == nullptr || (payload_size != 0 && payload == nullptr)) {
+        return MAKERESULT(Module_Libnx, LibnxError_BadInput);
+    }
+    return serviceDispatchInOut(
+        client.Get(),
+        static_cast<std::uint32_t>(ClientCommandId::WriteTcpStream),
+        range,
+        *out_result,
+        .buffer_attrs = {SfBufferAttr_HipcMapAlias | SfBufferAttr_In},
+        .buffers = {{payload, payload_size}}
+    );
+}
+
+[[nodiscard]] inline Result ShutdownTcpWrite(ScopedClient& client, const FlowHandle& flow, ProtocolStatus* out_status) {
+    if (!client.IsOpen() || out_status == nullptr) {
+        return MAKERESULT(Module_Libnx, LibnxError_NotInitialized);
+    }
+    return serviceDispatchInOut(client.Get(), static_cast<std::uint32_t>(ClientCommandId::ShutdownTcpWrite), flow, *out_status);
 }
 
 [[nodiscard]] inline Result ReceiveCompletions(

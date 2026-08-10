@@ -45,7 +45,7 @@ void TestTunnelFlowPlane(TestContext& context) {
     const TunnelClientId mtu_client = mtu_plane.CreateClient(nullptr, nullptr);
     mtu_plane.RefreshPolicy({.configuration = &config, .peer = first_peer, .selected = true}, 90);
     const auto default_mtu_capabilities = mtu_plane.GetCapabilities();
-    const OpenConnectedUdpFlowRequest mtu_open{
+    const OpenConnectedFlowRequest mtu_open{
         .remote = {.address = {10, 251, 0, 2}, .port = 29000, .reserved = 0},
         .diagnostic_tag = 0x4D5455,
     };
@@ -53,19 +53,19 @@ void TestTunnelFlowPlane(TestContext& context) {
     std::array<std::uint8_t, 1392> default_mtu_payload{};
     std::array<std::uint8_t, MaximumUdpPayloadStorageBytes> fragmented_payload{};
     std::array<std::uint8_t, MaximumUdpPayloadStorageBytes + 1> oversized_payload{};
-    const DatagramDescriptor default_mtu_descriptor{
+    const PayloadRange default_mtu_descriptor{
         .flow = mtu_flow.flow,
         .payload_offset = 0,
         .payload_size = static_cast<std::uint32_t>(default_mtu_payload.size()),
         .client_tag = 0xD001,
     };
-    const DatagramDescriptor fragmented_descriptor{
+    const PayloadRange fragmented_descriptor{
         .flow = mtu_flow.flow,
         .payload_offset = 0,
         .payload_size = static_cast<std::uint32_t>(fragmented_payload.size()),
         .client_tag = 0xD002,
     };
-    const DatagramDescriptor oversized_descriptor{
+    const PayloadRange oversized_descriptor{
         .flow = mtu_flow.flow,
         .payload_offset = 0,
         .payload_size = static_cast<std::uint32_t>(oversized_payload.size()),
@@ -79,7 +79,7 @@ void TestTunnelFlowPlane(TestContext& context) {
     mtu_plane.RefreshPolicy({.configuration = &config, .peer = first_peer, .selected = true}, 94);
     const auto configured_mtu_capabilities = mtu_plane.GetCapabilities();
     std::array<std::uint8_t, 1252> configured_mtu_payload{};
-    const DatagramDescriptor configured_mtu_descriptor{
+    const PayloadRange configured_mtu_descriptor{
         .flow = mtu_flow.flow,
         .payload_offset = 0,
         .payload_size = static_cast<std::uint32_t>(configured_mtu_payload.size()),
@@ -100,7 +100,7 @@ void TestTunnelFlowPlane(TestContext& context) {
             configured_mtu_capabilities.maximum_udp_payload_bytes == MaximumUdpPayloadStorageBytes &&
             configured_mtu_send.status == ProtocolStatus::Success && configured_mtu_send.IsPrepared() &&
             fragmented_configured_mtu_send.status == ProtocolStatus::Success && fragmented_configured_mtu_send.IsPrepared() &&
-            oversized_send.status == ProtocolStatus::DatagramTooLarge,
+            oversized_send.status == ProtocolStatus::PayloadTooLarge,
         "flow plane did not retain the fixed datagram bound independently of the effective inner MTU"
     );
     config.mtu = 1420;
@@ -119,11 +119,11 @@ void TestTunnelFlowPlane(TestContext& context) {
         "flow plane did not create a client context or normalize longest-prefix routes"
     );
 
-    const OpenConnectedUdpFlowRequest uncovered{
+    const OpenConnectedFlowRequest uncovered{
         .remote = {.address = {192, 0, 2, 1}, .port = 29000, .reserved = 0},
         .diagnostic_tag = 1,
     };
-    const OpenConnectedUdpFlowRequest open{
+    const OpenConnectedFlowRequest open{
         .remote = {.address = {10, 251, 0, 2}, .port = 29000, .reserved = 0},
         .diagnostic_tag = 0xA5A5,
     };
@@ -182,7 +182,7 @@ void TestTunnelFlowPlane(TestContext& context) {
     config.leak_protection = false;
 
     constexpr std::array<std::uint8_t, 5> Payload = {'h', 'e', 'l', 'l', 'o'};
-    const DatagramDescriptor descriptor{
+    const PayloadRange descriptor{
         .flow = opened.flow,
         .payload_offset = 0,
         .payload_size = static_cast<std::uint32_t>(Payload.size()),
@@ -214,7 +214,7 @@ void TestTunnelFlowPlane(TestContext& context) {
         context,
         foreign.disposition == TunnelInboundDisposition::DroppedStale && delivered.disposition == TunnelInboundDisposition::Delivered &&
             received.status == ProtocolStatus::Success && received.count >= 1 && completions[0].type == CompletionType::PolicyChanged &&
-            completions[1].type == CompletionType::InboundDatagram && completions[1].flow.value == opened.flow.value &&
+            completions[1].type == CompletionType::InboundUdpDatagram && completions[1].flow.value == opened.flow.value &&
             completions[1].payload_size == Payload.size() && std::equal(Payload.begin(), Payload.end(), received_payload.begin()),
         "flow receive did not retain the policy edge and generation-checked UDP callback in completion order"
     );
@@ -229,7 +229,7 @@ void TestTunnelFlowPlane(TestContext& context) {
         context,
         second_send.IsPrepared() && second_delivery.disposition == TunnelInboundDisposition::Delivered &&
             insufficient.status == ProtocolStatus::OutputBufferTooSmall && after_insufficient.status == ProtocolStatus::Success &&
-            after_insufficient.count == 1 && completions[0].type == CompletionType::InboundDatagram,
+            after_insufficient.count == 1 && completions[0].type == CompletionType::InboundUdpDatagram,
         "completion draining emitted a partial datagram or lost it after an undersized buffer"
     );
 
@@ -279,7 +279,7 @@ void TestTunnelFlowPlane(TestContext& context) {
     static_cast<void>(client_reuse_plane.ReceiveCompletions(first_reuse_client, completions, received_payload));
     static_cast<void>(client_reuse_plane.ReceiveCompletions(second_reuse_client, completions, received_payload));
     const auto first_reuse_flow = client_reuse_plane.OpenConnectedUdpFlow(first_reuse_client, open, 201);
-    const DatagramDescriptor first_reuse_descriptor{
+    const PayloadRange first_reuse_descriptor{
         .flow = first_reuse_flow.flow,
         .payload_offset = 0,
         .payload_size = static_cast<std::uint32_t>(Payload.size()),
@@ -289,7 +289,7 @@ void TestTunnelFlowPlane(TestContext& context) {
     const std::uint16_t first_reuse_port = client_reuse_plane.GetFlowState(first_reuse_client, first_reuse_flow.flow).advertised_local.port;
     const auto first_reuse_close = client_reuse_plane.CloseFlow(first_reuse_client, first_reuse_flow.flow, 203);
     const auto second_reuse_flow = client_reuse_plane.OpenConnectedUdpFlow(second_reuse_client, open, 204);
-    const DatagramDescriptor second_reuse_descriptor{
+    const PayloadRange second_reuse_descriptor{
         .flow = second_reuse_flow.flow,
         .payload_offset = 0,
         .payload_size = static_cast<std::uint32_t>(Payload.size()),
@@ -315,7 +315,7 @@ void TestTunnelFlowPlane(TestContext& context) {
             second_reuse_send.status == ProtocolStatus::Success && first_reuse_port != second_reuse_port &&
             second_reuse_delivery.disposition == TunnelInboundDisposition::Delivered &&
             second_reuse_received.status == ProtocolStatus::Success && second_reuse_received.count == 1 &&
-            completions[0].type == CompletionType::InboundDatagram && completions[0].flow.value == second_reuse_flow.flow.value &&
+            completions[0].type == CompletionType::InboundUdpDatagram && completions[0].flow.value == second_reuse_flow.flow.value &&
             std::equal(Payload.begin(), Payload.end(), received_payload.begin()),
         "a fresh client flow did not receive its reply after a prior client closed the same remote tuple"
     );
@@ -362,7 +362,7 @@ void TestTunnelFlowPlane(TestContext& context) {
     const TunnelClientId bounded_client = bounded_plane.CreateClient(nullptr, nullptr);
     bounded_plane.RefreshPolicy({.configuration = &config, .peer = first_peer, .selected = true}, 200);
     static_cast<void>(bounded_plane.ReceiveCompletions(bounded_client, completions, received_payload));
-    const OpenConnectedUdpFlowRequest invalid_port{
+    const OpenConnectedFlowRequest invalid_port{
         .remote = {.address = {10, 251, 0, 2}, .port = 0, .reserved = 0},
         .diagnostic_tag = 0,
     };
@@ -382,7 +382,7 @@ void TestTunnelFlowPlane(TestContext& context) {
     std::uint32_t dropped_count = 0;
     bool all_bounded_prepared = true;
     for (std::uint32_t sequence = 0; sequence < 8; ++sequence) {
-        const DatagramDescriptor bounded_descriptor{
+        const PayloadRange bounded_descriptor{
             .flow = bounded_flows[sequence % bounded_flows.size()],
             .payload_offset = 0,
             .payload_size = static_cast<std::uint32_t>(Payload.size()),

@@ -10,18 +10,15 @@ namespace wgnx::tunnel {
 
 template <typename Send>
 void DispatchUdpDatagramBatch(
-    std::span<const DatagramDescriptor> descriptors,
-    std::span<const std::uint8_t> payload,
-    std::span<DatagramDisposition> dispositions,
-    Send&& send
+    std::span<const PayloadRange> descriptors, std::span<const std::uint8_t> payload, std::span<PayloadResult> dispositions, Send&& send
 ) {
     for (std::size_t index = 0; index < descriptors.size(); ++index) {
-        const DatagramDescriptor& descriptor = descriptors[index];
-        DatagramDisposition& disposition = dispositions[index];
+        const PayloadRange& descriptor = descriptors[index];
+        PayloadResult& disposition = dispositions[index];
         disposition = {
             .client_tag = descriptor.client_tag,
             .status = ProtocolStatus::MalformedInput,
-            .reserved = 0,
+            .accepted_bytes = 0,
         };
 
         const std::size_t offset = descriptor.payload_offset;
@@ -30,6 +27,9 @@ void DispatchUdpDatagramBatch(
             continue;
         }
         disposition.status = send(descriptor, payload.subspan(offset, size));
+        if (disposition.status == ProtocolStatus::Success) {
+            disposition.accepted_bytes = descriptor.payload_size;
+        }
     }
 }
 

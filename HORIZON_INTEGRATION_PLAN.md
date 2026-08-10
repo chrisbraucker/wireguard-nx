@@ -173,7 +173,7 @@ Implement a normalized `AllowedIPs` route table with deterministic longest-prefi
 The current single active peer may be the only selectable result in v1, but route coverage must not rely on a nonempty configuration string.
 
 Back payloads with fixed global slabs, keep inbound slab references in the client completion queue, and retain only quota occupancy in each flow.
-Derive the maximum UDP payload from effective inner MTU and return `DatagramTooLarge` rather than fragmenting in v1.
+Derive the maximum UDP payload from effective inner MTU and return `PayloadTooLarge` rather than fragmenting in v1.
 Quarantine released virtual source tuples for a fixed documented interval and expose exhaustion as a typed disposition.
 
 Deliver decrypted matching UDP payloads back through the flow handle while preserving the source endpoint metadata the client needs.

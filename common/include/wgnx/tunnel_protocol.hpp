@@ -9,19 +9,21 @@
 namespace wgnx::tunnel {
 
 constexpr inline char ServiceName[] = "wgnx:tun";
-constexpr inline std::uint32_t TunApiVersion = 3;
+constexpr inline std::uint32_t TunApiVersion = 4;
 
 constexpr inline std::size_t MaximumClientContexts = 4;
 constexpr inline std::size_t MaximumFlowsPerClient = 4;
 constexpr inline std::size_t MaximumFlows = MaximumClientContexts * MaximumFlowsPerClient;
 constexpr inline std::size_t Ipv4HeaderBytes = 20;
 constexpr inline std::size_t UdpHeaderBytes = 8;
+constexpr inline std::size_t TcpHeaderBytes = 20;
 // This is the conventional WireGuard interface MTU for a 1500-byte Ethernet path.
 constexpr inline std::uint16_t DefaultEffectiveInnerMtu = 1420;
 constexpr inline std::uint16_t MinimumEffectiveInnerMtu = 576;
 constexpr inline std::uint16_t MaximumEffectiveInnerMtu = static_cast<std::uint16_t>(MaxInnerIpv4PacketSize);
 // This is backing-store capacity, not the active per-peer transmission limit.
 constexpr inline std::size_t MaximumUdpPayloadStorageBytes = MaxInnerIpv4PacketSize - Ipv4HeaderBytes - UdpHeaderBytes;
+constexpr inline std::size_t MaximumTcpWriteStorageBytes = MaxInnerIpv4PacketSize - Ipv4HeaderBytes - TcpHeaderBytes;
 constexpr inline std::size_t OutboundPacketSlabCount = 16;
 constexpr inline std::size_t InboundPacketSlabCount = 16;
 constexpr inline std::size_t MaximumInboundDatagramsPerFlow = 4;
@@ -44,7 +46,7 @@ constexpr inline std::size_t ReverseTupleQuarantineCapacity = MaximumFlows;
 }
 
 enum class RootCommandId : std::uint32_t {
-    GetTunApiVersion = 0,
+    GetCapabilities = 0,
     OpenTunnelClient = 1,
 };
 
@@ -53,30 +55,25 @@ enum class ClientCommandId : std::uint32_t {
     GetRoutingPolicySnapshot = 1,
     GetCompletionEvent = 2,
     OpenConnectedUdpFlow = 3,
-    SendUdpDatagram = 4,
-    SendUdpDatagramBatch = 5,
-    ReceiveCompletions = 6,
-    GetFlowState = 7,
-    CloseFlow = 8,
+    SendUdpDatagramBatch = 4,
+    ReceiveCompletions = 5,
+    GetFlowState = 6,
+    CloseFlow = 7,
+    OpenConnectedTcpFlow = 8,
+    WriteTcpStream = 9,
+    ShutdownTcpWrite = 10,
 };
 
 enum class Capability : std::uint32_t {
     ConnectedIpv4Udp = 1U << 0,
-    DatagramBatches = 1U << 1,
-    CompletionEvent = 1U << 2,
-    RoutingPolicySnapshot = 1U << 3,
-    FlowStateQuery = 1U << 4,
-    LeakProtection = 1U << 5,
+    ConnectedIpv4Tcp = 1U << 1,
 };
 
 constexpr std::uint32_t CapabilityMask(Capability capability) {
     return static_cast<std::uint32_t>(capability);
 }
 
-constexpr inline std::uint32_t SupportedCapabilityMask =
-    CapabilityMask(Capability::ConnectedIpv4Udp) | CapabilityMask(Capability::DatagramBatches) |
-    CapabilityMask(Capability::CompletionEvent) | CapabilityMask(Capability::RoutingPolicySnapshot) |
-    CapabilityMask(Capability::FlowStateQuery) | CapabilityMask(Capability::LeakProtection);
+constexpr inline std::uint32_t SupportedCapabilityMask = CapabilityMask(Capability::ConnectedIpv4Udp);
 
 enum class ProtocolStatus : std::uint32_t {
     Success = 0,
@@ -87,7 +84,7 @@ enum class ProtocolStatus : std::uint32_t {
     PeerUnavailable = 5,
     TransportUnavailable = 6,
     FlowQuotaExhausted = 7,
-    DatagramTooLarge = 8,
+    PayloadTooLarge = 8,
     QueueFull = 9,
     StaleHandle = 10,
     FlowClosed = 11,
@@ -95,13 +92,27 @@ enum class ProtocolStatus : std::uint32_t {
     OutputBufferTooSmall = 13,
     ReverseTupleExhausted = 14,
     TunnelBlockedByPolicy = 15,
+    WrongFlowKind = 16,
+    NotConnected = 17,
+    LocalWriteClosed = 18,
 };
 
 enum class FlowState : std::uint32_t {
-    Open = 0,
-    Suspended = 1,
+    Connecting = 0,
+    Open = 1,
     Closing = 2,
     Closed = 3,
+};
+
+enum class FlowKind : std::uint32_t {
+    Udp = 0,
+    Tcp = 1,
+};
+
+enum FlowStreamFlag : std::uint32_t {
+    FlowStreamFlagNone = 0,
+    FlowStreamFlagLocalWriteOpen = 1U << 0,
+    FlowStreamFlagRemoteWriteOpen = 1U << 1,
 };
 
 enum class FlowTerminalReason : std::uint32_t {
@@ -111,13 +122,20 @@ enum class FlowTerminalReason : std::uint32_t {
     PeerActivationChanged = 3,
     PolicyInvalidated = 4,
     SysmoduleShutdown = 5,
+    RemoteClosed = 6,
+    ResetDuringConnect = 7,
+    ResetAfterConnect = 8,
+    ConnectTimedOut = 9,
+    RouteLost = 10,
+    LocalResourceFailure = 11,
 };
 
 enum class CompletionType : std::uint32_t {
-    InboundDatagram = 0,
-    FlowStateChanged = 1,
-    PolicyChanged = 2,
-    Writable = 3,
+    InboundUdpDatagram = 0,
+    InboundTcpStream = 1,
+    FlowStateChanged = 2,
+    PolicyChanged = 3,
+    Writable = 4,
 };
 
 struct FlowHandle {
@@ -135,43 +153,39 @@ struct Capabilities {
     std::uint32_t capability_mask;
     std::uint32_t effective_inner_mtu;
     std::uint32_t maximum_udp_payload_bytes;
+    std::uint32_t maximum_tcp_write_bytes;
     std::uint32_t maximum_client_contexts;
     std::uint32_t maximum_flows_per_client;
     std::uint32_t maximum_flows;
-    std::uint32_t outbound_packet_slab_count;
-    std::uint32_t inbound_packet_slab_count;
-    std::uint32_t maximum_inbound_datagrams_per_flow;
     std::uint32_t completion_queue_capacity;
     std::uint32_t maximum_batch_entries;
     std::uint32_t maximum_policy_routes;
-    std::uint32_t kernel_handles_per_client;
-    std::uint32_t reverse_tuple_quarantine_capacity;
     std::uint32_t reserved;
 };
 
-struct OpenConnectedUdpFlowRequest {
+struct OpenConnectedFlowRequest {
     Ipv4Endpoint remote;
     std::uint64_t diagnostic_tag;
 };
 
-struct OpenConnectedUdpFlowResult {
+struct OpenConnectedFlowResult {
     ProtocolStatus status;
     FlowHandle flow;
     std::uint32_t peer_activation_generation;
     std::uint32_t routing_policy_generation;
 };
 
-struct DatagramDescriptor {
+struct PayloadRange {
     FlowHandle flow;
     std::uint32_t payload_offset;
     std::uint32_t payload_size;
     std::uint64_t client_tag;
 };
 
-struct DatagramDisposition {
+struct PayloadResult {
     std::uint64_t client_tag;
     ProtocolStatus status;
-    std::uint32_t reserved;
+    std::uint32_t accepted_bytes;
 };
 
 struct CompletionRecord {
@@ -185,6 +199,7 @@ struct CompletionRecord {
     std::uint32_t routing_policy_generation;
     FlowState flow_state;
     FlowTerminalReason terminal_reason;
+    FlowKind flow_kind;
 };
 
 struct CompletionDrainResult {
@@ -196,10 +211,13 @@ struct FlowStateResult {
     ProtocolStatus status;
     FlowState state;
     FlowTerminalReason terminal_reason;
+    FlowKind flow_kind;
     std::uint32_t peer_activation_generation;
     std::uint32_t routing_policy_generation;
     Ipv4Endpoint advertised_local;
     std::uint64_t diagnostic_tag;
+    std::uint32_t stream_flags;
+    std::uint32_t reserved;
 };
 
 struct RoutingPolicySnapshot {
@@ -218,10 +236,10 @@ struct RouteRecord {
 static_assert(std::is_trivially_copyable_v<FlowHandle>);
 static_assert(std::is_trivially_copyable_v<Ipv4Endpoint>);
 static_assert(std::is_trivially_copyable_v<Capabilities>);
-static_assert(std::is_trivially_copyable_v<OpenConnectedUdpFlowRequest>);
-static_assert(std::is_trivially_copyable_v<OpenConnectedUdpFlowResult>);
-static_assert(std::is_trivially_copyable_v<DatagramDescriptor>);
-static_assert(std::is_trivially_copyable_v<DatagramDisposition>);
+static_assert(std::is_trivially_copyable_v<OpenConnectedFlowRequest>);
+static_assert(std::is_trivially_copyable_v<OpenConnectedFlowResult>);
+static_assert(std::is_trivially_copyable_v<PayloadRange>);
+static_assert(std::is_trivially_copyable_v<PayloadResult>);
 static_assert(std::is_trivially_copyable_v<CompletionRecord>);
 static_assert(std::is_trivially_copyable_v<CompletionDrainResult>);
 static_assert(std::is_trivially_copyable_v<FlowStateResult>);
@@ -229,14 +247,14 @@ static_assert(std::is_trivially_copyable_v<RoutingPolicySnapshot>);
 static_assert(std::is_trivially_copyable_v<RouteRecord>);
 static_assert(sizeof(FlowHandle) == 8);
 static_assert(sizeof(Ipv4Endpoint) == 8);
-static_assert(sizeof(Capabilities) == 64);
-static_assert(sizeof(OpenConnectedUdpFlowRequest) == 16);
-static_assert(sizeof(OpenConnectedUdpFlowResult) == 24);
-static_assert(sizeof(DatagramDescriptor) == 24);
-static_assert(sizeof(DatagramDisposition) == 16);
-static_assert(sizeof(CompletionRecord) == 48);
+static_assert(sizeof(Capabilities) == 48);
+static_assert(sizeof(OpenConnectedFlowRequest) == 16);
+static_assert(sizeof(OpenConnectedFlowResult) == 24);
+static_assert(sizeof(PayloadRange) == 24);
+static_assert(sizeof(PayloadResult) == 16);
+static_assert(sizeof(CompletionRecord) == 56);
 static_assert(sizeof(CompletionDrainResult) == 8);
-static_assert(sizeof(FlowStateResult) == 40);
+static_assert(sizeof(FlowStateResult) == 48);
 static_assert(sizeof(RoutingPolicySnapshot) == 8);
 static_assert(sizeof(RouteRecord) == 32);
 

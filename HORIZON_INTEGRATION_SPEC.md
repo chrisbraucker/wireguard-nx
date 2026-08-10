@@ -12,12 +12,12 @@ It still validates all inputs, maintains fixed resource limits, and returns defi
 
 ## Scope And Non-Goals
 
-The first contract version supports connected IPv4 UDP flows only.
-A client opens a logical flow for one remote IPv4 endpoint, submits UDP payloads, and receives matching UDP payloads with their remote source endpoint.
-The WireGuard sysmodule selects the active peer, owns the tunnel source IPv4 address and virtual UDP source port, constructs and parses inner IPv4 and UDP packets, and retains all tunnel-facing flow mappings.
+The version 4 contract supports connected IPv4 UDP flows and defines the bounded connected IPv4 TCP stream surface that the WireGuard-owned lwIP adapter will enable.
+A client opens a logical flow for one remote IPv4 endpoint, submits transport-specific payloads, and receives matching payload completions with their remote source endpoint.
+The WireGuard sysmodule selects the active peer, owns virtual local endpoints, constructs and parses inner IP packets, and retains all tunnel-facing flow mappings.
 The current implementation performs that work in its bounded UDP flow plane, while the planned fragmentation milestone replaces the manual transport and IP adapter with a WireGuard-owned userspace IP stack behind the same client-facing ownership boundary.
 
-The contract does not expose arbitrary raw inner IPv4 packets, unconnected UDP `sendto` behavior, TCP, listeners, DNS, socket options, or general native L3 routing.
+The contract does not expose arbitrary raw inner IPv4 packets, unconnected UDP `sendto` behavior, TCP listeners, DNS, socket options, or general native L3 routing.
 The existing `wgnx:ctl` raw packet API remains a diagnostic and protocol-validation boundary with its existing API version and semantics.
 It is not the ordinary client transport API.
 
@@ -44,7 +44,7 @@ TCP must introduce stream-specific operations and lifecycle semantics rather tha
 ## Service And Versioning
 
 The service name is `wgnx:tun`.
-Its current contract version is `TunApiVersion = 3` and is independent from the existing `wgnx:ctl` development API version.
+Its current contract version is `TunApiVersion = 4` and is independent from the existing `wgnx:ctl` development API version.
 An incompatible change to command shapes, result semantics, handle lifetime, or delivery behavior increments `TunApiVersion`.
 Additive optional behavior may be introduced only when its absence is observable through an explicit capability or version query.
 
@@ -52,13 +52,15 @@ The first command set is conceptually:
 
 | Operation                  | Purpose                                                                                                      |
 |----------------------------|--------------------------------------------------------------------------------------------------------------|
-| `GetTunApiVersion`         | Returns the private flow API version and supported capability bits.                                          |
+| `GetCapabilities`         | Returns the private flow API version, transport availability, and consumer-actionable limits.                |
 | `OpenTunnelClient`         | Creates a logical client context and returns its private object interface.                                   |
 | `GetRoutingPolicySnapshot` | Returns a read-only, generation-tagged view of effective active `AllowedIPs` routes for a client context.    |
 | `GetCompletionEvent`       | Returns the one manual-clear readiness event owned by a client context.                                      |
 | `OpenConnectedUdpFlow`     | Atomically selects a peer for a remote IPv4 UDP endpoint and allocates an opaque flow in the client context. |
-| `SendUdpDatagram`          | Queues one validated UDP payload for a live flow as a convenience operation.                                 |
-| `SendUdpDatagramBatch`     | Submits a bounded descriptor array and payload buffer with a disposition for every entry.                    |
+| `SendUdpDatagramBatch`     | Submits a bounded UDP payload-range array and payload buffer with a result for every entry.                  |
+| `OpenConnectedTcpFlow`     | Reserves a connected IPv4 TCP flow that becomes `Open` only after asynchronous connection success.           |
+| `WriteTcpStream`           | Admits one bounded TCP stream chunk and reports the accepted byte count.                                     |
+| `ShutdownTcpWrite`         | Idempotently queues the TCP local-write half-close after accepted stream data.                                |
 | `ReceiveCompletions`       | Drains bounded datagram, flow-state, policy, and writable-transition records for the client context.         |
 | `GetFlowState`             | Returns lifecycle, peer-activation, route, and bounded diagnostic state.                                     |
 | `CloseFlow`                | Idempotently closes a client flow and releases its resources.                                                |
@@ -67,15 +69,15 @@ Command IDs, exact CMIF buffer attributes, result codes, and fixed capacity valu
 They must not be inferred by clients from struct layout or service implementation details.
 The version response must advertise effective inner MTU, maximum payload size, flow and queue limits, batch limits, supported completion types, and optional capabilities so clients do not infer resource limits.
 
-### Version 3 ABI Record
+### Version 4 ABI Record
 
-The version 3 declarations live in `common/include/wgnx/tunnel_protocol.hpp`.
+The version 4 declarations live in `common/include/wgnx/tunnel_protocol.hpp`.
 They are intentionally separate from `wgnx/protocol.hpp` so the raw diagnostic API remains unchanged.
 `wgnx:tun` is registered with the bounded flow data plane supplied by implementation step 3.
 Clients must validate `Capabilities.api_version` and the advertised limits before opening flows.
-Version 3 preserves every prior command ID and wire record layout.
-It adds the `LeakProtection` capability and `TunnelBlockedByPolicy` result so a client can distinguish an optional direct pass-through decision from a selected route that policy requires it to block.
-Version 2 changed completion-event delivery during orderly sysmodule shutdown, so a version 1 client cannot assume every event wake has a drainable completion record.
+Version 4 intentionally replaces the version 3 command IDs and wire record layouts without compatibility aliases.
+It retains `TunnelBlockedByPolicy` as an immediate route result while capability bits now represent only independently available transports.
+Every version 4 client receives completion events, routing snapshots, lifecycle queries, leak protection, and UDP batching as mandatory contract behavior.
 
 All scalar IPC fields use the Switch little-endian ABI.
 IPv4 addresses are four network-order octets.
@@ -84,7 +86,7 @@ Every request and response structure is trivially copyable and has compile-time 
 
 | Root command ID | Operation          | Input | Output                                 |
 |----------------:|--------------------|-------|----------------------------------------|
-|               0 | `GetTunApiVersion` | None  | `Capabilities` with `api_version = 3`. |
+|               0 | `GetCapabilities` | None  | `Capabilities` with `api_version = 4`. |
 |               1 | `OpenTunnelClient` | None  | A shared `ITunnelClient` CMIF object.  |
 
 | Client command ID | Operation                  | Input                                                                              | Output                                                                 |
@@ -92,15 +94,17 @@ Every request and response structure is trivially copyable and has compile-time 
 |                 0 | `GetCapabilities`          | None                                                                               | `Capabilities`.                                                        |
 |                 1 | `GetRoutingPolicySnapshot` | An output `RouteRecord` map-alias array.                                           | `RoutingPolicySnapshot` and copied route count.                        |
 |                 2 | `GetCompletionEvent`       | None.                                                                              | One copy handle for the context-owned manual-clear event.              |
-|                 3 | `OpenConnectedUdpFlow`     | `OpenConnectedUdpFlowRequest`.                                                     | `OpenConnectedUdpFlowResult`.                                          |
-|                 4 | `SendUdpDatagram`          | `DatagramDescriptor` and one input map-alias payload buffer.                       | One `DatagramDisposition`.                                             |
-|                 5 | `SendUdpDatagramBatch`     | Input `DatagramDescriptor` map-alias array and one input map-alias payload buffer. | One output `DatagramDisposition` map-alias array entry per descriptor. |
-|                 6 | `ReceiveCompletions`       | Output `CompletionRecord` map-alias array and one output map-alias payload buffer. | Copied completion count and `ProtocolStatus`.                          |
-|                 7 | `GetFlowState`             | `FlowHandle`.                                                                      | `FlowStateResult`.                                                     |
-|                 8 | `CloseFlow`                | `FlowHandle`.                                                                      | `ProtocolStatus`.                                                      |
+|                 3 | `OpenConnectedUdpFlow`     | `OpenConnectedFlowRequest`.                                                          | `OpenConnectedFlowResult`.                                               |
+|                 4 | `SendUdpDatagramBatch`     | Input `PayloadRange` array and one input map-alias payload buffer.                  | One `PayloadResult` map-alias entry per range.                           |
+|                 5 | `ReceiveCompletions`       | Output `CompletionRecord` array and one output map-alias payload buffer.            | Copied completion count and `ProtocolStatus`.                            |
+|                 6 | `GetFlowState`             | `FlowHandle`.                                                                         | `FlowStateResult`.                                                       |
+|                 7 | `CloseFlow`                | `FlowHandle`.                                                                         | `ProtocolStatus`.                                                        |
+|                 8 | `OpenConnectedTcpFlow`     | `OpenConnectedFlowRequest`.                                                          | `OpenConnectedFlowResult`.                                               |
+|                 9 | `WriteTcpStream`           | `PayloadRange` and one input map-alias payload buffer.                               | `PayloadResult` with accepted byte count.                                |
+|                10 | `ShutdownTcpWrite`         | `FlowHandle`.                                                                         | `ProtocolStatus`.                                                        |
 
-`DatagramDescriptor.payload_offset` and `DatagramDescriptor.payload_size` identify a complete payload inside the command's payload buffer.
-The command rejects descriptors whose range is outside that buffer and returns an individual `MalformedInput` disposition rather than consuming adjacent bytes.
+`PayloadRange.payload_offset` and `PayloadRange.payload_size` identify a complete payload inside the command's payload buffer.
+The command rejects ranges outside that buffer and returns an individual `MalformedInput` result rather than consuming adjacent bytes.
 `CompletionRecord.payload_offset` and `CompletionRecord.payload_size` use the caller-provided output payload buffer in the same way.
 `ReceiveCompletions` returns only complete datagrams and leaves a datagram queued when the supplied output payload buffer cannot hold it.
 It returns `OutputBufferTooSmall` with no partial record in that case.
@@ -111,18 +115,14 @@ It returns `OutputBufferTooSmall` with no partial record in that case.
 | Flows per client                 |                     4 | A context may not consume all global flow capacity.                                                   |
 | Global flows                     |                    16 | The product of the client and per-client limits.                                                      |
 | Default effective inner MTU      |            1420 bytes | Conventional WireGuard interface MTU for a 1500-byte Ethernet path when `[Interface] MTU` is omitted. |
-| Maximum UDP payload              |            1472 bytes | Measured fixed first-release bound, while the active effective inner MTU determines lwIP fragmentation. |
-| Outbound packet slabs            |                    16 | Global payload ownership for client-to-tunnel packets.                                                |
-| Inbound packet slabs             |                    16 | Global payload ownership for tunnel-to-client packets.                                                |
-| Inbound datagrams per flow       |                     4 | A per-flow quota in addition to global slab capacity.                                                 |
+| Maximum UDP payload              |            1472 bytes | Measured fixed datagram bound, while the active effective inner MTU determines lwIP fragmentation.         |
+| Maximum TCP write                |            1460 bytes | Fixed single-write limit before TCP adapter budgets are measured and enabled.                                 |
 | Completion queue entries         |                    16 | Per-client records with reserved or coalesced lifecycle capacity.                                     |
 | Batch entries                    |                     8 | Maximum descriptors and dispositions in one command.                                                  |
 | Policy route records             |                    16 | Maximum normalized routes returned by one snapshot.                                                   |
-| Kernel handles per client        |                     1 | The readiness event copy handle only.                                                                 |
-| Reverse tuple quarantine records |                    16 | One retained tuple slot per maximum live flow.                                                        |
 
 The fixed limits are deliberately modest for the first measurement path.
-They reserve 32 maximum-payload slab slots across both directions plus 16 reverse-tuple quarantine records before the existing runtime, CMIF object state, and packet headers are counted.
+Internal slab, handle, and tuple-quarantine capacities remain implementation budgets because no in-tree client makes a valid decision from them.
 The current target build gates the flow plane at 80 KiB and the composed daemon at 272 KiB.
 Any fixed resource-capacity change that changes a client-visible `Capabilities` value requires a documented compatibility review and a new API version when a client cannot safely adapt at runtime.
 The active profile MTU is intentionally dynamic and is reported through `Capabilities` after every policy transition.
@@ -195,7 +195,7 @@ This prevents a delayed valid inner packet from being delivered to a newly alloc
 
 ## Datagram Submission And Delivery
 
-`SendUdpDatagram` accepts a `FlowHandle` and one caller-owned payload buffer.
+`SendUdpDatagramBatch` accepts one or more `PayloadRange` records and one caller-owned payload buffer.
 The payload is copied or synchronously consumed before the IPC command returns, and the caller retains no borrowed buffer lifetime obligation afterwards.
 The caller cannot supply an IPv4 source address, UDP source port, peer identity, or preconstructed IP header.
 
@@ -205,11 +205,11 @@ Resource exhaustion, inactive transport, stale flow state, and closed flow state
 When peer-owned outbound staging is full, the direct-flow API rejects the new datagram with `QueueFull`, retains no submitted payload, and emits a coalesced `Writable` completion for each waiting flow whenever a staged packet retires and frees admission capacity.
 This includes both a successful outer UDP submission and a nonterminal outer transport drop.
 This differs intentionally from WireGuard's netdevice boundary, where upstream implementations may evict queued packets, because the separate MITM must own any packet-drop policy and preserve an explicit backpressure signal to its IPC client.
-For v3, the maximum UDP payload is the measured 1472-byte bounded contract maximum.
+For v4, the maximum UDP payload is the measured 1472-byte bounded contract maximum.
 An omitted `[Interface] MTU` resolves to 1420 bytes, and an explicit value must be in the IPv4-safe 576 to 1500-byte range.
 The WireGuard-owned lwIP adapter applies that MTU to each constructed IPv4 packet and fragments it as necessary while preserving one BSD UDP datagram admission and completion.
 The transport writer follows wireguard-go's 16-byte padding calculation for every emitted fragment and never pads a fragment beyond the active effective inner MTU.
-Payloads above 1472 bytes return `DatagramTooLarge`.
+Payloads above 1472 bytes return `PayloadTooLarge`.
 The maximum remains below 65,507 bytes until IPC transfer and target memory measurements justify a larger bounded design.
 
 The receive path parses and validates decrypted inner packets before reverse-flow matching.
@@ -224,13 +224,24 @@ The client completion queue retains inbound slab indices and metadata, while eac
 Admission fails with an explicit disposition when the global slab or a per-flow limit is exhausted.
 This global bound is critical because memory consumption must scale with the configured system-wide packet budget rather than `flow count * queue depth * maximum datagram size`.
 
-`SendUdpDatagramBatch` consumes a fixed-capacity descriptor array plus one map-alias payload buffer and returns one disposition for every submitted descriptor.
+`SendUdpDatagramBatch` consumes a fixed-capacity payload-range array plus one map-alias payload buffer and returns one result for every submitted range.
 It may accept only a prefix or subset when bounded capacity is exhausted, and the response must identify every accepted and rejected entry without requiring payload replay inference.
 For a batch whose descriptors all belong to one connected flow, admission is evaluated in descriptor order under the flow-plane lock.
 Successful dispositions therefore form a prefix, and a `QueueFull` disposition retains that descriptor and its suffix for the adapter to retry without reordering the socket's UDP submissions.
 `ReceiveCompletions` fills a fixed-capacity completion array plus one caller-provided payload buffer and returns as many complete records as fit.
 It never emits a partial datagram.
-The single-datagram send operation remains a convenience wrapper over the same admission path and does not define separate behavior.
+The client header provides a one-range convenience helper over this sole UDP wire command and does not define separate behavior.
+
+## TCP Stream Foundation
+
+`OpenConnectedTcpFlow` uses the same endpoint and diagnostic-tag request layout as UDP, but its command ID selects TCP without a caller-controlled protocol field.
+It returns a valid flow in `Connecting` after reservation and publishes `Open` only from the serialized lwIP connected callback.
+`FlowStateResult` and every flow completion carry `FlowKind`, while stream flags separately identify local and remote write availability.
+`WriteTcpStream` either accepts its complete bounded chunk or reports zero accepted bytes with `QueueFull`, so a client can retain byte order across retries.
+`ShutdownTcpWrite` is idempotent after the local write side closes and does not prevent ordered receive delivery until remote EOF or terminal failure.
+TCP completion types distinguish inbound stream data, state changes, policy changes, and restored write capacity.
+The advertised TCP local endpoint is the WireGuard-owned virtual tuple bound by lwIP and must never be obtained from a native BSD anchor connection.
+The current service advertises only `ConnectedIpv4Udp` until the lwIP TCP adapter is implemented, so TCP open and write return `UnsupportedOperation` rather than simulating a connection.
 
 ## Readiness And Push Delivery
 

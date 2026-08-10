@@ -15,7 +15,7 @@ inline bool ValidateTunnelCompletionDrain(
         return false;
     }
     for (const wgnx::tunnel::CompletionRecord& record : records.first(count)) {
-        if (record.type != wgnx::tunnel::CompletionType::InboundDatagram) {
+        if (record.type != wgnx::tunnel::CompletionType::InboundUdpDatagram) {
             continue;
         }
         const std::size_t offset = record.payload_offset;

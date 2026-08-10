@@ -20,7 +20,7 @@ bool RunTunnelCompletionValidationTests() {
 
     constexpr std::size_t PayloadCapacity = 16;
     std::array<wgnx::tunnel::CompletionRecord, 2> records{};
-    records[0].type = wgnx::tunnel::CompletionType::InboundDatagram;
+    records[0].type = wgnx::tunnel::CompletionType::InboundUdpDatagram;
     records[0].payload_offset = 4;
     records[0].payload_size = 12;
     const bool valid = ValidateTunnelCompletionDrain(1, records.size(), records, PayloadCapacity);

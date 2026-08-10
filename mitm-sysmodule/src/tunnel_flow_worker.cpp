@@ -30,11 +30,7 @@ constexpr std::size_t MaximumQueuedOutboundPayloadBytes = wgnx::tunnel::MaximumU
 static_assert(MaximumQueuedOutboundDatagramsPerSocket <= MaximumQueuedOutboundDatagrams);
 static_assert(MaximumBatchEntriesPerSubmission <= wgnx::tunnel::MaximumBatchEntries);
 static_assert(MaximumQueuedOutboundPayloadBytes != 0);
-constexpr std::uint32_t RequiredTunnelCapabilities = wgnx::tunnel::CapabilityMask(wgnx::tunnel::Capability::ConnectedIpv4Udp) |
-                                                     wgnx::tunnel::CapabilityMask(wgnx::tunnel::Capability::DatagramBatches) |
-                                                     wgnx::tunnel::CapabilityMask(wgnx::tunnel::Capability::RoutingPolicySnapshot) |
-                                                     wgnx::tunnel::CapabilityMask(wgnx::tunnel::Capability::CompletionEvent) |
-                                                     wgnx::tunnel::CapabilityMask(wgnx::tunnel::Capability::LeakProtection);
+constexpr std::uint32_t RequiredTunnelCapabilities = wgnx::tunnel::CapabilityMask(wgnx::tunnel::Capability::ConnectedIpv4Udp);
 
 struct InboundDatagram {
     bool occupied{};
@@ -78,8 +74,8 @@ std::array<FlowEntry, TunnelFlowWorker::MaximumSockets> g_flows{};
 std::array<wgnx::tunnel::CompletionRecord, wgnx::tunnel::MaximumBatchEntries> g_completions{};
 std::array<std::uint8_t, wgnx::tunnel::MaximumBatchEntries * wgnx::tunnel::MaximumUdpPayloadStorageBytes> g_completion_payload{};
 std::array<OutboundDatagram, MaximumQueuedOutboundDatagrams> g_outbound_datagrams{};
-std::array<wgnx::tunnel::DatagramDescriptor, MaximumBatchEntriesPerSubmission> g_batch_descriptors{};
-std::array<wgnx::tunnel::DatagramDisposition, MaximumBatchEntriesPerSubmission> g_batch_dispositions{};
+std::array<wgnx::tunnel::PayloadRange, MaximumBatchEntriesPerSubmission> g_batch_descriptors{};
+std::array<wgnx::tunnel::PayloadResult, MaximumBatchEntriesPerSubmission> g_batch_dispositions{};
 std::array<std::uint8_t, MaximumBatchEntriesPerSubmission * MaximumQueuedOutboundPayloadBytes> g_batch_payload{};
 std::size_t g_outbound_datagram_count{};
 
@@ -356,7 +352,7 @@ void DrainCompletions(FlowEntry& flow, TunnelFlowWorkerMetrics& metrics) {
                 ++metrics.writable_notifications;
                 continue;
             }
-            if (completion.type != wgnx::tunnel::CompletionType::InboundDatagram || !SameEndpoint(completion.remote, flow.remote)) {
+            if (completion.type != wgnx::tunnel::CompletionType::InboundUdpDatagram || !SameEndpoint(completion.remote, flow.remote)) {
                 continue;
             }
             InboundDatagram* datagram = AllocateInbound(flow);
@@ -1002,7 +998,7 @@ bool TunnelFlowWorker::Dispatch(Operation& operation) {
             operation.result = TunnelFlowResult::TunnelUnavailable;
             return true;
         }
-        const wgnx::tunnel::OpenConnectedUdpFlowRequest request{
+        const wgnx::tunnel::OpenConnectedFlowRequest request{
             .remote =
                 {.address =
                      {operation.remote.address[0], operation.remote.address[1], operation.remote.address[2], operation.remote.address[3]},
@@ -1010,7 +1006,7 @@ bool TunnelFlowWorker::Dispatch(Operation& operation) {
                  .reserved = 0},
             .diagnostic_tag = (operation.owner << 16U) ^ static_cast<std::uint32_t>(operation.descriptor),
         };
-        wgnx::tunnel::OpenConnectedUdpFlowResult opened{};
+        wgnx::tunnel::OpenConnectedFlowResult opened{};
         const Result open_rc = wgnx::tunnel::client::OpenConnectedUdpFlow(flow->client, request, std::addressof(opened));
         if (R_FAILED(open_rc)) {
             logger::Log(

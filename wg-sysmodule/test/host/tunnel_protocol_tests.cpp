@@ -20,16 +20,14 @@ void TestTunnelProtocolContract(TestContext& context) {
 
     WGNX_TEST_REQUIRE(
         context,
-        TunApiVersion == 3 && wgnx::tunnel::ServiceName[0] == 'w' && wgnx::tunnel::ServiceName[4] == ':' &&
+        TunApiVersion == 4 && wgnx::tunnel::ServiceName[0] == 'w' && wgnx::tunnel::ServiceName[4] == ':' &&
             wgnx::tunnel::ServiceName[7] == 'n' && wgnx::tunnel::ServiceName[8] == '\0',
         "tunnel root identity changed"
     );
     WGNX_TEST_REQUIRE(
         context,
         MaximumClientContexts == 4 && MaximumFlowsPerClient == 4 && MaximumFlows == 16 && MaximumUdpPayloadStorageBytes == 1472 &&
-            OutboundPacketSlabCount == 16 && InboundPacketSlabCount == 16 && MaximumInboundDatagramsPerFlow == 4 &&
-            CompletionQueueCapacity == 16 && MaximumBatchEntries == 8 && MaximumPolicyRoutes == 16 && KernelHandlesPerClient == 1 &&
-            ReverseTupleQuarantineCapacity == 16,
+            MaximumTcpWriteStorageBytes == 1460 && CompletionQueueCapacity == 16 && MaximumBatchEntries == 8 && MaximumPolicyRoutes == 16,
         "tunnel resource contract changed"
     );
     WGNX_TEST_REQUIRE(
@@ -43,24 +41,24 @@ void TestTunnelProtocolContract(TestContext& context) {
     );
     WGNX_TEST_REQUIRE(
         context,
-        static_cast<std::uint32_t>(RootCommandId::GetTunApiVersion) == 0 &&
+        static_cast<std::uint32_t>(RootCommandId::GetCapabilities) == 0 &&
             static_cast<std::uint32_t>(RootCommandId::OpenTunnelClient) == 1 &&
             static_cast<std::uint32_t>(ClientCommandId::GetCapabilities) == 0 &&
             static_cast<std::uint32_t>(ClientCommandId::GetRoutingPolicySnapshot) == 1 &&
             static_cast<std::uint32_t>(ClientCommandId::GetCompletionEvent) == 2 &&
             static_cast<std::uint32_t>(ClientCommandId::OpenConnectedUdpFlow) == 3 &&
-            static_cast<std::uint32_t>(ClientCommandId::SendUdpDatagram) == 4 &&
-            static_cast<std::uint32_t>(ClientCommandId::SendUdpDatagramBatch) == 5 &&
-            static_cast<std::uint32_t>(ClientCommandId::ReceiveCompletions) == 6 &&
-            static_cast<std::uint32_t>(ClientCommandId::GetFlowState) == 7 && static_cast<std::uint32_t>(ClientCommandId::CloseFlow) == 8,
+            static_cast<std::uint32_t>(ClientCommandId::SendUdpDatagramBatch) == 4 &&
+            static_cast<std::uint32_t>(ClientCommandId::ReceiveCompletions) == 5 &&
+            static_cast<std::uint32_t>(ClientCommandId::GetFlowState) == 6 && static_cast<std::uint32_t>(ClientCommandId::CloseFlow) == 7 &&
+            static_cast<std::uint32_t>(ClientCommandId::OpenConnectedTcpFlow) == 8 &&
+            static_cast<std::uint32_t>(ClientCommandId::WriteTcpStream) == 9 &&
+            static_cast<std::uint32_t>(ClientCommandId::ShutdownTcpWrite) == 10,
         "tunnel command identifiers changed"
     );
     WGNX_TEST_REQUIRE(
         context,
-        SupportedCapabilityMask == 0x3FU && CapabilityMask(Capability::ConnectedIpv4Udp) == 0x01U &&
-            CapabilityMask(Capability::DatagramBatches) == 0x02U && CapabilityMask(Capability::CompletionEvent) == 0x04U &&
-            CapabilityMask(Capability::RoutingPolicySnapshot) == 0x08U && CapabilityMask(Capability::FlowStateQuery) == 0x10U &&
-            CapabilityMask(Capability::LeakProtection) == 0x20U,
+        SupportedCapabilityMask == 0x01U && CapabilityMask(Capability::ConnectedIpv4Udp) == 0x01U &&
+            CapabilityMask(Capability::ConnectedIpv4Tcp) == 0x02U,
         "tunnel capability bits changed"
     );
     WGNX_TEST_REQUIRE(
@@ -72,17 +70,20 @@ void TestTunnelProtocolContract(TestContext& context) {
             static_cast<std::uint32_t>(ProtocolStatus::PeerUnavailable) == 5 &&
             static_cast<std::uint32_t>(ProtocolStatus::TransportUnavailable) == 6 &&
             static_cast<std::uint32_t>(ProtocolStatus::FlowQuotaExhausted) == 7 &&
-            static_cast<std::uint32_t>(ProtocolStatus::DatagramTooLarge) == 8 &&
+            static_cast<std::uint32_t>(ProtocolStatus::PayloadTooLarge) == 8 &&
             static_cast<std::uint32_t>(ProtocolStatus::QueueFull) == 9 && static_cast<std::uint32_t>(ProtocolStatus::StaleHandle) == 10 &&
             static_cast<std::uint32_t>(ProtocolStatus::FlowClosed) == 11 && static_cast<std::uint32_t>(ProtocolStatus::QueueEmpty) == 12 &&
             static_cast<std::uint32_t>(ProtocolStatus::OutputBufferTooSmall) == 13 &&
             static_cast<std::uint32_t>(ProtocolStatus::ReverseTupleExhausted) == 14 &&
-            static_cast<std::uint32_t>(ProtocolStatus::TunnelBlockedByPolicy) == 15,
+            static_cast<std::uint32_t>(ProtocolStatus::TunnelBlockedByPolicy) == 15 &&
+            static_cast<std::uint32_t>(ProtocolStatus::WrongFlowKind) == 16 &&
+            static_cast<std::uint32_t>(ProtocolStatus::NotConnected) == 17 &&
+            static_cast<std::uint32_t>(ProtocolStatus::LocalWriteClosed) == 18,
         "tunnel protocol statuses changed"
     );
     WGNX_TEST_REQUIRE(
         context,
-        static_cast<std::uint32_t>(FlowState::Open) == 0 && static_cast<std::uint32_t>(FlowState::Suspended) == 1 &&
+        static_cast<std::uint32_t>(FlowState::Connecting) == 0 && static_cast<std::uint32_t>(FlowState::Open) == 1 &&
             static_cast<std::uint32_t>(FlowState::Closing) == 2 && static_cast<std::uint32_t>(FlowState::Closed) == 3 &&
             static_cast<std::uint32_t>(FlowTerminalReason::None) == 0 &&
             static_cast<std::uint32_t>(FlowTerminalReason::ClientClosed) == 1 &&
@@ -94,49 +95,50 @@ void TestTunnelProtocolContract(TestContext& context) {
     );
     WGNX_TEST_REQUIRE(
         context,
-        static_cast<std::uint32_t>(CompletionType::InboundDatagram) == 0 &&
-            static_cast<std::uint32_t>(CompletionType::FlowStateChanged) == 1 &&
-            static_cast<std::uint32_t>(CompletionType::PolicyChanged) == 2 && static_cast<std::uint32_t>(CompletionType::Writable) == 3,
+        static_cast<std::uint32_t>(CompletionType::InboundUdpDatagram) == 0 &&
+            static_cast<std::uint32_t>(CompletionType::InboundTcpStream) == 1 &&
+            static_cast<std::uint32_t>(CompletionType::FlowStateChanged) == 2 &&
+            static_cast<std::uint32_t>(CompletionType::PolicyChanged) == 3 && static_cast<std::uint32_t>(CompletionType::Writable) == 4,
         "tunnel completion categories changed"
     );
     WGNX_TEST_REQUIRE(
         context,
-        sizeof(FlowHandle) == 8 && sizeof(Ipv4Endpoint) == 8 && sizeof(Capabilities) == 64 && sizeof(OpenConnectedUdpFlowRequest) == 16 &&
-            sizeof(OpenConnectedUdpFlowResult) == 24 && sizeof(DatagramDescriptor) == 24 && sizeof(DatagramDisposition) == 16 &&
-            sizeof(CompletionRecord) == 48 && sizeof(CompletionDrainResult) == 8 && sizeof(FlowStateResult) == 40 &&
+        sizeof(FlowHandle) == 8 && sizeof(Ipv4Endpoint) == 8 && sizeof(Capabilities) == 48 && sizeof(OpenConnectedFlowRequest) == 16 &&
+            sizeof(OpenConnectedFlowResult) == 24 && sizeof(PayloadRange) == 24 && sizeof(PayloadResult) == 16 &&
+            sizeof(CompletionRecord) == 56 && sizeof(CompletionDrainResult) == 8 && sizeof(FlowStateResult) == 48 &&
             sizeof(RoutingPolicySnapshot) == 8 && sizeof(RouteRecord) == 32,
         "tunnel binary record layout changed"
     );
 
     std::array<std::uint8_t, MaximumUdpPayloadStorageBytes + 1> payload{};
-    const std::array<DatagramDescriptor, 5> descriptors = {
-        DatagramDescriptor{.flow = {.value = 1}, .payload_offset = 0, .payload_size = 8, .client_tag = 1},
-        DatagramDescriptor{
+    const std::array<PayloadRange, 5> descriptors = {
+        PayloadRange{.flow = {.value = 1}, .payload_offset = 0, .payload_size = 8, .client_tag = 1},
+        PayloadRange{
             .flow = {.value = 1},
             .payload_offset = static_cast<std::uint32_t>(payload.size()),
             .payload_size = 1,
             .client_tag = 2
         },
-        DatagramDescriptor{
+        PayloadRange{
             .flow = {.value = 1},
             .payload_offset = 0,
             .payload_size = static_cast<std::uint32_t>(payload.size()),
             .client_tag = 3
         },
-        DatagramDescriptor{.flow = {.value = 2}, .payload_offset = 0, .payload_size = 8, .client_tag = 4},
-        DatagramDescriptor{.flow = {.value = 3}, .payload_offset = 0, .payload_size = 8, .client_tag = 5},
+        PayloadRange{.flow = {.value = 2}, .payload_offset = 0, .payload_size = 8, .client_tag = 4},
+        PayloadRange{.flow = {.value = 3}, .payload_offset = 0, .payload_size = 8, .client_tag = 5},
     };
-    std::array<DatagramDisposition, descriptors.size()> dispositions{};
+    std::array<PayloadResult, descriptors.size()> dispositions{};
     std::uint32_t send_count = 0;
     DispatchUdpDatagramBatch(
         descriptors,
         payload,
         dispositions,
-        [&send_count](const DatagramDescriptor& descriptor, std::span<const std::uint8_t>) {
+        [&send_count](const PayloadRange& descriptor, std::span<const std::uint8_t>) {
             ++send_count;
             switch (descriptor.flow.value) {
             case 1:
-                return descriptor.payload_size > MaximumUdpPayloadStorageBytes ? ProtocolStatus::DatagramTooLarge : ProtocolStatus::Success;
+                return descriptor.payload_size > MaximumUdpPayloadStorageBytes ? ProtocolStatus::PayloadTooLarge : ProtocolStatus::Success;
             case 2:
                 return ProtocolStatus::StaleHandle;
             case 3:
@@ -150,25 +152,25 @@ void TestTunnelProtocolContract(TestContext& context) {
         context,
         dispositions[0].client_tag == 1 && dispositions[0].status == ProtocolStatus::Success && dispositions[1].client_tag == 2 &&
             dispositions[1].status == ProtocolStatus::MalformedInput && dispositions[2].client_tag == 3 &&
-            dispositions[2].status == ProtocolStatus::DatagramTooLarge && dispositions[3].client_tag == 4 &&
+            dispositions[2].status == ProtocolStatus::PayloadTooLarge && dispositions[3].client_tag == 4 &&
             dispositions[3].status == ProtocolStatus::StaleHandle && dispositions[4].client_tag == 5 &&
             dispositions[4].status == ProtocolStatus::QueueFull && send_count == 4,
         "batch dispatch did not preserve ordered partial dispositions"
     );
 
-    const std::array<DatagramDescriptor, 4> ordered_descriptors = {
-        DatagramDescriptor{.flow = {.value = 9}, .payload_offset = 0, .payload_size = 8, .client_tag = 6},
-        DatagramDescriptor{.flow = {.value = 9}, .payload_offset = 8, .payload_size = 8, .client_tag = 7},
-        DatagramDescriptor{.flow = {.value = 9}, .payload_offset = 16, .payload_size = 8, .client_tag = 8},
-        DatagramDescriptor{.flow = {.value = 9}, .payload_offset = 24, .payload_size = 8, .client_tag = 9},
+    const std::array<PayloadRange, 4> ordered_descriptors = {
+        PayloadRange{.flow = {.value = 9}, .payload_offset = 0, .payload_size = 8, .client_tag = 6},
+        PayloadRange{.flow = {.value = 9}, .payload_offset = 8, .payload_size = 8, .client_tag = 7},
+        PayloadRange{.flow = {.value = 9}, .payload_offset = 16, .payload_size = 8, .client_tag = 8},
+        PayloadRange{.flow = {.value = 9}, .payload_offset = 24, .payload_size = 8, .client_tag = 9},
     };
-    std::array<DatagramDisposition, ordered_descriptors.size()> ordered_dispositions{};
+    std::array<PayloadResult, ordered_descriptors.size()> ordered_dispositions{};
     std::uint32_t remaining_admissions = 2;
     DispatchUdpDatagramBatch(
         ordered_descriptors,
         payload,
         ordered_dispositions,
-        [&remaining_admissions](const DatagramDescriptor&, std::span<const std::uint8_t>) {
+        [&remaining_admissions](const PayloadRange&, std::span<const std::uint8_t>) {
             if (remaining_admissions != 0) {
                 --remaining_admissions;
                 return ProtocolStatus::Success;

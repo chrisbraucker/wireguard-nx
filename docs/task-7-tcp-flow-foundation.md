@@ -117,7 +117,7 @@ Advertise connected IPv4 UDP and connected IPv4 TCP independently.
 
   The resulting version 4 contract direction is recorded above and will replace rather than preserve the version 3 surface.
 
-- [ ] **2. Replace the private protocol and client wrappers atomically.**
+- [x] **2. Replace the private protocol and client wrappers atomically.**
 
   Increment `TunApiVersion` from 3 to 4 and rewrite `tunnel_protocol.hpp`, `tunnel_client.hpp`, the CMIF interfaces, and the shared batch helper in one cutover.
   Use shared open, payload-range, payload-result, flow-state, and endpoint records only where their semantics are transport-neutral.
@@ -125,12 +125,18 @@ Advertise connected IPv4 UDP and connected IPv4 TCP independently.
   Renumber commands compactly if that produces a clearer version 4 surface.
   Update all layout assertions and reject wrong-kind operations deterministically.
 
-- [ ] **3. Update every existing producer, consumer, test, and document to version 4 before adding TCP behavior.**
+  Version 4 now uses shared `OpenConnectedFlowRequest`, `OpenConnectedFlowResult`, `PayloadRange`, and `PayloadResult` records.
+  The client retains a one-range UDP helper over the batch wire command, while the service exposes separate TCP open, write, and write-shutdown commands for the adapter implementation.
+
+- [x] **3. Update every existing producer, consumer, test, and document to version 4 before adding TCP behavior.**
 
   Migrate the WireGuard service, UDP flow plane, MITM UDP worker, Toolbox UDP workload, contract-validation scenario, API-version logging, host tests, and documentation together.
   Preserve UDP route selection, datagram atomicity, batching, queue-full recovery, completion-event behavior, clone lifetime, shutdown wake, terminal invalidation, and measured capability limits.
   Do not keep version 3 structures, command handlers, branches, aliases, or compatibility tests.
   Require the complete existing UDP host and target verification gate to pass after the cutover.
+
+  The WireGuard service, runtime, MITM UDP worker, Toolbox UDP scenario, contract tests, protocol specification, and integration plan now consume only version 4 layouts and command IDs.
+  UDP behavior remains unchanged, and TCP commands return `UnsupportedOperation` until the WireGuard-owned lwIP implementation lands.
 
 ### Direct Toolbox TCP Client
 

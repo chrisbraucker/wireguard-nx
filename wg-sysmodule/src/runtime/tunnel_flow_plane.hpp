@@ -68,7 +68,7 @@ struct TunnelCompletionDrainOutcome {
 };
 
 struct TunnelFlowReservation {
-    wgnx::tunnel::OpenConnectedUdpFlowResult result{
+    wgnx::tunnel::OpenConnectedFlowResult result{
         .status = wgnx::tunnel::ProtocolStatus::MalformedInput,
         .flow = {},
         .peer_activation_generation = 0,
@@ -99,9 +99,9 @@ class TunnelFlowPlane {
     [[nodiscard]] wgnx::tunnel::Capabilities GetCapabilities() const;
     [[nodiscard]] wgnx::tunnel::RoutingPolicySnapshot CopyRoutingPolicy(std::span<wgnx::tunnel::RouteRecord> out) const;
 
-    [[nodiscard]] wgnx::tunnel::OpenConnectedUdpFlowResult OpenConnectedUdpFlow(
+    [[nodiscard]] wgnx::tunnel::OpenConnectedFlowResult OpenConnectedUdpFlow(
         TunnelClientId client,
-        const wgnx::tunnel::OpenConnectedUdpFlowRequest& request,
+        const wgnx::tunnel::OpenConnectedFlowRequest& request,
         wgnx::platform::ktime_t now,
         TunnelTransportAvailability availability = {
             .protocol_available = true,
@@ -110,7 +110,7 @@ class TunnelFlowPlane {
     );
     [[nodiscard]] TunnelFlowReservation ReserveConnectedUdpFlow(
         TunnelClientId client,
-        const wgnx::tunnel::OpenConnectedUdpFlowRequest& request,
+        const wgnx::tunnel::OpenConnectedFlowRequest& request,
         wgnx::platform::ktime_t now,
         TunnelTransportAvailability availability
     );
@@ -120,7 +120,7 @@ class TunnelFlowPlane {
     [[nodiscard]] std::uint32_t CopyClientAdapterTokens(TunnelClientId client, std::span<std::uint64_t> out) const;
     [[nodiscard]] PreparedTunnelDatagram PrepareSend(
         TunnelClientId client,
-        const wgnx::tunnel::DatagramDescriptor& descriptor,
+        const wgnx::tunnel::PayloadRange& descriptor,
         std::span<const std::uint8_t> payload,
         TunnelTransportAvailability availability,
         wgnx::platform::ktime_t now
