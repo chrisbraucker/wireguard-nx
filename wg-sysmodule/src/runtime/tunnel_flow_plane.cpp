@@ -135,7 +135,7 @@ wgnx::tunnel::Capabilities TunnelFlowPlane::GetCapabilities() const {
         .api_version = wgnx::tunnel::TunApiVersion,
         .capability_mask = wgnx::tunnel::SupportedCapabilityMask,
         .effective_inner_mtu = m_effective_inner_mtu,
-        .maximum_udp_payload_bytes = static_cast<std::uint32_t>(wgnx::tunnel::MaximumUdpPayloadForInnerMtu(m_effective_inner_mtu)),
+        .maximum_udp_payload_bytes = static_cast<std::uint32_t>(wgnx::tunnel::MaximumUdpPayloadStorageBytes),
         .maximum_client_contexts = wgnx::tunnel::MaximumClientContexts,
         .maximum_flows_per_client = wgnx::tunnel::MaximumFlowsPerClient,
         .maximum_flows = wgnx::tunnel::MaximumFlows,
@@ -376,7 +376,7 @@ PreparedTunnelDatagram TunnelFlowPlane::PrepareSend(
         outcome.status = wgnx::tunnel::ProtocolStatus::MalformedInput;
         return outcome;
     }
-    if (payload.size() > wgnx::tunnel::MaximumUdpPayloadForInnerMtu(m_effective_inner_mtu)) {
+    if (payload.size() > wgnx::tunnel::MaximumUdpPayloadStorageBytes) {
         outcome.status = wgnx::tunnel::ProtocolStatus::DatagramTooLarge;
         return outcome;
     }

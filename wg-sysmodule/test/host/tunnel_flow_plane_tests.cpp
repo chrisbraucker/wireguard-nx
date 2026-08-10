@@ -51,53 +51,57 @@ void TestTunnelFlowPlane(TestContext& context) {
     };
     const auto mtu_flow = mtu_plane.OpenConnectedUdpFlow(mtu_client, mtu_open, 91);
     std::array<std::uint8_t, 1392> default_mtu_payload{};
-    std::array<std::uint8_t, 1393> oversized_default_mtu_payload{};
+    std::array<std::uint8_t, MaximumUdpPayloadStorageBytes> fragmented_payload{};
+    std::array<std::uint8_t, MaximumUdpPayloadStorageBytes + 1> oversized_payload{};
     const DatagramDescriptor default_mtu_descriptor{
         .flow = mtu_flow.flow,
         .payload_offset = 0,
         .payload_size = static_cast<std::uint32_t>(default_mtu_payload.size()),
         .client_tag = 0xD001,
     };
-    const DatagramDescriptor oversized_default_mtu_descriptor{
+    const DatagramDescriptor fragmented_descriptor{
         .flow = mtu_flow.flow,
         .payload_offset = 0,
-        .payload_size = static_cast<std::uint32_t>(oversized_default_mtu_payload.size()),
+        .payload_size = static_cast<std::uint32_t>(fragmented_payload.size()),
         .client_tag = 0xD002,
     };
+    const DatagramDescriptor oversized_descriptor{
+        .flow = mtu_flow.flow,
+        .payload_offset = 0,
+        .payload_size = static_cast<std::uint32_t>(oversized_payload.size()),
+        .client_tag = 0xD005,
+    };
     const auto default_mtu_send = mtu_plane.PrepareSend(mtu_client, default_mtu_descriptor, default_mtu_payload, TransportReady, 92);
-    const auto oversized_default_mtu_send =
-        mtu_plane.PrepareSend(mtu_client, oversized_default_mtu_descriptor, oversized_default_mtu_payload, TransportReady, 93);
+    const auto fragmented_default_mtu_send =
+        mtu_plane.PrepareSend(mtu_client, fragmented_descriptor, fragmented_payload, TransportReady, 93);
 
     config.mtu = 1280;
     mtu_plane.RefreshPolicy({.configuration = &config, .peer = first_peer, .selected = true}, 94);
     const auto configured_mtu_capabilities = mtu_plane.GetCapabilities();
     std::array<std::uint8_t, 1252> configured_mtu_payload{};
-    std::array<std::uint8_t, 1253> oversized_configured_mtu_payload{};
     const DatagramDescriptor configured_mtu_descriptor{
         .flow = mtu_flow.flow,
         .payload_offset = 0,
         .payload_size = static_cast<std::uint32_t>(configured_mtu_payload.size()),
         .client_tag = 0xD003,
     };
-    const DatagramDescriptor oversized_configured_mtu_descriptor{
-        .flow = mtu_flow.flow,
-        .payload_offset = 0,
-        .payload_size = static_cast<std::uint32_t>(oversized_configured_mtu_payload.size()),
-        .client_tag = 0xD004,
-    };
     const auto configured_mtu_send =
         mtu_plane.PrepareSend(mtu_client, configured_mtu_descriptor, configured_mtu_payload, TransportReady, 95);
-    const auto oversized_configured_mtu_send =
-        mtu_plane.PrepareSend(mtu_client, oversized_configured_mtu_descriptor, oversized_configured_mtu_payload, TransportReady, 96);
+    const auto fragmented_configured_mtu_send =
+        mtu_plane.PrepareSend(mtu_client, fragmented_descriptor, fragmented_payload, TransportReady, 96);
+    const auto oversized_send = mtu_plane.PrepareSend(mtu_client, oversized_descriptor, oversized_payload, TransportReady, 97);
     WGNX_TEST_REQUIRE(
         context,
         mtu_flow.status == ProtocolStatus::Success && default_mtu_capabilities.effective_inner_mtu == 1420 &&
-            default_mtu_capabilities.maximum_udp_payload_bytes == 1392 && default_mtu_send.status == ProtocolStatus::Success &&
-            default_mtu_send.IsPrepared() && oversized_default_mtu_send.status == ProtocolStatus::DatagramTooLarge &&
-            configured_mtu_capabilities.effective_inner_mtu == 1280 && configured_mtu_capabilities.maximum_udp_payload_bytes == 1252 &&
+            default_mtu_capabilities.maximum_udp_payload_bytes == MaximumUdpPayloadStorageBytes &&
+            default_mtu_send.status == ProtocolStatus::Success && default_mtu_send.IsPrepared() &&
+            fragmented_default_mtu_send.status == ProtocolStatus::Success && fragmented_default_mtu_send.IsPrepared() &&
+            configured_mtu_capabilities.effective_inner_mtu == 1280 &&
+            configured_mtu_capabilities.maximum_udp_payload_bytes == MaximumUdpPayloadStorageBytes &&
             configured_mtu_send.status == ProtocolStatus::Success && configured_mtu_send.IsPrepared() &&
-            oversized_configured_mtu_send.status == ProtocolStatus::DatagramTooLarge,
-        "flow plane did not enforce the effective inner MTU at default and configured boundaries"
+            fragmented_configured_mtu_send.status == ProtocolStatus::Success && fragmented_configured_mtu_send.IsPrepared() &&
+            oversized_send.status == ProtocolStatus::DatagramTooLarge,
+        "flow plane did not retain the fixed datagram bound independently of the effective inner MTU"
     );
     config.mtu = 1420;
 
