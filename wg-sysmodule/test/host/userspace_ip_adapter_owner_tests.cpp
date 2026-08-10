@@ -79,6 +79,30 @@ void TestUserspaceIpAdapterOwner(TestContext& context) {
             close_result == sysmodule::ip::UserspaceIpResult::Success,
         "adapter owner did not serialize bounded PCB operations or collect every fragmented UDP output"
     );
+    sysmodule::runtime::UserspaceIpAdapterOwner::OperationTicket reopened_ticket{};
+    sysmodule::runtime::UserspaceIpAdapterOwner::OperationTicket deferred_send_ticket{};
+    const bool reopened =
+        owner.QueueOpenFlowLocked(flow, &reopened_ticket) == sysmodule::runtime::UserspaceIpAdapterOwner::QueueResult::Queued;
+    RunOwner(owner);
+    const auto reopened_result = owner.TakeResultLocked(reopened_ticket);
+    const bool deferred_send = owner.QueueSendDatagramLocked(flow.token, payload, &deferred_send_ticket) ==
+                               sysmodule::runtime::UserspaceIpAdapterOwner::QueueResult::Queued;
+    const bool control_close_queued = owner.QueueControlCloseFlowLocked(flow.token);
+    const auto control_close = owner.TakeNextLocked();
+    const bool control_close_preempted = control_close.has_value() &&
+                                         control_close->kind == sysmodule::runtime::UserspaceIpAdapterOwner::OperationKind::CloseFlow &&
+                                         control_close->flow.token == flow.token && !control_close->ticket.IsValid();
+    if (control_close) {
+        owner.CompleteLocked(*control_close, owner.Execute(*control_close));
+    }
+    RunOwner(owner);
+    const auto deferred_send_result = owner.TakeResultLocked(deferred_send_ticket);
+    WGNX_TEST_REQUIRE(
+        context,
+        reopened && reopened_result == sysmodule::ip::UserspaceIpResult::Success && deferred_send && control_close_queued &&
+            control_close_preempted && deferred_send_result == sysmodule::ip::UserspaceIpResult::InvalidArgument,
+        "adapter owner did not reserve serialized control closure ahead of a pending data operation"
+    );
     constexpr std::array<std::uint8_t, 20> InputPacket = {
         0x45, 0x00, 0x00, 0x14, 0x00, 0x01, 0x00, 0x00, 0x40, 0x11, 0x66, 0xD6, 0x0A, 0xFB, 0x00, 0x02, 0x0A, 0x0D, 0x0D, 0x08,
     };

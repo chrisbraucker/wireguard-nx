@@ -898,6 +898,20 @@ bool TunnelFlowPlane::MarkTcpWritable(std::uint64_t adapter_token) {
     return false;
 }
 
+std::uint32_t TunnelFlowPlane::ExpireTcpConnectingFlows(wgnx::platform::ktime_t now, std::span<std::uint64_t> adapter_tokens) {
+    std::uint32_t expired = 0;
+    for (std::size_t index = 0; index < m_flows.size() && expired < adapter_tokens.size(); ++index) {
+        FlowSlot& flow = m_flows[index];
+        if (!flow.allocated || flow.closed || flow.pending || flow.kind != wgnx::tunnel::FlowKind::Tcp ||
+            flow.state != wgnx::tunnel::FlowState::Connecting || now < flow.created_at || now - flow.created_at < TcpConnectTimeoutNs) {
+            continue;
+        }
+        adapter_tokens[expired++] = MakeFlowHandle(index, flow).value;
+        CloseFlowSlot(index, wgnx::tunnel::FlowTerminalReason::ConnectTimedOut, now, true);
+    }
+    return expired;
+}
+
 void TunnelFlowPlane::InvalidatePeerActivation(
     const PeerIdentity& peer, wgnx::tunnel::FlowTerminalReason reason, wgnx::platform::ktime_t now
 ) {

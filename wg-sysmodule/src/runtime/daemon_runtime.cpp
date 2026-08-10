@@ -429,6 +429,12 @@ void DaemonRuntime::UserspaceIpAdapterWorkCallback(wgnx::platform::work_struct* 
             } else if (operation->kind == runtime::UserspaceIpAdapterOwner::OperationKind::RunTimeouts &&
                        result == ip::UserspaceIpResult::Success) {
                 s_instance->DeliverUserspaceTcpCallbacksLocked(*operation);
+                std::array<std::uint64_t, wgnx::tunnel::MaximumFlows> expired_tcp_tokens{};
+                const std::uint32_t expired_tcp_count =
+                    s_instance->m_tunnel_flow_plane.ExpireTcpConnectingFlows(GetRuntimeNowNs(), expired_tcp_tokens);
+                for (std::uint32_t index = 0; index < expired_tcp_count; ++index) {
+                    AMS_ABORT_UNLESS(s_instance->m_userspace_ip_adapter_owner.QueueControlCloseFlowLocked(expired_tcp_tokens[index]));
+                }
                 s_instance->PublishUserspaceTcpOutputLocked(effects);
             } else if ((operation->kind == runtime::UserspaceIpAdapterOwner::OperationKind::WriteTcpStream ||
                         operation->kind == runtime::UserspaceIpAdapterOwner::OperationKind::ShutdownTcpWrite) &&
@@ -577,12 +583,13 @@ void DaemonRuntime::PublishUserspaceTcpOutputLocked(runtime::EffectBatch& effect
         runtime::SynchronousPacketView{std::span<const std::uint8_t>{}},
     };
     runtime::TunnelTcpOutputRoute route{};
+    std::size_t packet_count = 0;
     for (std::size_t index = 0; index < packets.size(); ++index) {
         const auto packet = std::span<const std::uint8_t>(packets[index].bytes).first(packets[index].size);
         wgnx::wireguard::InnerIpv4TcpTuple tuple{};
         if (!wgnx::wireguard::ParseInnerIpv4TcpTuple(packet, &tuple)) {
             logger::LogPacket("Dropped lwip TCP output reason=malformed_tuple");
-            return;
+            continue;
         }
         wgnx::tunnel::Ipv4Endpoint local{.port = tuple.source_port};
         wgnx::tunnel::Ipv4Endpoint remote{.port = tuple.destination_port};
@@ -591,14 +598,17 @@ void DaemonRuntime::PublishUserspaceTcpOutputLocked(runtime::EffectBatch& effect
         const runtime::TunnelTcpOutputRoute resolved = m_tunnel_flow_plane.ResolveTcpOutput(local, remote);
         if (!resolved.IsResolved() || (route.IsResolved() && route.peer != resolved.peer)) {
             logger::LogPacket("Dropped lwip TCP output reason=unowned_tuple");
-            return;
+            continue;
         }
         route = resolved;
-        packet_views[index] = runtime::SynchronousPacketView{packet};
+        packet_views[packet_count++] = runtime::SynchronousPacketView{packet};
+    }
+    if (packet_count == 0) {
+        return;
     }
     const auto submission = m_packet_data_plane.SubmitInternalIpPacketBatchForPeer(
         route.peer,
-        std::span<const runtime::SynchronousPacketView>(packet_views).first(packets.size()),
+        std::span<const runtime::SynchronousPacketView>(packet_views).first(packet_count),
         runtime::CaptureTimerFacts(),
         GetRuntimeNowNs(),
         effects

@@ -222,6 +222,10 @@ Advertise connected IPv4 UDP and connected IPv4 TCP independently.
   Drive TCP retransmission and connection timers only through the existing serialized `sys_check_timeouts()` path.
   On client destruction, policy change, peer activation change, peer deactivation, adapter reset, or sysmodule shutdown, abort or close the PCB, retire pending operations, scrub copied stream storage, quarantine the virtual tuple, and reject stale callbacks.
 
+  Current state: a connecting flow that remains unopened for five seconds now closes with the terminal `ConnectTimedOut` reason.
+  The timeout is evaluated after serialized lwIP timer work and its PCB is aborted through a fixed reserved control-close lane, so pending data work cannot suppress cleanup or reset another TCP flow.
+  The remaining half-close and invalidation combinations remain outstanding.
+
 - [ ] **13. Add deterministic correctness, pressure, and resource coverage.**
 
   Extend protocol layout tests, flow-plane tests, adapter tests, owner tests, runtime composition tests, and the adapter-input fuzz target.

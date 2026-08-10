@@ -61,6 +61,7 @@ class UserspaceIpAdapterOwner {
     );
     [[nodiscard]] QueueResult QueueWriteTcpLocked(std::uint64_t token, std::span<const std::uint8_t> payload, OperationTicket* out_ticket);
     [[nodiscard]] QueueResult QueueShutdownTcpWriteLocked(std::uint64_t token, OperationTicket* out_ticket);
+    [[nodiscard]] bool QueueControlCloseFlowLocked(std::uint64_t token);
     [[nodiscard]] QueueResult QueueInputPacketLocked(
         const PeerIdentity& peer,
         std::uint32_t policy_generation,
@@ -112,6 +113,8 @@ class UserspaceIpAdapterOwner {
     bool m_reset_pending{};
     bool m_timeout_pending{};
     bool m_configuration_active{};
+    std::array<std::uint64_t, wgnx::tunnel::MaximumFlows> m_control_close_tokens{};
+    std::uint8_t m_control_close_count{};
     DataOperationSlot m_data_operation{};
 };
 

@@ -17,6 +17,7 @@ void UserspaceIpAdapterOwner::QueueResetLocked() {
     m_reset_pending = true;
     m_timeout_pending = false;
     m_configuration_active = false;
+    m_control_close_count = 0;
 }
 
 void UserspaceIpAdapterOwner::QueueRunTimeoutsLocked() {
@@ -125,6 +126,22 @@ UserspaceIpAdapterOwner::QueueResult UserspaceIpAdapterOwner::QueueShutdownTcpWr
     return QueueResult::Queued;
 }
 
+bool UserspaceIpAdapterOwner::QueueControlCloseFlowLocked(std::uint64_t token) {
+    if (token == 0) {
+        return false;
+    }
+    for (std::uint8_t index = 0; index < m_control_close_count; ++index) {
+        if (m_control_close_tokens[index] == token) {
+            return true;
+        }
+    }
+    if (m_control_close_count == m_control_close_tokens.size()) {
+        return false;
+    }
+    m_control_close_tokens[m_control_close_count++] = token;
+    return true;
+}
+
 UserspaceIpAdapterOwner::QueueResult UserspaceIpAdapterOwner::QueueInputPacketLocked(
     const PeerIdentity& peer,
     std::uint32_t policy_generation,
@@ -152,23 +169,32 @@ UserspaceIpAdapterOwner::QueueResult UserspaceIpAdapterOwner::QueueInputPacketLo
 }
 
 std::optional<UserspaceIpAdapterOwner::Operation> UserspaceIpAdapterOwner::TakeNextLocked() {
-    if (m_reset_pending || m_configuration_pending || m_timeout_pending) {
+    if (m_reset_pending || m_configuration_pending) {
         const bool reset = m_reset_pending;
-        const bool configure = !reset && m_configuration_pending;
         if (reset) {
             m_reset_pending = false;
-        } else if (configure) {
-            m_configuration_pending = false;
         } else {
-            m_timeout_pending = false;
+            m_configuration_pending = false;
         }
         return Operation{
-            .kind = reset       ? OperationKind::Reset
-                    : configure ? OperationKind::Configure
-                                : OperationKind::RunTimeouts,
+            .kind = reset ? OperationKind::Reset : OperationKind::Configure,
             .local_address = m_local_address,
             .mtu = m_mtu,
         };
+    }
+    if (m_control_close_count != 0) {
+        const std::uint64_t token = m_control_close_tokens[0];
+        std::copy(
+            m_control_close_tokens.begin() + 1,
+            m_control_close_tokens.begin() + m_control_close_count,
+            m_control_close_tokens.begin()
+        );
+        --m_control_close_count;
+        return Operation{.kind = OperationKind::CloseFlow, .flow = {.token = token}};
+    }
+    if (m_timeout_pending) {
+        m_timeout_pending = false;
+        return Operation{.kind = OperationKind::RunTimeouts, .local_address = m_local_address, .mtu = m_mtu};
     }
     if (!m_data_operation.pending) {
         return std::nullopt;
@@ -354,7 +380,8 @@ void UserspaceIpAdapterOwner::CancelLocked(OperationTicket ticket) {
 }
 
 bool UserspaceIpAdapterOwner::HasPendingWork() const {
-    return m_reset_pending || m_configuration_pending || m_timeout_pending || m_data_operation.pending || m_data_operation.running;
+    return m_reset_pending || m_configuration_pending || m_timeout_pending || m_control_close_count != 0 || m_data_operation.pending ||
+           m_data_operation.running;
 }
 
 const ip::UserspaceIpAdapter& UserspaceIpAdapterOwner::AdapterForTests() const {

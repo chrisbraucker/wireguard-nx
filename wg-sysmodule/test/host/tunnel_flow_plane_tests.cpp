@@ -176,6 +176,30 @@ void TestTunnelFlowPlane(TestContext& context) {
         "flow opening did not distinguish route coverage, availability, or peer activation, or policy generations did not advance"
     );
 
+    TunnelFlowPlane timeout_plane{};
+    const TunnelClientId timeout_client = timeout_plane.CreateClient(nullptr, nullptr);
+    timeout_plane.RefreshPolicy({.configuration = &config, .peer = first_peer, .selected = true}, 1000);
+    static_cast<void>(timeout_plane.ReceiveCompletions(timeout_client, completions, received_payload));
+    const auto timeout_reservation = timeout_plane.ReserveConnectedTcpFlow(timeout_client, open, 1001, TransportReady);
+    const bool timeout_committed = timeout_plane.CommitFlowReservation(timeout_reservation);
+    std::array<std::uint64_t, MaximumFlows> expired_tcp_tokens{};
+    const std::uint32_t premature_expiration =
+        timeout_plane.ExpireTcpConnectingFlows(1001 + TunnelFlowPlane::TcpConnectTimeoutNs - 1, expired_tcp_tokens);
+    const std::uint32_t expiration =
+        timeout_plane.ExpireTcpConnectingFlows(1001 + TunnelFlowPlane::TcpConnectTimeoutNs, expired_tcp_tokens);
+    const auto timed_out_state = timeout_plane.GetFlowState(timeout_client, timeout_reservation.result.flow);
+    const auto timeout_completions = timeout_plane.ReceiveCompletions(timeout_client, completions, received_payload);
+    WGNX_TEST_REQUIRE(
+        context,
+        timeout_reservation.IsReserved() && timeout_committed && premature_expiration == 0 && expiration == 1 &&
+            expired_tcp_tokens[0] == timeout_reservation.adapter_token && timed_out_state.status == ProtocolStatus::FlowClosed &&
+            timed_out_state.terminal_reason == FlowTerminalReason::ConnectTimedOut &&
+            timeout_completions.status == ProtocolStatus::Success && timeout_completions.count == 1 &&
+            completions[0].type == CompletionType::FlowStateChanged && completions[0].flow.value == timeout_reservation.result.flow.value &&
+            completions[0].terminal_reason == FlowTerminalReason::ConnectTimedOut,
+        "a connecting TCP flow did not produce one bounded terminal timeout completion"
+    );
+
     config.leak_protection = true;
     TunnelFlowPlane protected_plane{};
     NotificationCounter protected_notifications{};

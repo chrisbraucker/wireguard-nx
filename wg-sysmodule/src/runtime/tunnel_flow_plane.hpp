@@ -100,6 +100,7 @@ class TunnelFlowPlane {
     using CompletionNotifier = void (*)(void* context);
 
     static constexpr wgnx::platform::ktime_t ReverseTupleQuarantineNs = 60 * wgnx::platform::NSEC_PER_SEC;
+    static constexpr wgnx::platform::ktime_t TcpConnectTimeoutNs = 5 * wgnx::platform::NSEC_PER_SEC;
 
     [[nodiscard]] TunnelClientId CreateClient(CompletionNotifier notifier, void* notifier_context);
     void DestroyClient(TunnelClientId client, wgnx::platform::ktime_t now);
@@ -182,6 +183,7 @@ class TunnelFlowPlane {
     [[nodiscard]] bool MarkTcpReset(std::uint64_t adapter_token, wgnx::platform::ktime_t now);
     [[nodiscard]] bool MarkTcpWriteBlocked(std::uint64_t adapter_token);
     [[nodiscard]] bool MarkTcpWritable(std::uint64_t adapter_token);
+    [[nodiscard]] std::uint32_t ExpireTcpConnectingFlows(wgnx::platform::ktime_t now, std::span<std::uint64_t> adapter_tokens);
     void InvalidatePeerActivation(const PeerIdentity& peer, wgnx::tunnel::FlowTerminalReason reason, wgnx::platform::ktime_t now);
 
   private:
