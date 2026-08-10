@@ -203,12 +203,17 @@ Advertise connected IPv4 UDP and connected IPv4 TCP independently.
   The daemon commits the reserved TCP open only after owner execution and routes complete copied output packets through one atomic packet-plane batch after the owner returns.
   Host coverage verifies that a tagged TCP open emits a copied SYN and that reserved TCP cleanup preempts ordinary data work.
 
-- [ ] **9. Implement asynchronous connect state and virtual endpoint publication.**
+- [x] **9. Implement asynchronous connect state and virtual endpoint publication.**
 
   Reserve the route, peer generation, virtual local tuple, completion capacity, and adapter token before queuing TCP open.
   Return a valid flow in `Connecting` after the open operation is accepted, publish `Open` only from the successful lwIP connected callback, and emit one ordered state-change completion.
   Publish refusal, reset, timeout, route failure, resource failure, cancellation, and stale completion as closed terminal outcomes.
   Return the same actual lwIP-bound virtual local endpoint from `GetFlowState` throughout the flow lifetime.
+
+  The flow plane reserves the complete peer, policy, virtual tuple, and owner token before queuing the raw TCP PCB creation.
+  A successful owner open commits the flow as `Connecting`, and only the serialized lwIP connected callback publishes the ordered `Open` completion.
+  `GetFlowState` exposes the same virtual tuple from reservation through closure, while reservation failure, stale callback, reset, and timeout remain closed outcomes.
+  Host coverage verifies the asynchronous `Connecting` to `Open` transition, its one completion, stream flags, and stable virtual endpoint.
 
 - [ ] **10. Implement bounded stream writes and writable recovery.**
 

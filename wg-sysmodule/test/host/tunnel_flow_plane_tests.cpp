@@ -200,6 +200,29 @@ void TestTunnelFlowPlane(TestContext& context) {
         "a connecting TCP flow did not produce one bounded terminal timeout completion"
     );
 
+    TunnelFlowPlane tcp_open_plane{};
+    const TunnelClientId tcp_open_client = tcp_open_plane.CreateClient(nullptr, nullptr);
+    tcp_open_plane.RefreshPolicy({.configuration = &config, .peer = first_peer, .selected = true}, 1100);
+    static_cast<void>(tcp_open_plane.ReceiveCompletions(tcp_open_client, completions, received_payload));
+    const auto tcp_open_reservation = tcp_open_plane.ReserveConnectedTcpFlow(tcp_open_client, open, 1101, TransportReady);
+    const auto connecting_state = tcp_open_plane.GetFlowState(tcp_open_client, tcp_open_reservation.result.flow);
+    const bool tcp_open_committed = tcp_open_plane.CommitFlowReservation(tcp_open_reservation);
+    const bool tcp_connected = tcp_open_plane.MarkTcpConnected(tcp_open_reservation.adapter_token, 1102);
+    const auto open_state = tcp_open_plane.GetFlowState(tcp_open_client, tcp_open_reservation.result.flow);
+    const auto open_completion = tcp_open_plane.ReceiveCompletions(tcp_open_client, completions, received_payload);
+    WGNX_TEST_REQUIRE(
+        context,
+        tcp_open_reservation.IsReserved() && connecting_state.status == ProtocolStatus::Success &&
+            connecting_state.state == FlowState::Connecting && connecting_state.advertised_local.port != 0 && tcp_open_committed &&
+            tcp_connected && open_state.status == ProtocolStatus::Success && open_state.state == FlowState::Open &&
+            open_state.advertised_local.port == connecting_state.advertised_local.port &&
+            open_state.stream_flags == (FlowStreamFlagLocalWriteOpen | FlowStreamFlagRemoteWriteOpen) &&
+            open_completion.status == ProtocolStatus::Success && open_completion.count == 1 &&
+            completions[0].type == CompletionType::FlowStateChanged &&
+            completions[0].flow.value == tcp_open_reservation.result.flow.value && completions[0].flow_state == FlowState::Open,
+        "a reserved TCP flow did not retain its virtual endpoint through one asynchronous connecting-to-open transition"
+    );
+
     config.leak_protection = true;
     TunnelFlowPlane protected_plane{};
     NotificationCounter protected_notifications{};
