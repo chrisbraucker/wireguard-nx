@@ -160,7 +160,7 @@ Advertise connected IPv4 UDP and connected IPv4 TCP independently.
 
 ### WireGuard-Owned lwIP TCP
 
-- [ ] **6. Enable the minimal raw lwIP TCP source and configuration set with explicit budgets.**
+- [x] **6. Enable the minimal raw lwIP TCP source and configuration set with explicit budgets.**
 
   The deliberately narrow Task 6 vendor tree does not contain `tcp.c`, `tcp_in.c`, or `tcp_out.c`, so import exactly those files from the already selected lwIP 2.2.1 tag and commit.
   Update `UPSTREAM.md`, the selected-file manifest, and integrity hashes in the same change, then compile the added sources in host, sanitizer, fuzz, warning, and target builds.
@@ -168,6 +168,11 @@ Advertise connected IPv4 UDP and connected IPv4 TCP independently.
   Define fixed `MEMP_NUM_TCP_PCB`, `MEMP_NUM_TCP_SEG`, send-buffer, send-queue, receive-window, out-of-order queue, MSS, and timeout limits in `lwip_budget.h` and mirror them in `resource_budget.hpp`.
   Derive MSS from the active effective inner MTU and begin with the smallest limits that support the single controlled flow plus deterministic pressure tests.
   Accept final values only after target footprint and queue-exhaustion evidence.
+
+  The pinned lwIP 2.2.1 source set now includes unmodified `tcp.c`, `tcp_in.c`, and `tcp_out.c`, with refreshed provenance hashes for 182 upstream files.
+  `NO_SYS=1` remains in force with raw TCP only, one PCB, eight segments, two-MSS send and receive windows, no out-of-order queue, and twelve timeout slots.
+  The compile-time 1,380-byte MSS is the default-MTU ceiling, while the forthcoming adapter binds each PCB with an active-MTU cap before `tcp_connect()`.
+  Host, ASan/UBSan, warnings, target stack, and footprint gates pass with a 1,389,090-byte static image, 269,504-byte NSO, and 270,564-byte NSP.
 
 - [ ] **7. Add TCP PCB ownership and copied callback results to `UserspaceIpAdapter`.**
 

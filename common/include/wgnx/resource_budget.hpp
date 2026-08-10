@@ -75,6 +75,11 @@ constexpr inline std::size_t MaximumTunnelFlowPlaneBytes = KiB(80);
 constexpr inline std::size_t MaximumUserspaceIpAdapterOwnerBytes = KiB(16);
 constexpr inline std::size_t LwipMemoryBytes = WGNX_LWIP_MEM_SIZE;
 constexpr inline std::size_t LwipUdpPcbSlots = WGNX_LWIP_UDP_PCBS;
+constexpr inline std::size_t LwipTcpPcbSlots = WGNX_LWIP_TCP_PCBS;
+constexpr inline std::size_t LwipTcpSegmentSlots = WGNX_LWIP_TCP_SEGMENTS;
+constexpr inline std::size_t LwipTcpMss = WGNX_LWIP_TCP_MSS;
+constexpr inline std::size_t LwipTcpWindowBytes = WGNX_LWIP_TCP_WINDOW;
+constexpr inline std::size_t LwipTcpSendBufferBytes = WGNX_LWIP_TCP_SEND_BUFFER;
 constexpr inline std::size_t LwipReassemblySlots = WGNX_LWIP_REASSEMBLIES;
 constexpr inline std::size_t LwipReassemblyPbufSlots = WGNX_LWIP_REASSEMBLY_PBUFS;
 constexpr inline std::size_t LwipFragmentPbufSlots = WGNX_LWIP_FRAGMENT_PBUFS;
@@ -95,5 +100,10 @@ static_assert(WorkqueueThreadStackBytes == TimerThreadStackBytes);
 static_assert(NifmPathThreadStackBytes == WorkqueueThreadStackBytes);
 static_assert(IpcServerThreadStackBytes >= MainThreadStackBytes);
 static_assert(LwipPbufPoolSlots > 2 * LwipReassemblyPbufSlots);
+static_assert(LwipTcpPcbSlots == 1);
+static_assert(LwipTcpSegmentSlots >= 2);
+static_assert(LwipTcpMss <= MaximumInnerPacketBytes - 40);
+static_assert(LwipTcpWindowBytes >= LwipTcpMss);
+static_assert(LwipTcpSendBufferBytes >= LwipTcpMss);
 
 } // namespace wgnx::resource_budget

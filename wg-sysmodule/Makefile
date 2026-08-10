@@ -151,13 +151,16 @@ HOST_TEST_C_SOURCES := \
 	src/ip/third_party/lwip/src/core/pbuf.c \
 	src/ip/third_party/lwip/src/core/stats.c \
 	src/ip/third_party/lwip/src/core/timeouts.c \
+	src/ip/third_party/lwip/src/core/tcp.c \
+	src/ip/third_party/lwip/src/core/tcp_in.c \
+	src/ip/third_party/lwip/src/core/tcp_out.c \
 	src/ip/third_party/lwip/src/core/udp.c \
 	src/ip/third_party/lwip/src/core/ipv4/ip4.c \
 	src/ip/third_party/lwip/src/core/ipv4/ip4_addr.c \
 	src/ip/third_party/lwip/src/core/ipv4/ip4_frag.c \
 	src/wireguard/crypto/monocypher.c \
 	src/wireguard/crypto/third_party/blake2/blake2s-ref.c
-LWIP_CORE_C_SOURCES := def inet_chksum init ip mem memp netif pbuf stats timeouts udp
+LWIP_CORE_C_SOURCES := def inet_chksum init ip mem memp netif pbuf stats tcp tcp_in tcp_out timeouts udp
 LWIP_IPV4_C_SOURCES := ip4 ip4_addr ip4_frag
 LWIP_CORE_OBJECTS := $(addprefix lwip_core_,$(addsuffix .o,$(LWIP_CORE_C_SOURCES)))
 LWIP_IPV4_OBJECTS := $(addprefix lwip_ipv4_,$(addsuffix .o,$(LWIP_IPV4_C_SOURCES)))

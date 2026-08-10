@@ -14,13 +14,13 @@ Project configuration, platform hooks, wrappers, and tests remain outside this d
 - Source archive: <https://github.com/lwip-tcpip/lwip/archive/refs/tags/STABLE-2_2_1_RELEASE.tar.gz>
 - Source archive SHA-256: `ce0b7461c0ad9602c376f0bf07c5eb7253b48c7bf66f011c6bf3e2a96731c539`
 
-`SHA256SUMS` contains a SHA-256 value for each of the 179 imported upstream files.
+`SHA256SUMS` contains a SHA-256 value for each of the 182 imported upstream files.
 It can be verified with `sha256sum -c SHA256SUMS` from this directory.
 
 ## Imported Source Set
 
 The complete upstream `src/include/` tree is retained for reproducible headers and future checked feature expansion.
-The initial core source set is `def.c`, `init.c`, `inet_chksum.c`, `ip.c`, `mem.c`, `memp.c`, `netif.c`, `pbuf.c`, `stats.c`, `timeouts.c`, `udp.c`, `ipv4/ip4.c`, `ipv4/ip4_addr.c`, and `ipv4/ip4_frag.c`.
+The selected core source set is `def.c`, `init.c`, `inet_chksum.c`, `ip.c`, `mem.c`, `memp.c`, `netif.c`, `pbuf.c`, `stats.c`, `tcp.c`, `tcp_in.c`, `tcp_out.c`, `timeouts.c`, `udp.c`, `ipv4/ip4.c`, `ipv4/ip4_addr.c`, and `ipv4/ip4_frag.c`.
 `sys.c` is deliberately absent because the production adapter uses `NO_SYS=1`.
 The repository attributes exempt only this directory from trailing-whitespace checks because the unmodified upstream files contain historical whitespace that fails the project's first-party whitespace policy.
 

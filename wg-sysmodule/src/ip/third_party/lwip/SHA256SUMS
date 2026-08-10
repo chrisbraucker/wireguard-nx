@@ -1,4 +1,5 @@
 ef4aac92e05e87cd1cdc140870ed52206ba03d4a7fe46c1e11d7ffa6c87d252b  ./COPYING
+a2dcab8f4915777b3195efbc65beed6d6569f1d7e84e2c0a54cd2ff3a9fadad6  ./UPSTREAM.md
 a12f3ef6c087efb6d4ec524cf332ff438d2504c17d60c263d0bb1b82b79eb2cd  ./src/core/def.c
 fc82b44fc866704a51c0aacd6037b10802b88e8576e1b691917cd2b863878b1b  ./src/core/inet_chksum.c
 e79eface962c17e082bc6d2f9bc0eef16be4cbef1deca3e8248fc7b171b0a49f  ./src/core/init.c
@@ -11,6 +12,9 @@ b5316284f3f42782d8b55a750f3f0557d3031edd0c280e653f2fb6dec3f74ed3  ./src/core/mem
 62e386985e3f2c9b943466ef01d3dcda798ee0167d56fd59c057e928f979cbc2  ./src/core/netif.c
 2f953eb2bc5b696b2eea156386cc4f99c793859bbf65cee967653bdf3374db61  ./src/core/pbuf.c
 a18b76cde437213ca9f00137bdb61adb00f6f931fe28c40c81f811a5e674caea  ./src/core/stats.c
+76d701944a20dae435fb09a37046fea046ba1d996038362e37eae57157ba586f  ./src/core/tcp.c
+f79b20e6b123af2ed2cfc2b470fe982d0c88d1357fc5a11537bab9cd20d4b639  ./src/core/tcp_in.c
+d8d8d5a54097114904f89f8c5602c937ef3b086933f2132a557698fc65d7e4af  ./src/core/tcp_out.c
 930bcfaf5b12b97f975fca7b8c2f7ab999cffa37f7c840ea91b340aa4ef62115  ./src/core/timeouts.c
 6454ba858cf8a2c71e4a27e0da4b1569160f923c2adce19842dbb6f90da61af7  ./src/core/udp.c
 8b3edc25121de40cd1c3338d5d68be93091f0713ee8a23eba9789f14d41e0f6d  ./src/include/compat/posix/arpa/inet.h
