@@ -437,7 +437,8 @@ void DaemonRuntime::UserspaceIpAdapterWorkCallback(wgnx::platform::work_struct* 
                 }
                 s_instance->PublishUserspaceTcpOutputLocked(effects);
             } else if ((operation->kind == runtime::UserspaceIpAdapterOwner::OperationKind::WriteTcpStream ||
-                        operation->kind == runtime::UserspaceIpAdapterOwner::OperationKind::ShutdownTcpWrite) &&
+                        operation->kind == runtime::UserspaceIpAdapterOwner::OperationKind::ShutdownTcpWrite ||
+                        operation->kind == runtime::UserspaceIpAdapterOwner::OperationKind::AcknowledgeTcpReceive) &&
                        result == ip::UserspaceIpResult::Success) {
                 s_instance->PublishUserspaceTcpOutputLocked(effects);
             } else if (operation->kind == runtime::UserspaceIpAdapterOwner::OperationKind::CloseFlow &&
@@ -541,13 +542,23 @@ void DaemonRuntime::DeliverUserspaceIpInputLocked(const runtime::UserspaceIpAdap
 void DaemonRuntime::DeliverUserspaceTcpCallbacksLocked(const runtime::UserspaceIpAdapterOwner::Operation& operation) {
     const auto now = GetRuntimeNowNs();
     if (operation.kind == runtime::UserspaceIpAdapterOwner::OperationKind::InputPacket) {
+        std::array<ip::UserspaceIpTcpReceiveAcknowledgement, ip::UserspaceIpAdapter::InboundStreamCapacity> acknowledgements{};
+        std::size_t acknowledgement_count = 0;
         for (const auto& stream : m_userspace_ip_adapter_owner.InboundStreamsLocked(operation.ticket)) {
-            static_cast<void>(m_tunnel_flow_plane.DeliverInboundTcpStream(
+            const auto delivery = m_tunnel_flow_plane.DeliverInboundTcpStream(
                 operation.peer,
                 operation.policy_generation,
                 stream.token,
                 std::span<const std::uint8_t>(stream.payload).first(stream.size),
                 now
+            );
+            if (delivery.disposition == runtime::TunnelInboundDisposition::Delivered) {
+                acknowledgements[acknowledgement_count++] = {.token = stream.token, .bytes = stream.size};
+            }
+        }
+        if (acknowledgement_count != 0) {
+            AMS_ABORT_UNLESS(s_instance->m_userspace_ip_adapter_owner.QueueTcpReceiveAcknowledgementsLocked(
+                std::span<const ip::UserspaceIpTcpReceiveAcknowledgement>(acknowledgements).first(acknowledgement_count)
             ));
         }
     }

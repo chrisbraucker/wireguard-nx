@@ -82,6 +82,11 @@ struct UserspaceIpStreamData {
     std::uint16_t size{};
 };
 
+struct UserspaceIpTcpReceiveAcknowledgement {
+    std::uint64_t token{};
+    std::uint16_t bytes{};
+};
+
 struct UserspaceIpPacket {
     std::array<std::uint8_t, wgnx::MaxInnerIpv4PacketSize> bytes{};
     std::uint16_t size{};
@@ -113,6 +118,7 @@ class UserspaceIpAdapter {
     [[nodiscard]] UserspaceIpResult Send(std::uint64_t token, std::span<const std::uint8_t> payload);
     [[nodiscard]] UserspaceIpResult WriteTcp(std::uint64_t token, std::span<const std::uint8_t> payload);
     [[nodiscard]] UserspaceIpResult ShutdownTcpWrite(std::uint64_t token);
+    [[nodiscard]] UserspaceIpResult AcknowledgeTcpReceive(std::span<const UserspaceIpTcpReceiveAcknowledgement> acknowledgements);
     [[nodiscard]] UserspaceIpResult Input(std::span<const std::uint8_t> packet);
     void RunTimeouts();
     [[nodiscard]] std::uint32_t NextTimeoutDelayMs() const;

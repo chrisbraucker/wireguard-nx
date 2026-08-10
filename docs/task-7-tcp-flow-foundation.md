@@ -215,6 +215,10 @@ Advertise connected IPv4 UDP and connected IPv4 TCP independently.
   When completion or payload storage is full, retain TCP backpressure without acknowledging discarded bytes, and resume delivery after the client drains capacity.
   Treat a null receive pbuf as orderly remote write closure, distinguish it from reset, and keep already admitted bytes drainable before the terminal or half-close notification.
 
+  Current state: the adapter retains copied stream bytes without calling `tcp_recved()`.
+  The daemon queues fixed receive-credit intents only after the flow plane accepts the corresponding stream completion, and the serialized owner applies that credit before ordinary data work.
+  This prevents lwIP from reopening the receive window for data rejected by bounded completion storage.
+
 - [ ] **12. Implement half-close, close, timeout, and invalidation semantics.**
 
   Queue local write shutdown after previously accepted bytes, make repeated shutdown idempotent, and continue receiving until remote EOF or terminal error.

@@ -302,6 +302,21 @@ UserspaceIpResult UserspaceIpAdapter::ShutdownTcpWrite(std::uint64_t token) {
     return UserspaceIpResult::Success;
 }
 
+UserspaceIpResult UserspaceIpAdapter::AcknowledgeTcpReceive(std::span<const UserspaceIpTcpReceiveAcknowledgement> acknowledgements) {
+    for (const UserspaceIpTcpReceiveAcknowledgement acknowledgement : acknowledgements) {
+        FlowSlot* flow = FindFlow(acknowledgement.token);
+        if (flow == nullptr || flow->kind != UserspaceIpFlowKind::Tcp || flow->tcp == nullptr || acknowledgement.bytes == 0) {
+            continue;
+        }
+        tcp_recved(flow->tcp, acknowledgement.bytes);
+        const err_t output = tcp_output(flow->tcp);
+        if (output != ERR_OK && output != ERR_MEM && output != ERR_BUF) {
+            return UserspaceIpResult::TransportError;
+        }
+    }
+    return UserspaceIpResult::Success;
+}
+
 UserspaceIpResult UserspaceIpAdapter::Input(std::span<const std::uint8_t> packet) {
     if (!m_netif_added) {
         return UserspaceIpResult::NotInitialized;
@@ -564,7 +579,6 @@ err_t UserspaceIpAdapter::TcpReceive(void* context, tcp_pcb*, pbuf* packet, err_
     stream.token = flow->token;
     stream.size = packet->tot_len;
     ++adapter.m_inbound_stream_count;
-    tcp_recved(flow->tcp, packet->tot_len);
     pbuf_free(packet);
     ++adapter.m_statistics.callback_deliveries;
     return ERR_OK;

@@ -36,6 +36,7 @@ class UserspaceIpAdapterOwner {
         WriteTcpStream,
         ShutdownTcpWrite,
         InputPacket,
+        AcknowledgeTcpReceive,
         RunTimeouts,
     };
 
@@ -48,6 +49,8 @@ class UserspaceIpAdapterOwner {
         std::uint32_t policy_generation{};
         std::uint32_t adapter_epoch{};
         std::uint16_t mtu{};
+        std::array<ip::UserspaceIpTcpReceiveAcknowledgement, ip::UserspaceIpAdapter::InboundStreamCapacity> acknowledgements{};
+        std::uint8_t acknowledgement_count{};
     };
 
     void QueueConfigureLocked(const std::array<std::uint8_t, 4>& local_address, std::uint16_t mtu);
@@ -62,6 +65,7 @@ class UserspaceIpAdapterOwner {
     [[nodiscard]] QueueResult QueueWriteTcpLocked(std::uint64_t token, std::span<const std::uint8_t> payload, OperationTicket* out_ticket);
     [[nodiscard]] QueueResult QueueShutdownTcpWriteLocked(std::uint64_t token, OperationTicket* out_ticket);
     [[nodiscard]] bool QueueControlCloseFlowLocked(std::uint64_t token);
+    [[nodiscard]] bool QueueTcpReceiveAcknowledgementsLocked(std::span<const ip::UserspaceIpTcpReceiveAcknowledgement> acknowledgements);
     [[nodiscard]] QueueResult QueueInputPacketLocked(
         const PeerIdentity& peer,
         std::uint32_t policy_generation,
@@ -115,6 +119,8 @@ class UserspaceIpAdapterOwner {
     bool m_configuration_active{};
     std::array<std::uint64_t, wgnx::tunnel::MaximumFlows> m_control_close_tokens{};
     std::uint8_t m_control_close_count{};
+    std::array<ip::UserspaceIpTcpReceiveAcknowledgement, ip::UserspaceIpAdapter::InboundStreamCapacity> m_receive_acknowledgements{};
+    std::uint8_t m_receive_acknowledgement_count{};
     DataOperationSlot m_data_operation{};
 };
 

@@ -18,6 +18,7 @@ void UserspaceIpAdapterOwner::QueueResetLocked() {
     m_timeout_pending = false;
     m_configuration_active = false;
     m_control_close_count = 0;
+    m_receive_acknowledgement_count = 0;
 }
 
 void UserspaceIpAdapterOwner::QueueRunTimeoutsLocked() {
@@ -142,6 +143,17 @@ bool UserspaceIpAdapterOwner::QueueControlCloseFlowLocked(std::uint64_t token) {
     return true;
 }
 
+bool UserspaceIpAdapterOwner::QueueTcpReceiveAcknowledgementsLocked(
+    std::span<const ip::UserspaceIpTcpReceiveAcknowledgement> acknowledgements
+) {
+    if (acknowledgements.empty() || acknowledgements.size() > m_receive_acknowledgements.size() || m_receive_acknowledgement_count != 0) {
+        return false;
+    }
+    std::copy(acknowledgements.begin(), acknowledgements.end(), m_receive_acknowledgements.begin());
+    m_receive_acknowledgement_count = static_cast<std::uint8_t>(acknowledgements.size());
+    return true;
+}
+
 UserspaceIpAdapterOwner::QueueResult UserspaceIpAdapterOwner::QueueInputPacketLocked(
     const PeerIdentity& peer,
     std::uint32_t policy_generation,
@@ -191,6 +203,13 @@ std::optional<UserspaceIpAdapterOwner::Operation> UserspaceIpAdapterOwner::TakeN
         );
         --m_control_close_count;
         return Operation{.kind = OperationKind::CloseFlow, .flow = {.token = token}};
+    }
+    if (m_receive_acknowledgement_count != 0) {
+        Operation operation{.kind = OperationKind::AcknowledgeTcpReceive};
+        operation.acknowledgement_count = m_receive_acknowledgement_count;
+        std::copy_n(m_receive_acknowledgements.begin(), m_receive_acknowledgement_count, operation.acknowledgements.begin());
+        m_receive_acknowledgement_count = 0;
+        return operation;
     }
     if (m_timeout_pending) {
         m_timeout_pending = false;
@@ -242,6 +261,11 @@ ip::UserspaceIpResult UserspaceIpAdapterOwner::Execute(const Operation& operatio
         m_adapter.ClearInboundStreams();
         m_adapter.ClearTcpEvents();
         return m_adapter.Input(std::span<const std::uint8_t>(m_data_operation.payload).first(m_data_operation.payload_size));
+    case OperationKind::AcknowledgeTcpReceive:
+        m_adapter.ClearOutboundPackets();
+        return m_adapter.AcknowledgeTcpReceive(
+            std::span<const ip::UserspaceIpTcpReceiveAcknowledgement>(operation.acknowledgements).first(operation.acknowledgement_count)
+        );
     case OperationKind::RunTimeouts:
         m_adapter.ClearOutboundPackets();
         m_adapter.ClearInboundStreams();
@@ -380,8 +404,8 @@ void UserspaceIpAdapterOwner::CancelLocked(OperationTicket ticket) {
 }
 
 bool UserspaceIpAdapterOwner::HasPendingWork() const {
-    return m_reset_pending || m_configuration_pending || m_timeout_pending || m_control_close_count != 0 || m_data_operation.pending ||
-           m_data_operation.running;
+    return m_reset_pending || m_configuration_pending || m_timeout_pending || m_control_close_count != 0 ||
+           m_receive_acknowledgement_count != 0 || m_data_operation.pending || m_data_operation.running;
 }
 
 const ip::UserspaceIpAdapter& UserspaceIpAdapterOwner::AdapterForTests() const {
