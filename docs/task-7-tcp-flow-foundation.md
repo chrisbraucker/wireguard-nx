@@ -174,13 +174,18 @@ Advertise connected IPv4 UDP and connected IPv4 TCP independently.
   The compile-time 1,380-byte MSS is the default-MTU ceiling, while the forthcoming adapter binds each PCB with an active-MTU cap before `tcp_connect()`.
   Host, ASan/UBSan, warnings, target stack, and footprint gates pass with a 1,389,090-byte static image, 269,504-byte NSO, and 270,564-byte NSP.
 
-- [ ] **7. Add TCP PCB ownership and copied callback results to `UserspaceIpAdapter`.**
+- [x] **7. Add TCP PCB ownership and copied callback results to `UserspaceIpAdapter`.**
 
   Give each adapter flow slot an explicit kind and a UDP or TCP PCB without exposing lwIP types outside the adapter.
   Bind the TCP PCB to the flow plane's virtual local IPv4 address and port, register connected, receive, sent, error, poll, and shutdown callbacks, and start `tcp_connect()` to the fixed remote endpoint.
   Callbacks may only update bounded adapter-owned state and copied collectors.
   They must not call daemon state, packet-plane, peer, logging, CMIF, platform I/O, or another thread.
   Remove or abort every PCB during reset so no callback or queued segment survives adapter epoch change.
+
+  Each adapter slot now owns either a UDP PCB or a raw TCP PCB, with the TCP PCB bound to the supplied virtual tuple and its MSS capped to the active adapter MTU.
+  Connected, receive, sent, poll, and error callbacks publish only fixed copied stream records or TCP events, while collector pressure returns `ERR_MEM` without acknowledging discarded receive bytes.
+  Reset and close detach callbacks and abort TCP PCBs, and the owner-size bound rises from 16 KiB to 24 KiB to hold four copied 1,460-byte stream records alongside the existing UDP collectors.
+  Host coverage verifies one TCP PCB emits a SYN through the normal complete-IP packet collector and rejects stream writes before connection completion.
 
 - [ ] **8. Extend the serialized owner and daemon three-phase boundary for TCP operations.**
 

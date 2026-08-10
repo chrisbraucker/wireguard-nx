@@ -70,6 +70,14 @@ void UserspaceIpAdapter::Reset() {
             udp_recv(flow.pcb, nullptr, nullptr);
             udp_remove(flow.pcb);
         }
+        if (flow.tcp != nullptr) {
+            tcp_arg(flow.tcp, nullptr);
+            tcp_recv(flow.tcp, nullptr);
+            tcp_sent(flow.tcp, nullptr);
+            tcp_poll(flow.tcp, nullptr, 0);
+            tcp_err(flow.tcp, nullptr);
+            tcp_abort(flow.tcp);
+        }
         flow = {};
     }
     m_statistics.active_flows = 0;
@@ -85,6 +93,8 @@ void UserspaceIpAdapter::Reset() {
     }
     ClearOutboundPackets();
     ClearInboundDatagrams();
+    ClearInboundStreams();
+    ClearTcpEvents();
     if (g_lwip_owner == this) {
         g_lwip_owner = nullptr;
     }
@@ -138,10 +148,73 @@ UserspaceIpResult UserspaceIpAdapter::OpenFlow(const UserspaceIpFlow& flow) {
     *slot = {
         .owner = this,
         .pcb = pcb,
+        .tcp = nullptr,
         .token = flow.token,
+        .kind = UserspaceIpFlowKind::Udp,
+        .tcp_connected = false,
+        .tcp_local_write_closed = false,
         .active = true,
     };
     udp_recv(pcb, Receive, std::addressof(*slot));
+    ++m_statistics.active_flows;
+    m_statistics.flow_high_water = std::max(m_statistics.flow_high_water, m_statistics.active_flows);
+    return UserspaceIpResult::Success;
+}
+
+UserspaceIpResult UserspaceIpAdapter::OpenTcpFlow(const UserspaceIpFlow& flow) {
+    if (!m_netif_added) {
+        return UserspaceIpResult::NotInitialized;
+    }
+    if (flow.token == 0 || flow.local.port == 0 || flow.remote.port == 0 ||
+        !std::equal(std::begin(flow.local.address), std::end(flow.local.address), m_local_address.begin()) ||
+        FindFlow(flow.token) != nullptr) {
+        return UserspaceIpResult::InvalidArgument;
+    }
+    const auto slot = std::find_if(m_flows.begin(), m_flows.end(), [](const FlowSlot& candidate) { return !candidate.active; });
+    if (slot == m_flows.end()) {
+        return UserspaceIpResult::FlowQuotaExhausted;
+    }
+    tcp_pcb* pcb = tcp_new_ip_type(IPADDR_TYPE_V4);
+    if (pcb == nullptr) {
+        RecordRejection(UserspaceIpRejection::PbufAllocation);
+        return UserspaceIpResult::FlowQuotaExhausted;
+    }
+    ip_addr_t local{};
+    ip_addr_t remote{};
+    ip4_addr_t local_ipv4{};
+    ip4_addr_t remote_ipv4{};
+    SetAddress(&local_ipv4, flow.local.address);
+    SetAddress(&remote_ipv4, flow.remote.address);
+    ip_addr_copy_from_ip4(local, local_ipv4);
+    ip_addr_copy_from_ip4(remote, remote_ipv4);
+    if (tcp_bind(pcb, &local, flow.local.port) != ERR_OK) {
+        tcp_abort(pcb);
+        return UserspaceIpResult::TransportError;
+    }
+    tcp_bind_netif(pcb, &m_netif);
+    pcb->mss = std::min<u16_t>(pcb->mss, static_cast<u16_t>(m_mtu - wgnx::tunnel::Ipv4HeaderBytes - wgnx::tunnel::TcpHeaderBytes));
+    *slot = {
+        .owner = this,
+        .pcb = nullptr,
+        .tcp = pcb,
+        .token = flow.token,
+        .kind = UserspaceIpFlowKind::Tcp,
+        .tcp_connected = false,
+        .tcp_local_write_closed = false,
+        .active = true,
+    };
+    tcp_arg(pcb, std::addressof(*slot));
+    tcp_recv(pcb, TcpReceive);
+    tcp_sent(pcb, TcpSent);
+    tcp_poll(pcb, TcpPoll, 2);
+    tcp_err(pcb, TcpError);
+    const err_t connected = tcp_connect(pcb, &remote, flow.remote.port, TcpConnected);
+    if (connected != ERR_OK) {
+        tcp_arg(pcb, nullptr);
+        tcp_abort(pcb);
+        *slot = {};
+        return connected == ERR_MEM || connected == ERR_BUF ? UserspaceIpResult::QueueFull : UserspaceIpResult::TransportError;
+    }
     ++m_statistics.active_flows;
     m_statistics.flow_high_water = std::max(m_statistics.flow_high_water, m_statistics.active_flows);
     return UserspaceIpResult::Success;
@@ -152,8 +225,17 @@ void UserspaceIpAdapter::CloseFlow(std::uint64_t token) {
     if (flow == nullptr) {
         return;
     }
-    udp_recv(flow->pcb, nullptr, nullptr);
-    udp_remove(flow->pcb);
+    if (flow->kind == UserspaceIpFlowKind::Udp) {
+        udp_recv(flow->pcb, nullptr, nullptr);
+        udp_remove(flow->pcb);
+    } else if (flow->tcp != nullptr) {
+        tcp_arg(flow->tcp, nullptr);
+        tcp_recv(flow->tcp, nullptr);
+        tcp_sent(flow->tcp, nullptr);
+        tcp_poll(flow->tcp, nullptr, 0);
+        tcp_err(flow->tcp, nullptr);
+        tcp_abort(flow->tcp);
+    }
     *flow = {};
     --m_statistics.active_flows;
 }
@@ -179,6 +261,45 @@ UserspaceIpResult UserspaceIpAdapter::Send(std::uint64_t token, std::span<const 
         return UserspaceIpResult::Success;
     }
     return sent == ERR_MEM || sent == ERR_BUF ? UserspaceIpResult::QueueFull : UserspaceIpResult::TransportError;
+}
+
+UserspaceIpResult UserspaceIpAdapter::WriteTcp(std::uint64_t token, std::span<const std::uint8_t> payload) {
+    FlowSlot* flow = FindFlow(token);
+    if (flow == nullptr || flow->kind != UserspaceIpFlowKind::Tcp) {
+        return m_netif_added ? UserspaceIpResult::InvalidArgument : UserspaceIpResult::NotInitialized;
+    }
+    if (!flow->tcp_connected || flow->tcp == nullptr || flow->tcp_local_write_closed) {
+        return UserspaceIpResult::TransportError;
+    }
+    if (payload.size() > wgnx::tunnel::MaximumTcpWriteStorageBytes || payload.size() > flow->tcp->mss) {
+        return UserspaceIpResult::InvalidArgument;
+    }
+    const err_t written = tcp_write(flow->tcp, payload.data(), static_cast<u16_t>(payload.size()), TCP_WRITE_FLAG_COPY);
+    if (written != ERR_OK) {
+        return written == ERR_MEM || written == ERR_BUF ? UserspaceIpResult::QueueFull : UserspaceIpResult::TransportError;
+    }
+    const err_t output = tcp_output(flow->tcp);
+    return output == ERR_OK ? UserspaceIpResult::Success
+                            : (output == ERR_MEM || output == ERR_BUF ? UserspaceIpResult::QueueFull : UserspaceIpResult::TransportError);
+}
+
+UserspaceIpResult UserspaceIpAdapter::ShutdownTcpWrite(std::uint64_t token) {
+    FlowSlot* flow = FindFlow(token);
+    if (flow == nullptr || flow->kind != UserspaceIpFlowKind::Tcp) {
+        return m_netif_added ? UserspaceIpResult::InvalidArgument : UserspaceIpResult::NotInitialized;
+    }
+    if (flow->tcp_local_write_closed) {
+        return UserspaceIpResult::Success;
+    }
+    if (!flow->tcp_connected || flow->tcp == nullptr) {
+        return UserspaceIpResult::TransportError;
+    }
+    const err_t shut_down = tcp_shutdown(flow->tcp, 0, 1);
+    if (shut_down != ERR_OK) {
+        return shut_down == ERR_MEM || shut_down == ERR_BUF ? UserspaceIpResult::QueueFull : UserspaceIpResult::TransportError;
+    }
+    flow->tcp_local_write_closed = true;
+    return UserspaceIpResult::Success;
 }
 
 UserspaceIpResult UserspaceIpAdapter::Input(std::span<const std::uint8_t> packet) {
@@ -254,12 +375,28 @@ void UserspaceIpAdapter::ClearInboundDatagrams() {
     m_pending_inbound_fragment = false;
 }
 
+void UserspaceIpAdapter::ClearInboundStreams() {
+    m_inbound_stream_count = 0;
+}
+
+void UserspaceIpAdapter::ClearTcpEvents() {
+    m_tcp_event_count = 0;
+}
+
 std::span<const UserspaceIpPacket> UserspaceIpAdapter::OutboundPackets() const {
     return std::span<const UserspaceIpPacket>(m_outbound_packets).first(m_outbound_packet_count);
 }
 
 std::span<const UserspaceIpDatagram> UserspaceIpAdapter::InboundDatagrams() const {
     return std::span<const UserspaceIpDatagram>(m_inbound_datagrams).first(m_inbound_datagram_count);
+}
+
+std::span<const UserspaceIpStreamData> UserspaceIpAdapter::InboundStreams() const {
+    return std::span<const UserspaceIpStreamData>(m_inbound_streams).first(m_inbound_stream_count);
+}
+
+std::span<const UserspaceIpTcpEvent> UserspaceIpAdapter::TcpEvents() const {
+    return std::span<const UserspaceIpTcpEvent>(m_tcp_events).first(m_tcp_event_count);
 }
 
 bool UserspaceIpAdapter::HadInboundDatagramRejection() const {
@@ -295,6 +432,17 @@ UserspaceIpAdapter::FlowSlot* UserspaceIpAdapter::FindFlow(std::uint64_t token) 
         return candidate.active && candidate.token == token;
     });
     return flow == m_flows.end() ? nullptr : std::addressof(*flow);
+}
+
+bool UserspaceIpAdapter::PushTcpEvent(FlowSlot& flow, UserspaceIpTcpEventType type, UserspaceIpResult result) {
+    if (m_tcp_event_count == m_tcp_events.size()) {
+        ++m_statistics.callback_rejections;
+        RecordRejection(UserspaceIpRejection::InboundCollector);
+        return false;
+    }
+    m_tcp_events[m_tcp_event_count++] = {.token = flow.token, .type = type, .result = result};
+    ++m_statistics.callback_deliveries;
+    return true;
 }
 
 err_t UserspaceIpAdapter::InitializeNetif(netif* netif) {
@@ -368,6 +516,81 @@ void UserspaceIpAdapter::Receive(void* context, udp_pcb*, pbuf* packet, const ip
     if (packet != nullptr) {
         pbuf_free(packet);
     }
+}
+
+err_t UserspaceIpAdapter::TcpConnected(void* context, tcp_pcb*, err_t error) {
+    auto* flow = static_cast<FlowSlot*>(context);
+    if (flow == nullptr || flow->owner == nullptr || !flow->active || flow->kind != UserspaceIpFlowKind::Tcp) {
+        return ERR_ABRT;
+    }
+    if (error != ERR_OK) {
+        static_cast<void>(flow->owner->PushTcpEvent(*flow, UserspaceIpTcpEventType::Reset, UserspaceIpResult::TransportError));
+        return error;
+    }
+    flow->tcp_connected = true;
+    return flow->owner->PushTcpEvent(*flow, UserspaceIpTcpEventType::Connected, UserspaceIpResult::Success) ? ERR_OK : ERR_MEM;
+}
+
+err_t UserspaceIpAdapter::TcpReceive(void* context, tcp_pcb*, pbuf* packet, err_t error) {
+    auto* flow = static_cast<FlowSlot*>(context);
+    if (flow == nullptr || flow->owner == nullptr || !flow->active || flow->kind != UserspaceIpFlowKind::Tcp) {
+        if (packet != nullptr) {
+            pbuf_free(packet);
+        }
+        return ERR_ABRT;
+    }
+    UserspaceIpAdapter& adapter = *flow->owner;
+    if (error != ERR_OK) {
+        if (packet != nullptr) {
+            pbuf_free(packet);
+        }
+        static_cast<void>(adapter.PushTcpEvent(*flow, UserspaceIpTcpEventType::Reset, UserspaceIpResult::TransportError));
+        return error;
+    }
+    if (packet == nullptr) {
+        return adapter.PushTcpEvent(*flow, UserspaceIpTcpEventType::RemoteWriteClosed, UserspaceIpResult::Success) ? ERR_OK : ERR_MEM;
+    }
+    if (packet->tot_len > wgnx::tunnel::MaximumTcpWriteStorageBytes || adapter.m_inbound_stream_count == adapter.m_inbound_streams.size()) {
+        ++adapter.m_statistics.callback_rejections;
+        adapter.RecordRejection(UserspaceIpRejection::InboundCollector);
+        return ERR_MEM;
+    }
+    UserspaceIpStreamData& stream = adapter.m_inbound_streams[adapter.m_inbound_stream_count];
+    if (pbuf_copy_partial(packet, stream.payload.data(), packet->tot_len, 0) != packet->tot_len) {
+        ++adapter.m_statistics.callback_rejections;
+        adapter.RecordRejection(UserspaceIpRejection::InboundCollector);
+        return ERR_MEM;
+    }
+    stream.token = flow->token;
+    stream.size = packet->tot_len;
+    ++adapter.m_inbound_stream_count;
+    tcp_recved(flow->tcp, packet->tot_len);
+    pbuf_free(packet);
+    ++adapter.m_statistics.callback_deliveries;
+    return ERR_OK;
+}
+
+err_t UserspaceIpAdapter::TcpSent(void* context, tcp_pcb*, u16_t) {
+    auto* flow = static_cast<FlowSlot*>(context);
+    return flow != nullptr && flow->owner != nullptr && flow->active && flow->kind == UserspaceIpFlowKind::Tcp &&
+                   flow->owner->PushTcpEvent(*flow, UserspaceIpTcpEventType::Writable, UserspaceIpResult::Success)
+               ? ERR_OK
+               : ERR_MEM;
+}
+
+err_t UserspaceIpAdapter::TcpPoll(void* context, tcp_pcb*) {
+    auto* flow = static_cast<FlowSlot*>(context);
+    return flow != nullptr && flow->owner != nullptr && flow->active && flow->kind == UserspaceIpFlowKind::Tcp ? ERR_OK : ERR_ABRT;
+}
+
+void UserspaceIpAdapter::TcpError(void* context, err_t) {
+    auto* flow = static_cast<FlowSlot*>(context);
+    if (flow == nullptr || flow->owner == nullptr || !flow->active || flow->kind != UserspaceIpFlowKind::Tcp) {
+        return;
+    }
+    flow->tcp = nullptr;
+    flow->tcp_connected = false;
+    static_cast<void>(flow->owner->PushTcpEvent(*flow, UserspaceIpTcpEventType::Reset, UserspaceIpResult::TransportError));
 }
 
 void UserspaceIpAdapter::ClearReassembly() {

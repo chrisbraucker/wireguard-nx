@@ -5,6 +5,7 @@
 
 extern "C" {
 #include <lwip/netif.h>
+#include <lwip/tcp.h>
 #include <lwip/udp.h>
 }
 
@@ -57,6 +58,30 @@ struct UserspaceIpFlow {
     wgnx::tunnel::Ipv4Endpoint remote{};
 };
 
+enum class UserspaceIpFlowKind : std::uint8_t {
+    Udp = 0,
+    Tcp,
+};
+
+enum class UserspaceIpTcpEventType : std::uint8_t {
+    Connected = 0,
+    Writable,
+    RemoteWriteClosed,
+    Reset,
+};
+
+struct UserspaceIpTcpEvent {
+    std::uint64_t token{};
+    UserspaceIpTcpEventType type{};
+    UserspaceIpResult result{};
+};
+
+struct UserspaceIpStreamData {
+    std::uint64_t token{};
+    std::array<std::uint8_t, wgnx::tunnel::MaximumTcpWriteStorageBytes> payload{};
+    std::uint16_t size{};
+};
+
 struct UserspaceIpPacket {
     std::array<std::uint8_t, wgnx::MaxInnerIpv4PacketSize> bytes{};
     std::uint16_t size{};
@@ -74,6 +99,8 @@ class UserspaceIpAdapter {
     static constexpr std::size_t MaximumFlows = 16;
     static constexpr std::size_t OutboundPacketCapacity = 4;
     static constexpr std::size_t InboundDatagramCapacity = 4;
+    static constexpr std::size_t InboundStreamCapacity = 4;
+    static constexpr std::size_t TcpEventCapacity = 4;
 
     ~UserspaceIpAdapter();
 
@@ -81,16 +108,23 @@ class UserspaceIpAdapter {
     void Reset();
     [[nodiscard]] bool SetMtu(std::uint16_t mtu);
     [[nodiscard]] UserspaceIpResult OpenFlow(const UserspaceIpFlow& flow);
+    [[nodiscard]] UserspaceIpResult OpenTcpFlow(const UserspaceIpFlow& flow);
     void CloseFlow(std::uint64_t token);
     [[nodiscard]] UserspaceIpResult Send(std::uint64_t token, std::span<const std::uint8_t> payload);
+    [[nodiscard]] UserspaceIpResult WriteTcp(std::uint64_t token, std::span<const std::uint8_t> payload);
+    [[nodiscard]] UserspaceIpResult ShutdownTcpWrite(std::uint64_t token);
     [[nodiscard]] UserspaceIpResult Input(std::span<const std::uint8_t> packet);
     void RunTimeouts();
     [[nodiscard]] std::uint32_t NextTimeoutDelayMs() const;
 
     void ClearOutboundPackets();
     void ClearInboundDatagrams();
+    void ClearInboundStreams();
+    void ClearTcpEvents();
     [[nodiscard]] std::span<const UserspaceIpPacket> OutboundPackets() const;
     [[nodiscard]] std::span<const UserspaceIpDatagram> InboundDatagrams() const;
+    [[nodiscard]] std::span<const UserspaceIpStreamData> InboundStreams() const;
+    [[nodiscard]] std::span<const UserspaceIpTcpEvent> TcpEvents() const;
     [[nodiscard]] bool HadInboundDatagramRejection() const;
     [[nodiscard]] bool HadInputRejection() const;
     [[nodiscard]] bool HasPendingInboundFragment() const;
@@ -103,14 +137,24 @@ class UserspaceIpAdapter {
     struct FlowSlot {
         UserspaceIpAdapter* owner{};
         udp_pcb* pcb{};
+        tcp_pcb* tcp{};
         std::uint64_t token{};
+        UserspaceIpFlowKind kind{};
+        bool tcp_connected{};
+        bool tcp_local_write_closed{};
         bool active{};
     };
 
     [[nodiscard]] FlowSlot* FindFlow(std::uint64_t token);
+    [[nodiscard]] bool PushTcpEvent(FlowSlot& flow, UserspaceIpTcpEventType type, UserspaceIpResult result);
     [[nodiscard]] static err_t InitializeNetif(netif* netif);
     [[nodiscard]] static err_t Output(netif* netif, pbuf* packet, const ip4_addr_t* destination);
     static void Receive(void* context, udp_pcb* pcb, pbuf* packet, const ip_addr_t* remote, u16_t remote_port);
+    static err_t TcpConnected(void* context, tcp_pcb* pcb, err_t error);
+    static err_t TcpReceive(void* context, tcp_pcb* pcb, pbuf* packet, err_t error);
+    static err_t TcpSent(void* context, tcp_pcb* pcb, u16_t length);
+    static err_t TcpPoll(void* context, tcp_pcb* pcb);
+    static void TcpError(void* context, err_t error);
     void ClearReassembly();
     void RecordRejection(UserspaceIpRejection rejection);
 
@@ -118,10 +162,14 @@ class UserspaceIpAdapter {
     std::array<FlowSlot, MaximumFlows> m_flows{};
     std::array<UserspaceIpPacket, OutboundPacketCapacity> m_outbound_packets{};
     std::array<UserspaceIpDatagram, InboundDatagramCapacity> m_inbound_datagrams{};
+    std::array<UserspaceIpStreamData, InboundStreamCapacity> m_inbound_streams{};
+    std::array<UserspaceIpTcpEvent, TcpEventCapacity> m_tcp_events{};
     std::array<std::uint8_t, 4> m_local_address{};
     std::uint16_t m_mtu{};
     std::uint8_t m_outbound_packet_count{};
     std::uint8_t m_inbound_datagram_count{};
+    std::uint8_t m_inbound_stream_count{};
+    std::uint8_t m_tcp_event_count{};
     std::uint32_t m_epoch{};
     UserspaceIpStatistics m_statistics{};
     bool m_inbound_datagram_rejected{};

@@ -71,6 +71,15 @@ void TestUserspaceIpAdapter(TestContext& context) {
         "adapter did not emit a complete IPv4 UDP packet"
     );
     adapter.CloseFlow(Flow.token);
+    adapter.ClearOutboundPackets();
+    WGNX_TEST_REQUIRE(
+        context,
+        adapter.OpenTcpFlow(Flow) == UserspaceIpResult::Success && adapter.OutboundPackets().size() == 1 &&
+            adapter.OutboundPackets().front().bytes[9] == 6 && adapter.WriteTcp(Flow.token, Small) == UserspaceIpResult::TransportError &&
+            adapter.ShutdownTcpWrite(Flow.token) == UserspaceIpResult::TransportError,
+        "adapter did not open one bounded TCP PCB and emit its SYN through the packet collector"
+    );
+    adapter.CloseFlow(Flow.token);
     WGNX_TEST_REQUIRE(context, adapter.OpenFlow(Flow) == UserspaceIpResult::Success, "adapter did not release a closed PCB for reuse");
 
     adapter.ClearOutboundPackets();
