@@ -151,12 +151,16 @@ Advertise connected IPv4 UDP and connected IPv4 TCP independently.
   It checks the API and TCP capability, waits for the asynchronous open transition, validates the WireGuard-owned virtual local endpoint, writes `NXRV TCP <id>\r\n`, requests a local half-close, validates the ACK and remote EOF, then closes the flow.
   Until the lwIP TCP adapter advertises `ConnectedIpv4Tcp`, the scenario fails at the capability boundary without opening a native BSD socket.
 
-- [ ] **5. Make the scenario fail precisely at every contract boundary.**
+- [x] **5. Make the scenario fail precisely at every contract boundary.**
 
   Distinguish service absence, API mismatch, missing capability, route rejection, peer unavailability, connect failure, deadline expiry, queue pressure, stale handle, premature EOF, reset, malformed reply, and terminal service loss.
   Preserve the already implemented rule that a completion-event wake followed by CMIF failure is terminal sysmodule shutdown.
   Advance and persist the workload ID before starting the run, and keep the native BSD TCP scenario unchanged as the comparison path.
   Add host coverage for configuration parsing, validation, scenario selection, and any transport-neutral request or reply helper extracted from the existing native scenario.
+
+  Direct TCP diagnostics now distinguish service absence, API mismatch, unavailable TCP capability, immediate protocol statuses, terminal flow cause, separate connect and reply deadlines, premature EOF, malformed replies, and shutdown after a completion wake.
+  The harness provides a configurable stalled established TCP endpoint for deadline evaluation without conflating it with a SYN blackhole.
+  Host tests execute the production runtime INI loader for TCP scenario selection and invalid-value fallback, and the workload ID remains reserved and persisted before the worker starts.
 
 ### WireGuard-Owned lwIP TCP
 
