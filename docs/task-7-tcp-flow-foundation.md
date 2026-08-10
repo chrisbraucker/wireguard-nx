@@ -19,6 +19,14 @@ The client opened `AF_INET`, `SOCK_STREAM`, `IPPROTO_TCP`, connected to the conf
 This is enough evidence for the first connected-client stream contract and direct WGNX scenario.
 It does not yet characterize nonblocking connect, `Shutdown`, partial writes, remote refusal, reset, or timeout behavior at the BSD boundary, so those translations remain MITM acceptance work rather than assumptions in this slice.
 
+## Version 3 Baseline
+
+The version 3 baseline was verified locally on 2026-08-10 with `make -C wg-sysmodule verify`.
+The aggregate gate completed formatting, static analysis, clang-tidy, warnings, host tests, ASan/UBSan, fuzz, target, stack, and resource checks.
+The private wire contract has two root commands and nine client commands, a 64-byte capability record, 16-byte connected-open request, 24-byte open result, 24-byte datagram descriptor, 16-byte datagram disposition, 48-byte completion record, and 40-byte flow-state result.
+Its client-actionable behavioral baseline is four client contexts, four flows per client, 16 total flows, 1,472 bytes of UDP payload storage, a 16-record completion queue, eight batch entries, 16 policy routes, and the documented post-lwIP UDP latency and throughput results in `docs/PERF.md`.
+The Task 6 target footprint baseline is 1,401,026 static bytes, a 263,469-byte NSO, and a 264,529-byte NSP within the reviewed limits.
+
 ## Current Code Boundary
 
 | Current source                                                           | Responsibility to preserve                                                                                                   | Task 7 foundation change                                                                                                                                  |
@@ -100,12 +108,14 @@ Advertise connected IPv4 UDP and connected IPv4 TCP independently.
 
 ### Contract Cutover
 
-- [ ] **1. Record the version 3 baseline and finalize the version 4 wire contract.**
+- [x] **1. Record the version 3 baseline and finalize the version 4 wire contract.**
 
   Run the existing WireGuard and Toolbox host, sanitizer, warning, target, stack, static-analysis, and resource gates before changing layouts.
   Record current structure sizes, command IDs, capability fields, queue capacities, UDP latency and throughput baselines, and the latest target footprint.
   Define the exact version 4 command IDs, enums, records, size assertions, status semantics, state transitions, completion ordering, and shutdown behavior before implementing runtime TCP state.
   Treat existing behavior as a correctness baseline, not a compatibility requirement.
+
+  The resulting version 4 contract direction is recorded above and will replace rather than preserve the version 3 surface.
 
 - [ ] **2. Replace the private protocol and client wrappers atomically.**
 
