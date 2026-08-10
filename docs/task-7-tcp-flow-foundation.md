@@ -191,12 +191,17 @@ Advertise connected IPv4 UDP and connected IPv4 TCP independently.
   Reset and close detach callbacks and abort TCP PCBs, and the owner-size bound rises from 16 KiB to 24 KiB to hold four copied 1,460-byte stream records alongside the existing UDP collectors.
   Host coverage verifies one TCP PCB emits a SYN through the normal complete-IP packet collector and rejects stream writes before connection completion.
 
-- [ ] **8. Extend the serialized owner and daemon three-phase boundary for TCP operations.**
+- [x] **8. Extend the serialized owner and daemon three-phase boundary for TCP operations.**
 
   Add generation-tagged open, write, write-shutdown, close, input, and timeout operations to the existing owner lane.
   Preserve the one accepted data operation slot unless measurement proves it inadequate, and keep reset and close control work coalesced or reserved so data pressure cannot suppress lifecycle cleanup.
   Reserve and validate under the daemon mutex, execute lwIP after releasing it, and commit results under the mutex only when client, flow, peer, policy, adapter epoch, and operation generation still match.
   Drain every complete IPv4 output collector through atomic `PacketDataPlane` batch admission and never publish an individual TCP segment from inside a netif callback.
+
+  TCP open, write, write-shutdown, close, input, receive-credit, and timeout work now share the one-generation owner data slot, while reset and fixed control close work remain reserved ahead of it.
+  Input carries peer, policy, and adapter-epoch identities and is rejected before lwIP when any is stale.
+  The daemon commits the reserved TCP open only after owner execution and routes complete copied output packets through one atomic packet-plane batch after the owner returns.
+  Host coverage verifies that a tagged TCP open emits a copied SYN and that reserved TCP cleanup preempts ordinary data work.
 
 - [ ] **9. Implement asynchronous connect state and virtual endpoint publication.**
 

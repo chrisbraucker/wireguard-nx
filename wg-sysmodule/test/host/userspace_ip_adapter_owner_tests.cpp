@@ -103,6 +103,35 @@ void TestUserspaceIpAdapterOwner(TestContext& context) {
             control_close_preempted && deferred_send_result == sysmodule::ip::UserspaceIpResult::InvalidArgument,
         "adapter owner did not reserve serialized control closure ahead of a pending data operation"
     );
+    sysmodule::ip::UserspaceIpFlow tcp_flow = flow;
+    tcp_flow.token = 2;
+    tcp_flow.local.port = 49153;
+    sysmodule::runtime::UserspaceIpAdapterOwner::OperationTicket tcp_open_ticket{};
+    const bool tcp_open_queued =
+        owner.QueueOpenTcpFlowLocked(tcp_flow, &tcp_open_ticket) == sysmodule::runtime::UserspaceIpAdapterOwner::QueueResult::Queued;
+    const auto tcp_open = owner.TakeNextLocked();
+    const bool tcp_open_tagged = tcp_open.has_value() &&
+                                 tcp_open->kind == sysmodule::runtime::UserspaceIpAdapterOwner::OperationKind::OpenTcpFlow &&
+                                 tcp_open->ticket.generation == tcp_open_ticket.generation && tcp_open->flow.token == tcp_flow.token;
+    if (tcp_open) {
+        owner.CompleteLocked(*tcp_open, owner.Execute(*tcp_open));
+    }
+    const auto tcp_open_packets = owner.OutboundPacketsLocked(tcp_open_ticket);
+    const auto tcp_open_result = owner.TakeResultLocked(tcp_open_ticket);
+    const bool tcp_close_queued = owner.QueueControlCloseFlowLocked(tcp_flow.token);
+    const auto tcp_close = owner.TakeNextLocked();
+    const bool tcp_close_reserved = tcp_close.has_value() &&
+                                    tcp_close->kind == sysmodule::runtime::UserspaceIpAdapterOwner::OperationKind::CloseFlow &&
+                                    !tcp_close->ticket.IsValid() && tcp_close->flow.token == tcp_flow.token;
+    if (tcp_close) {
+        owner.CompleteLocked(*tcp_close, owner.Execute(*tcp_close));
+    }
+    WGNX_TEST_REQUIRE(
+        context,
+        tcp_open_queued && tcp_open_tagged && tcp_open_result == sysmodule::ip::UserspaceIpResult::Success &&
+            tcp_open_packets.size() == 1 && tcp_open_packets.front().bytes[9] == 6 && tcp_close_queued && tcp_close_reserved,
+        "adapter owner did not serialize a tagged TCP open and reserved TCP cleanup through the lwIP owner lane"
+    );
     constexpr std::array<std::uint8_t, 20> InputPacket = {
         0x45, 0x00, 0x00, 0x14, 0x00, 0x01, 0x00, 0x00, 0x40, 0x11, 0x66, 0xD6, 0x0A, 0xFB, 0x00, 0x02, 0x0A, 0x0D, 0x0D, 0x08,
     };
