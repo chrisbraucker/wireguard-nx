@@ -140,12 +140,16 @@ Advertise connected IPv4 UDP and connected IPv4 TCP independently.
 
 ### Direct Toolbox TCP Client
 
-- [ ] **4. Add a protocol-native direct TCP scenario to Toolbox.**
+- [x] **4. Add a protocol-native direct TCP scenario to Toolbox.**
 
   Add `DirectTunnelTcp` beside the native `BsdSystemTcp` control scenario and reuse the active profile's tunnel IPv4 destination, TCP port, receive deadline, workload ID, request bytes, and expected ACK.
   Open the root and child services, validate API version 4 and the connected-TCP capability, obtain the completion event, open one TCP flow, and wait for `Open` before writing.
   Send the complete tagged request through bounded write calls, receive ordered stream completions until the complete ACK is assembled, observe orderly remote write closure when the harness closes, and close the flow.
   Log the advertised local endpoint, connection time, accepted and received bytes, write retries, event wakes, state transitions, terminal reason, and close result.
+
+  Toolbox now provides `DirectTunnelTcp` with an INI-selectable scenario and the active profile's tunnel endpoint and TCP port.
+  It checks the API and TCP capability, waits for the asynchronous open transition, validates the WireGuard-owned virtual local endpoint, writes `NXRV TCP <id>\r\n`, requests a local half-close, validates the ACK and remote EOF, then closes the flow.
+  Until the lwIP TCP adapter advertises `ConnectedIpv4Tcp`, the scenario fails at the capability boundary without opening a native BSD socket.
 
 - [ ] **5. Make the scenario fail precisely at every contract boundary.**
 
