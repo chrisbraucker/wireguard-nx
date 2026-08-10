@@ -39,6 +39,8 @@ void TestTunnelFlowPlane(TestContext& context) {
     FillConfig(&config, "flow-plane", "10.13.13.8/24", InitiatorPrivateKey, ResponderPublicKey);
     std::snprintf(config.allowed_ips.data(), config.allowed_ips.size(), "%s", "10.0.0.0/8, 10.251.0.0/16");
     const PeerIdentity first_peer{.peer_index = PeerIndex{0}, .activation_generation = ActivationGeneration{7}};
+    std::array<CompletionRecord, MaximumBatchEntries> completions{};
+    std::array<std::uint8_t, MaximumUdpPayloadStorageBytes> received_payload{};
 
     config.mtu = 0;
     TunnelFlowPlane mtu_plane{};
@@ -241,6 +243,23 @@ void TestTunnelFlowPlane(TestContext& context) {
             completions[0].type == CompletionType::Writable && completions[0].flow.value == tcp_open_reservation.result.flow.value,
         "TCP write pressure did not retain the accepted flow or publish one coalesced writable recovery"
     );
+    const auto first_tcp_shutdown = tcp_open_plane.PrepareTcpShutdown(tcp_open_client, tcp_open_reservation.result.flow, 1110);
+    const bool first_tcp_shutdown_marked = tcp_open_plane.MarkTcpLocalWriteClosed(tcp_open_reservation.adapter_token, 1111);
+    const auto repeated_tcp_shutdown = tcp_open_plane.PrepareTcpShutdown(tcp_open_client, tcp_open_reservation.result.flow, 1112);
+    const bool repeated_tcp_shutdown_marked = tcp_open_plane.MarkTcpLocalWriteClosed(tcp_open_reservation.adapter_token, 1113);
+    const auto local_shutdown_state = tcp_open_plane.GetFlowState(tcp_open_client, tcp_open_reservation.result.flow);
+    const auto post_shutdown_write = tcp_open_plane.PrepareTcpWrite(tcp_open_client, tcp_descriptor, TcpPayload, 1114);
+    const auto local_shutdown_completion = tcp_open_plane.ReceiveCompletions(tcp_open_client, completions, received_payload);
+    WGNX_TEST_REQUIRE(
+        context,
+        first_tcp_shutdown.status == ProtocolStatus::Success && first_tcp_shutdown_marked &&
+            repeated_tcp_shutdown.status == ProtocolStatus::Success && repeated_tcp_shutdown_marked &&
+            local_shutdown_state.state == FlowState::Closing && (local_shutdown_state.stream_flags & FlowStreamFlagLocalWriteOpen) == 0 &&
+            post_shutdown_write.status == ProtocolStatus::LocalWriteClosed && local_shutdown_completion.status == ProtocolStatus::Success &&
+            local_shutdown_completion.count == 1 && completions[0].type == CompletionType::FlowStateChanged &&
+            completions[0].flow_state == FlowState::Closing,
+        "TCP write shutdown was not idempotent or did not preserve the post-shutdown write boundary"
+    );
 
     TunnelFlowPlane tcp_receive_plane{};
     const TunnelClientId tcp_receive_client = tcp_receive_plane.CreateClient(nullptr, nullptr);
@@ -272,16 +291,24 @@ void TestTunnelFlowPlane(TestContext& context) {
     std::array<std::uint8_t, 1> too_small_tcp_payload{};
     const auto tcp_undrained = tcp_receive_plane.ReceiveCompletions(tcp_receive_client, completions, too_small_tcp_payload);
     const auto tcp_drained = tcp_receive_plane.ReceiveCompletions(tcp_receive_client, completions, received_payload);
+    const bool tcp_drain_order = tcp_drained.count == MaximumInboundDatagramsPerFlow + 1 &&
+                                 completions[0].type == CompletionType::InboundTcpStream &&
+                                 completions[MaximumInboundDatagramsPerFlow].type == CompletionType::FlowStateChanged &&
+                                 completions[MaximumInboundDatagramsPerFlow].flow_state == FlowState::Closing;
+    tcp_receive_plane.InvalidatePeerActivation(first_peer, FlowTerminalReason::PeerDeactivated, 1132);
+    const auto invalidated_tcp_state = tcp_receive_plane.GetFlowState(tcp_receive_client, tcp_receive_reservation.result.flow);
+    const auto invalidated_tcp_completion = tcp_receive_plane.ReceiveCompletions(tcp_receive_client, completions, received_payload);
     WGNX_TEST_REQUIRE(
         context,
         tcp_receive_reservation.IsReserved() && tcp_receive_committed && tcp_receive_connected &&
             tcp_stream_deliveries == MaximumInboundDatagramsPerFlow &&
             tcp_stream_overflow.disposition == TunnelInboundDisposition::DroppedQueueFull && remote_closed &&
             tcp_undrained.status == ProtocolStatus::OutputBufferTooSmall && tcp_drained.status == ProtocolStatus::Success &&
-            tcp_drained.count == MaximumInboundDatagramsPerFlow + 1 && completions[0].type == CompletionType::InboundTcpStream &&
-            completions[MaximumInboundDatagramsPerFlow].type == CompletionType::FlowStateChanged &&
-            completions[MaximumInboundDatagramsPerFlow].flow_state == FlowState::Closing,
-        "TCP receive pressure did not retain admitted stream bytes ahead of its remote half-close notification"
+            tcp_drain_order && invalidated_tcp_state.status == ProtocolStatus::FlowClosed &&
+            invalidated_tcp_state.terminal_reason == FlowTerminalReason::PeerDeactivated &&
+            invalidated_tcp_completion.status == ProtocolStatus::Success && invalidated_tcp_completion.count == 1 &&
+            completions[0].terminal_reason == FlowTerminalReason::PeerDeactivated,
+        "TCP receive pressure did not retain admitted stream bytes ahead of half-close and peer-invalidation terminal transitions"
     );
 
     config.leak_protection = true;
@@ -323,8 +350,6 @@ void TestTunnelFlowPlane(TestContext& context) {
     );
     const auto delivered =
         plane.DeliverInboundUdpDatagram(first_peer, plane.PolicyGeneration(), opened.flow.value, open.remote, Payload, 150);
-    std::array<CompletionRecord, MaximumBatchEntries> completions{};
-    std::array<std::uint8_t, MaximumUdpPayloadStorageBytes> received_payload{};
     const auto received = plane.ReceiveCompletions(client, completions, received_payload);
     WGNX_TEST_REQUIRE(
         context,

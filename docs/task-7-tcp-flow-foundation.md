@@ -243,16 +243,18 @@ Advertise connected IPv4 UDP and connected IPv4 TCP independently.
   A null pbuf produces the distinct remote-write-close state transition after already admitted bytes, while reset remains a terminal close reason.
   Host coverage verifies stream-completion pressure, preservation after an undersized drain buffer, and delivery of all admitted bytes before the remote half-close completion.
 
-- [ ] **12. Implement half-close, close, timeout, and invalidation semantics.**
+- [x] **12. Implement half-close, close, timeout, and invalidation semantics.**
 
   Queue local write shutdown after previously accepted bytes, make repeated shutdown idempotent, and continue receiving until remote EOF or terminal error.
   Define `CloseFlow` as client ownership release with bounded cleanup, including the policy for pending unsent bytes and any graceful-close state retained after the client no longer receives data.
   Drive TCP retransmission and connection timers only through the existing serialized `sys_check_timeouts()` path.
   On client destruction, policy change, peer activation change, peer deactivation, adapter reset, or sysmodule shutdown, abort or close the PCB, retire pending operations, scrub copied stream storage, quarantine the virtual tuple, and reject stale callbacks.
 
-  Current state: a connecting flow that remains unopened for five seconds now closes with the terminal `ConnectTimedOut` reason.
+  A connecting flow that remains unopened for five seconds closes with the terminal `ConnectTimedOut` reason.
   The timeout is evaluated after serialized lwIP timer work and its PCB is aborted through a fixed reserved control-close lane, so pending data work cannot suppress cleanup or reset another TCP flow.
-  The remaining half-close and invalidation combinations remain outstanding.
+  Local write shutdown is idempotent at both the raw PCB and flow-state boundary, continues receiving until remote EOF or a terminal error, and rejects later writes with `LocalWriteClosed`.
+  Client destruction, policy and peer transitions, adapter reset, and shutdown abort or retire adapter state, quarantine the virtual tuple, and make stale callbacks harmless.
+  Host coverage verifies connect timeout, repeated local shutdown, remote half-close, peer invalidation, and the distinct terminal reasons.
 
 - [ ] **13. Add deterministic correctness, pressure, and resource coverage.**
 

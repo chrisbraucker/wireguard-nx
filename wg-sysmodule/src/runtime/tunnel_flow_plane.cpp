@@ -475,10 +475,10 @@ PreparedTunnelDatagram TunnelFlowPlane::PrepareTcpWrite(
         outcome.status = wgnx::tunnel::ProtocolStatus::WrongFlowKind;
     } else if (flow->closed) {
         outcome.status = wgnx::tunnel::ProtocolStatus::FlowClosed;
-    } else if (flow->state != wgnx::tunnel::FlowState::Open) {
-        outcome.status = wgnx::tunnel::ProtocolStatus::NotConnected;
     } else if ((flow->stream_flags & wgnx::tunnel::FlowStreamFlagLocalWriteOpen) == 0) {
         outcome.status = wgnx::tunnel::ProtocolStatus::LocalWriteClosed;
+    } else if (flow->state != wgnx::tunnel::FlowState::Open) {
+        outcome.status = wgnx::tunnel::ProtocolStatus::NotConnected;
     } else if (!m_policy_available || flow->peer != m_policy_peer || flow->policy_generation != m_policy_generation) {
         outcome.status = wgnx::tunnel::ProtocolStatus::PeerUnavailable;
     } else {
@@ -796,6 +796,9 @@ bool TunnelFlowPlane::MarkTcpLocalWriteClosed(std::uint64_t adapter_token, wgnx:
         if (flow.closed || flow.pending || flow.kind != wgnx::tunnel::FlowKind::Tcp) {
             return false;
         }
+        if ((flow.stream_flags & wgnx::tunnel::FlowStreamFlagLocalWriteOpen) == 0) {
+            return true;
+        }
         flow.stream_flags &= ~wgnx::tunnel::FlowStreamFlagLocalWriteOpen;
         flow.state = wgnx::tunnel::FlowState::Closing;
         flow.last_activity_at = now;
@@ -821,6 +824,9 @@ bool TunnelFlowPlane::MarkTcpRemoteWriteClosed(std::uint64_t adapter_token, wgnx
         }
         if (flow.closed || flow.pending || flow.kind != wgnx::tunnel::FlowKind::Tcp) {
             return false;
+        }
+        if ((flow.stream_flags & wgnx::tunnel::FlowStreamFlagRemoteWriteOpen) == 0) {
+            return true;
         }
         flow.stream_flags &= ~wgnx::tunnel::FlowStreamFlagRemoteWriteOpen;
         flow.state = wgnx::tunnel::FlowState::Closing;
