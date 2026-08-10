@@ -242,6 +242,48 @@ void TestTunnelFlowPlane(TestContext& context) {
         "TCP write pressure did not retain the accepted flow or publish one coalesced writable recovery"
     );
 
+    TunnelFlowPlane tcp_receive_plane{};
+    const TunnelClientId tcp_receive_client = tcp_receive_plane.CreateClient(nullptr, nullptr);
+    tcp_receive_plane.RefreshPolicy({.configuration = &config, .peer = first_peer, .selected = true}, 1120);
+    static_cast<void>(tcp_receive_plane.ReceiveCompletions(tcp_receive_client, completions, received_payload));
+    const auto tcp_receive_reservation = tcp_receive_plane.ReserveConnectedTcpFlow(tcp_receive_client, open, 1121, TransportReady);
+    const bool tcp_receive_committed = tcp_receive_plane.CommitFlowReservation(tcp_receive_reservation);
+    const bool tcp_receive_connected = tcp_receive_plane.MarkTcpConnected(tcp_receive_reservation.adapter_token, 1122);
+    static_cast<void>(tcp_receive_plane.ReceiveCompletions(tcp_receive_client, completions, received_payload));
+    std::uint32_t tcp_stream_deliveries = 0;
+    for (std::uint32_t index = 0; index < MaximumInboundDatagramsPerFlow; ++index) {
+        const auto delivery = tcp_receive_plane.DeliverInboundTcpStream(
+            first_peer,
+            tcp_receive_plane.PolicyGeneration(),
+            tcp_receive_reservation.adapter_token,
+            TcpPayload,
+            1123 + index
+        );
+        tcp_stream_deliveries += delivery.disposition == TunnelInboundDisposition::Delivered ? 1U : 0U;
+    }
+    const auto tcp_stream_overflow = tcp_receive_plane.DeliverInboundTcpStream(
+        first_peer,
+        tcp_receive_plane.PolicyGeneration(),
+        tcp_receive_reservation.adapter_token,
+        TcpPayload,
+        1130
+    );
+    const bool remote_closed = tcp_receive_plane.MarkTcpRemoteWriteClosed(tcp_receive_reservation.adapter_token, 1131);
+    std::array<std::uint8_t, 1> too_small_tcp_payload{};
+    const auto tcp_undrained = tcp_receive_plane.ReceiveCompletions(tcp_receive_client, completions, too_small_tcp_payload);
+    const auto tcp_drained = tcp_receive_plane.ReceiveCompletions(tcp_receive_client, completions, received_payload);
+    WGNX_TEST_REQUIRE(
+        context,
+        tcp_receive_reservation.IsReserved() && tcp_receive_committed && tcp_receive_connected &&
+            tcp_stream_deliveries == MaximumInboundDatagramsPerFlow &&
+            tcp_stream_overflow.disposition == TunnelInboundDisposition::DroppedQueueFull && remote_closed &&
+            tcp_undrained.status == ProtocolStatus::OutputBufferTooSmall && tcp_drained.status == ProtocolStatus::Success &&
+            tcp_drained.count == MaximumInboundDatagramsPerFlow + 1 && completions[0].type == CompletionType::InboundTcpStream &&
+            completions[MaximumInboundDatagramsPerFlow].type == CompletionType::FlowStateChanged &&
+            completions[MaximumInboundDatagramsPerFlow].flow_state == FlowState::Closing,
+        "TCP receive pressure did not retain admitted stream bytes ahead of its remote half-close notification"
+    );
+
     config.leak_protection = true;
     TunnelFlowPlane protected_plane{};
     NotificationCounter protected_notifications{};

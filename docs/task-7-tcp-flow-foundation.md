@@ -227,7 +227,7 @@ Advertise connected IPv4 UDP and connected IPv4 TCP independently.
   Capacity rejection reports `QueueFull`, marks one writable waiter, and the copied `tcp_sent` callback publishes one coalesced `Writable` completion when capacity returns.
   Host coverage verifies the accepted TCP write identity and one writable recovery after repeated capacity notifications.
 
-- [ ] **11. Implement bounded receive delivery and TCP backpressure.**
+- [x] **11. Implement bounded receive delivery and TCP backpressure.**
 
   Copy received pbuf chains into bounded stream-data collectors in order and publish them through the existing completion-drain payload buffer.
   Call `tcp_recved()` only for bytes successfully admitted to project-owned receive storage.
@@ -237,6 +237,11 @@ Advertise connected IPv4 UDP and connected IPv4 TCP independently.
   Current state: the adapter retains copied stream bytes without calling `tcp_recved()`.
   The daemon queues fixed receive-credit intents only after the flow plane accepts the corresponding stream completion, and the serialized owner applies that credit before ordinary data work.
   This prevents lwIP from reopening the receive window for data rejected by bounded completion storage.
+
+  Copied pbuf chains enter fixed stream collectors in order, and collector pressure returns `ERR_MEM` without freeing or acknowledging the rejected lwIP receive pbuf.
+  Receive credits are emitted only after the flow plane owns a corresponding completion record and are serialized ahead of ordinary data work.
+  A null pbuf produces the distinct remote-write-close state transition after already admitted bytes, while reset remains a terminal close reason.
+  Host coverage verifies stream-completion pressure, preservation after an undersized drain buffer, and delivery of all admitted bytes before the remote half-close completion.
 
 - [ ] **12. Implement half-close, close, timeout, and invalidation semantics.**
 
