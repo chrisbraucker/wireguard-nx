@@ -13,6 +13,7 @@ namespace wgnx::test {
 namespace {
 
 constexpr std::size_t Ipv4HeaderBytes = 20;
+constexpr std::size_t TcpHeaderBytes = 20;
 
 std::uint16_t Checksum(std::span<const std::uint8_t> bytes) {
     std::uint32_t sum{};
@@ -23,6 +24,62 @@ std::uint16_t Checksum(std::span<const std::uint8_t> bytes) {
         sum = (sum & 0xFFFFU) + (sum >> 16U);
     }
     return static_cast<std::uint16_t>(~sum);
+}
+
+std::uint32_t ReadNetworkU32(std::span<const std::uint8_t> bytes, std::size_t offset) {
+    return static_cast<std::uint32_t>(bytes[offset]) << 24U | static_cast<std::uint32_t>(bytes[offset + 1]) << 16U |
+           static_cast<std::uint32_t>(bytes[offset + 2]) << 8U | static_cast<std::uint32_t>(bytes[offset + 3]);
+}
+
+void WriteNetworkU16(std::span<std::uint8_t> bytes, std::size_t offset, std::uint16_t value) {
+    bytes[offset] = static_cast<std::uint8_t>(value >> 8U);
+    bytes[offset + 1] = static_cast<std::uint8_t>(value);
+}
+
+void WriteNetworkU32(std::span<std::uint8_t> bytes, std::size_t offset, std::uint32_t value) {
+    bytes[offset] = static_cast<std::uint8_t>(value >> 24U);
+    bytes[offset + 1] = static_cast<std::uint8_t>(value >> 16U);
+    bytes[offset + 2] = static_cast<std::uint8_t>(value >> 8U);
+    bytes[offset + 3] = static_cast<std::uint8_t>(value);
+}
+
+wgnx::sysmodule::ip::UserspaceIpPacket MakeTcpReply(
+    const wgnx::sysmodule::ip::UserspaceIpPacket& request,
+    std::uint32_t sequence,
+    std::uint32_t acknowledgement,
+    std::uint8_t flags,
+    std::span<const std::uint8_t> payload = {}
+) {
+    wgnx::sysmodule::ip::UserspaceIpPacket reply{};
+    reply.size = static_cast<std::uint16_t>(Ipv4HeaderBytes + TcpHeaderBytes + payload.size());
+    reply.bytes[0] = 0x45;
+    WriteNetworkU16(reply.bytes, 2, reply.size);
+    reply.bytes[6] = 0x40;
+    reply.bytes[8] = 64;
+    reply.bytes[9] = 6;
+    std::copy_n(request.bytes.begin() + 16, 4, reply.bytes.begin() + 12);
+    std::copy_n(request.bytes.begin() + 12, 4, reply.bytes.begin() + 16);
+    WriteNetworkU16(reply.bytes, Ipv4HeaderBytes, static_cast<std::uint16_t>(request.bytes[22] << 8U | request.bytes[23]));
+    WriteNetworkU16(reply.bytes, Ipv4HeaderBytes + 2, static_cast<std::uint16_t>(request.bytes[20] << 8U | request.bytes[21]));
+    WriteNetworkU32(reply.bytes, Ipv4HeaderBytes + 4, sequence);
+    WriteNetworkU32(reply.bytes, Ipv4HeaderBytes + 8, acknowledgement);
+    reply.bytes[Ipv4HeaderBytes + 12] = 0x50;
+    reply.bytes[Ipv4HeaderBytes + 13] = flags;
+    WriteNetworkU16(reply.bytes, Ipv4HeaderBytes + 14, 0xFFFF);
+    std::copy(payload.begin(), payload.end(), reply.bytes.begin() + Ipv4HeaderBytes + TcpHeaderBytes);
+    WriteNetworkU16(reply.bytes, 10, Checksum(std::span<const std::uint8_t>(reply.bytes).first(Ipv4HeaderBytes)));
+
+    std::array<std::uint8_t, 12 + TcpHeaderBytes + wgnx::tunnel::MaximumTcpWriteStorageBytes> pseudo{};
+    std::copy_n(reply.bytes.begin() + 12, 8, pseudo.begin());
+    pseudo[9] = 6;
+    WriteNetworkU16(pseudo, 10, static_cast<std::uint16_t>(TcpHeaderBytes + payload.size()));
+    std::copy_n(reply.bytes.begin() + Ipv4HeaderBytes, TcpHeaderBytes + payload.size(), pseudo.begin() + 12);
+    WriteNetworkU16(
+        reply.bytes,
+        Ipv4HeaderBytes + 16,
+        Checksum(std::span<const std::uint8_t>(pseudo).first(12 + TcpHeaderBytes + payload.size()))
+    );
+    return reply;
 }
 
 std::array<wgnx::sysmodule::ip::UserspaceIpPacket, 3> Reverse(std::span<const wgnx::sysmodule::ip::UserspaceIpPacket> packets) {
@@ -72,8 +129,26 @@ void TestUserspaceIpAdapter(TestContext& context) {
         "adapter did not emit a complete IPv4 UDP packet"
     );
     adapter.CloseFlow(Flow.token);
+    UserspaceIpFlow connecting_flow = Flow;
+    connecting_flow.token = 2;
+    connecting_flow.local.port = 49153;
+    adapter.ClearOutboundPackets();
+    const bool opened_connecting_flow = adapter.OpenTcpFlow(connecting_flow) == UserspaceIpResult::Success;
+    adapter.ClearOutboundPackets();
+    for (std::uint32_t now_ms = 250; now_ms <= 4'000; now_ms += 250) {
+        SetLwipHostTimeForTests(now_ms);
+        adapter.RunTimeouts();
+    }
+    const bool retransmitted_connecting_flow = !adapter.OutboundPackets().empty() && adapter.OutboundPackets().front().bytes[9] == 6;
+    adapter.Reset();
+    WGNX_TEST_REQUIRE(
+        context,
+        opened_connecting_flow && retransmitted_connecting_flow && adapter.Initialize(Local, 1420),
+        "adapter did not progress TCP retransmission timers or retire a connecting PCB during reset"
+    );
     adapter.ClearOutboundPackets();
     wgnx::wireguard::InnerIpv4TcpTuple tcp_tuple{};
+    wgnx::sysmodule::ip::UserspaceIpPacket tcp_syn{};
     WGNX_TEST_REQUIRE(
         context,
         adapter.OpenTcpFlow(Flow) == UserspaceIpResult::Success && adapter.OutboundPackets().size() == 1 &&
@@ -86,8 +161,63 @@ void TestUserspaceIpAdapter(TestContext& context) {
             tcp_tuple.source_port == Flow.local.port && tcp_tuple.destination_port == Flow.remote.port,
         "adapter did not open one bounded TCP PCB or retain a parseable pinned output tuple"
     );
-    adapter.CloseFlow(Flow.token);
-    WGNX_TEST_REQUIRE(context, adapter.OpenFlow(Flow) == UserspaceIpResult::Success, "adapter did not release a closed PCB for reuse");
+    tcp_syn = adapter.OutboundPackets().front();
+    constexpr std::uint32_t RemoteInitialSequence = 0x10203040;
+    const auto tcp_syn_ack = MakeTcpReply(tcp_syn, RemoteInitialSequence, ReadNetworkU32(tcp_syn.bytes, Ipv4HeaderBytes + 4) + 1, 0x12);
+    adapter.ClearOutboundPackets();
+    WGNX_TEST_REQUIRE(
+        context,
+        adapter.Input(std::span<const std::uint8_t>(tcp_syn_ack.bytes).first(tcp_syn_ack.size)) == UserspaceIpResult::Success &&
+            adapter.TcpEvents().size() == 1 && adapter.TcpEvents().front().type == UserspaceIpTcpEventType::Connected &&
+            adapter.TcpEvents().front().token == Flow.token,
+        "adapter did not complete a deterministic lwIP TCP handshake"
+    );
+    adapter.ClearTcpEvents();
+    adapter.ClearOutboundPackets();
+    WGNX_TEST_REQUIRE(
+        context,
+        adapter.WriteTcp(Flow.token, Small) == UserspaceIpResult::Success && adapter.OutboundPackets().size() == 1 &&
+            adapter.OutboundPackets().front().bytes[Ipv4HeaderBytes + 13] == 0x18 &&
+            std::equal(Small.begin(), Small.end(), adapter.OutboundPackets().front().bytes.begin() + Ipv4HeaderBytes + TcpHeaderBytes),
+        "adapter did not emit one ordered TCP stream segment after connect"
+    );
+    const auto tcp_write = adapter.OutboundPackets().front();
+    constexpr std::array<std::uint8_t, 2> FirstReply = {5, 6};
+    constexpr std::array<std::uint8_t, 2> SecondReply = {7, 8};
+    const std::uint32_t local_next_sequence = ReadNetworkU32(tcp_write.bytes, Ipv4HeaderBytes + 4) + Small.size();
+    const auto first_reply = MakeTcpReply(tcp_syn, RemoteInitialSequence + 1, local_next_sequence, 0x18, FirstReply);
+    const auto second_reply = MakeTcpReply(tcp_syn, RemoteInitialSequence + 1 + FirstReply.size(), local_next_sequence, 0x18, SecondReply);
+    adapter.ClearOutboundPackets();
+    WGNX_TEST_REQUIRE(
+        context,
+        adapter.Input(std::span<const std::uint8_t>(first_reply.bytes).first(first_reply.size)) == UserspaceIpResult::Success &&
+            adapter.Input(std::span<const std::uint8_t>(second_reply.bytes).first(second_reply.size)) == UserspaceIpResult::Success &&
+            adapter.InboundStreams().size() == 2 && adapter.InboundStreams()[0].token == Flow.token &&
+            adapter.InboundStreams()[0].size == FirstReply.size() && adapter.InboundStreams()[1].size == SecondReply.size() &&
+            std::equal(FirstReply.begin(), FirstReply.end(), adapter.InboundStreams()[0].payload.begin()) &&
+            std::equal(SecondReply.begin(), SecondReply.end(), adapter.InboundStreams()[1].payload.begin()) &&
+            adapter.AcknowledgeTcpReceive(
+                {{{.token = Flow.token, .bytes = static_cast<std::uint16_t>(FirstReply.size() + SecondReply.size())}}}
+            ) == UserspaceIpResult::Success,
+        "adapter did not retain, order, and acknowledge deterministic remote TCP stream delivery"
+    );
+    const auto tcp_fin =
+        MakeTcpReply(tcp_syn, RemoteInitialSequence + 1 + FirstReply.size() + SecondReply.size(), local_next_sequence, 0x11);
+    adapter.ClearTcpEvents();
+    WGNX_TEST_REQUIRE(
+        context,
+        adapter.Input(std::span<const std::uint8_t>(tcp_fin.bytes).first(tcp_fin.size)) == UserspaceIpResult::Success &&
+            adapter.TcpEvents().size() == 1 && adapter.TcpEvents().front().type == UserspaceIpTcpEventType::RemoteWriteClosed &&
+            adapter.ShutdownTcpWrite(Flow.token) == UserspaceIpResult::Success &&
+            adapter.ShutdownTcpWrite(Flow.token) == UserspaceIpResult::Success,
+        "adapter did not preserve orderly remote EOF and idempotent local half-close"
+    );
+    adapter.Reset();
+    WGNX_TEST_REQUIRE(
+        context,
+        adapter.Initialize(Local, 1420) && adapter.OpenFlow(Flow) == UserspaceIpResult::Success,
+        "adapter did not retire an established TCP PCB during reset and make the tuple reusable"
+    );
 
     adapter.ClearOutboundPackets();
     std::array<std::uint8_t, wgnx::tunnel::MaximumUdpPayloadStorageBytes> payload{};
@@ -146,7 +276,7 @@ void TestUserspaceIpAdapter(TestContext& context) {
         "adapter did not reset the reassembly fixture before expiry coverage"
     );
     static_cast<void>(adapter.Input(std::span<const std::uint8_t>(reversed[0].bytes).first(reversed[0].size)));
-    for (std::uint32_t now_ms = 1'000; now_ms <= 16'000; now_ms += 1'000) {
+    for (std::uint32_t now_ms = 5'000; now_ms <= 20'000; now_ms += 1'000) {
         SetLwipHostTimeForTests(now_ms);
         adapter.RunTimeouts();
     }

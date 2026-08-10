@@ -21,6 +21,10 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     adapter.Reset();
     SetLwipHostTimeForTests(static_cast<std::uint32_t>(size));
     if (adapter.Initialize(Local, 576) && adapter.OpenFlow(Flow) == UserspaceIpResult::Success) {
+        UserspaceIpFlow tcp_flow = Flow;
+        tcp_flow.token = 2;
+        tcp_flow.local.port = 49153;
+        static_cast<void>(adapter.OpenTcpFlow(tcp_flow));
         static_cast<void>(adapter.Input(std::span<const std::uint8_t>(data, std::min(size, wgnx::MaxInnerIpv4PacketSize))));
         adapter.RunTimeouts();
     }

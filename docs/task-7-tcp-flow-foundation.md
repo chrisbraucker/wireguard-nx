@@ -256,12 +256,17 @@ Advertise connected IPv4 UDP and connected IPv4 TCP independently.
   Client destruction, policy and peer transitions, adapter reset, and shutdown abort or retire adapter state, quarantine the virtual tuple, and make stale callbacks harmless.
   Host coverage verifies connect timeout, repeated local shutdown, remote half-close, peer invalidation, and the distinct terminal reasons.
 
-- [ ] **13. Add deterministic correctness, pressure, and resource coverage.**
+- [x] **13. Add deterministic correctness, pressure, and resource coverage.**
 
   Extend protocol layout tests, flow-plane tests, adapter tests, owner tests, runtime composition tests, and the adapter-input fuzz target.
   Use a deterministic lwIP-backed test peer or an equivalent production-lwIP loopback fixture so production code never gains a handmade TCP parser or state machine.
   Cover connect success, ordered request and response, segmentation, retransmission timer progress, partial remote delivery, send pressure and writable recovery, receive pressure, orderly EOF, local half-close, reset while connecting, reset after connection, timeout, stale callback, policy invalidation, peer restart, client destruction, and repeated flow reuse.
   Require ASan and UBSan, warnings, format, static analysis, clang-tidy, target build, stack ceilings, fixed-capacity assertions, and a reviewed footprint delta.
+
+  Current state: the deterministic host suite now completes a real lwIP TCP handshake through the production adapter, emits one request segment, and delivers two ordered remote stream segments before receive acknowledgement, EOF, and idempotent local half-close.
+  The existing flow-plane and adapter-owner cases cover bounded send and receive pressure, writable recovery, connect timeout, reset and invalidation retirement, stale generations, client destruction, and flow reuse.
+  The adapter-input fuzz target now opens both bounded UDP and TCP flows before input, so malformed and valid inner IPv4 traffic reaches the TCP receive and reset boundaries without introducing a project TCP parser or state machine.
+  The aggregate host, sanitizer, warning, static-analysis, tidy, target, stack, and footprint gates remain required for every future TCP change.
 
 - [ ] **14. Complete the direct real-peer acceptance gate and record the boundary for MITM work.**
 
