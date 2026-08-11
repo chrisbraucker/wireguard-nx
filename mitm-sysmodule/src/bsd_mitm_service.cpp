@@ -148,47 +148,6 @@ const char* BsdMitmService::SocketRouteName(const SocketState* socket) {
     return BsdSocketRouteStateName(socket->route);
 }
 
-bool BsdMitmService::CaptureVisibleLocalEndpoint(SocketState& socket) {
-    std::array<std::uint8_t, sizeof(BsdSockAddrIn)> address{};
-    BsdResultAndAddressLength output{};
-    const Result rc = serviceMitmDispatchInOut(
-        m_forward_service.get(),
-        16,
-        socket.descriptor,
-        output,
-        .buffer_attrs = {SfBufferAttr_Out | SfBufferAttr_HipcAutoSelect},
-        .buffers = {{address.data(), address.size()}}
-    );
-    BsdIpv4Endpoint endpoint{};
-    if (R_FAILED(rc) || output.response.result != 0 || output.response.error != 0 || output.address_size < sizeof(BsdSockAddrIn) ||
-        !DecodeBsdIpv4Endpoint(address, std::addressof(endpoint))) {
-        logger::Log(
-            "bsd:s visible endpoint capture failed owner=%llu fd=%d rc=0x%08X result=%d errno=%d address_size=%u",
-            static_cast<unsigned long long>(m_owner),
-            socket.descriptor,
-            static_cast<unsigned>(rc),
-            output.response.result,
-            output.response.error,
-            output.address_size
-        );
-        return false;
-    }
-
-    socket.visible_local = endpoint;
-    socket.visible_local_valid = true;
-    logger::Log(
-        "bsd:s visible endpoint captured owner=%llu fd=%d local=%u.%u.%u.%u:%u",
-        static_cast<unsigned long long>(m_owner),
-        socket.descriptor,
-        endpoint.address[0],
-        endpoint.address[1],
-        endpoint.address[2],
-        endpoint.address[3],
-        endpoint.port
-    );
-    return true;
-}
-
 void BsdMitmService::ForgetSocket(const s32 descriptor) {
     if (SocketState* socket = FindSocket(descriptor); socket != nullptr) {
         socket->route = AdvanceBsdSocketRoute(socket->route, BsdSocketRouteEvent::Close);
@@ -297,13 +256,13 @@ ams::Result BsdMitmService::Connect(
     if (eligible) {
         socket->route = AdvanceBsdSocketRoute(socket->route, BsdSocketRouteEvent::BeginTunnelOpen);
         GetTunnelDiscoveryService().RequestForInterceptedTraffic();
-        TunnelTcpOpenResult tcp_open{};
+        TunnelFlowOpenResult flow_open{};
         if (socket->transport == BsdSocketTransport::Tcp) {
-            tcp_open = GetTunnelFlowWorker().OpenConnectedTcp(m_owner, fd, remote);
-            tunnel_result = tcp_open.result;
+            flow_open = GetTunnelFlowWorker().OpenConnectedTcp(m_owner, fd, remote);
         } else {
-            tunnel_result = GetTunnelFlowWorker().OpenConnectedUdp(m_owner, fd, remote);
+            flow_open = GetTunnelFlowWorker().OpenConnectedUdp(m_owner, fd, remote);
         }
+        tunnel_result = flow_open.result;
         logger::Log(
             "bsd:s connect tunnel-open owner=%llu fd=%d remote=%u.%u.%u.%u:%u result=%s",
             static_cast<unsigned long long>(m_owner),
@@ -315,68 +274,20 @@ ams::Result BsdMitmService::Connect(
             remote.port,
             TunnelFlowResultName(tunnel_result)
         );
-        if (tunnel_result == TunnelFlowResult::Opened && socket->transport == BsdSocketTransport::Udp) {
-            // The retained descriptor selects the native local address and ephemeral
-            // port we expose to the application while payload traffic stays on wgnx:tun.
-            BsdResultAndErrno anchor_connect{};
-            const Result anchor_rc = serviceMitmDispatchInOut(
-                m_forward_service.get(),
-                14,
-                fd,
-                anchor_connect,
-                .buffer_attrs = {SfBufferAttr_In | SfBufferAttr_HipcAutoSelect},
-                .buffers = {{address.GetPointer(), address.GetSize()}}
-            );
-            if (R_FAILED(anchor_rc) || anchor_connect.result != 0 || anchor_connect.error != 0 || !CaptureVisibleLocalEndpoint(*socket)) {
-                GetTunnelFlowWorker().Close(m_owner, fd);
-                socket->route = AdvanceBsdSocketRoute(socket->route, BsdSocketRouteEvent::TunnelFailed);
-                out_result.SetValue(-1);
-                out_errno.SetValue(R_SUCCEEDED(anchor_rc) && anchor_connect.error != 0 ? anchor_connect.error : BsdErrnoIo);
-                logger::Log(
-                    "bsd:s connect tunnel-anchor failed owner=%llu fd=%d rc=0x%08X result=%d errno=%d",
-                    static_cast<unsigned long long>(m_owner),
-                    fd,
-                    static_cast<unsigned>(anchor_rc),
-                    anchor_connect.result,
-                    anchor_connect.error
-                );
-                R_RETURN(anchor_rc);
-            }
-            std::memcpy(socket->remote.address.data(), remote.address, socket->remote.address.size());
-            socket->remote.port = remote.port;
-            socket->route = AdvanceBsdSocketRoute(socket->route, BsdSocketRouteEvent::TunnelOpened);
-            out_result.SetValue(0);
-            out_errno.SetValue(0);
-            logger::Log(
-                "bsd:s connect tunneled owner=%llu fd=%d remote=%u.%u.%u.%u:%u visible_local=%u.%u.%u.%u:%u",
-                static_cast<unsigned long long>(m_owner),
-                fd,
-                remote.address[0],
-                remote.address[1],
-                remote.address[2],
-                remote.address[3],
-                remote.port,
-                socket->visible_local.address[0],
-                socket->visible_local.address[1],
-                socket->visible_local.address[2],
-                socket->visible_local.address[3],
-                socket->visible_local.port
-            );
-            R_SUCCEED();
-        }
         if (tunnel_result == TunnelFlowResult::Opened) {
             std::memcpy(socket->remote.address.data(), remote.address, socket->remote.address.size());
             socket->remote.port = remote.port;
-            std::memcpy(socket->visible_local.address.data(), tcp_open.local.address, socket->visible_local.address.size());
-            socket->visible_local.port = tcp_open.local.port;
+            std::memcpy(socket->visible_local.address.data(), flow_open.local.address, socket->visible_local.address.size());
+            socket->visible_local.port = flow_open.local.port;
             socket->visible_local_valid = true;
             socket->route = AdvanceBsdSocketRoute(socket->route, BsdSocketRouteEvent::TunnelOpened);
             out_result.SetValue(0);
             out_errno.SetValue(0);
             logger::Log(
-                "bsd:s connect tunneled TCP owner=%llu fd=%d remote=%u.%u.%u.%u:%u visible_local=%u.%u.%u.%u:%u",
+                "bsd:s connect tunneled owner=%llu fd=%d transport=%s remote=%u.%u.%u.%u:%u visible_local=%u.%u.%u.%u:%u",
                 static_cast<unsigned long long>(m_owner),
                 fd,
+                BsdSocketTransportName(socket->transport),
                 remote.address[0],
                 remote.address[1],
                 remote.address[2],

@@ -66,9 +66,9 @@
     AMS_SF_METHOD_INFO(                                                                                                                    \
         C,                                                                                                                                 \
         H,                                                                                                                                 \
-        static_cast<u32>(wgnx::tunnel::ClientCommandId::OpenConnectedUdpFlow),                                                             \
+        static_cast<u32>(wgnx::tunnel::ClientCommandId::OpenConnectedFlow),                                                                \
         ams::Result,                                                                                                                       \
-        OpenConnectedUdpFlow,                                                                                                              \
+        OpenConnectedFlow,                                                                                                                 \
         (ams::sf::Out<wgnx::tunnel::OpenConnectedFlowResult> out, const wgnx::tunnel::OpenConnectedFlowRequest& request),                  \
         (out, request),                                                                                                                    \
         ams::hos::Version_Min,                                                                                                             \
@@ -84,17 +84,6 @@
          const ams::sf::InMapAliasBuffer& payload,                                                                                         \
          const ams::sf::OutMapAliasArray<wgnx::tunnel::PayloadResult>& dispositions),                                                      \
         (descriptors, payload, dispositions),                                                                                              \
-        ams::hos::Version_Min,                                                                                                             \
-        ams::hos::Version_Max                                                                                                              \
-    )                                                                                                                                      \
-    AMS_SF_METHOD_INFO(                                                                                                                    \
-        C,                                                                                                                                 \
-        H,                                                                                                                                 \
-        static_cast<u32>(wgnx::tunnel::ClientCommandId::OpenConnectedTcpFlow),                                                             \
-        ams::Result,                                                                                                                       \
-        OpenConnectedTcpFlow,                                                                                                              \
-        (ams::sf::Out<wgnx::tunnel::OpenConnectedFlowResult> out, const wgnx::tunnel::OpenConnectedFlowRequest& request),                  \
-        (out, request),                                                                                                                    \
         ams::hos::Version_Min,                                                                                                             \
         ams::hos::Version_Max                                                                                                              \
     )                                                                                                                                      \
@@ -175,16 +164,13 @@ class TunnelClientService {
         ams::sf::Out<wgnx::tunnel::RoutingPolicySnapshot> out, const ams::sf::OutMapAliasArray<wgnx::tunnel::RouteRecord>& routes
     );
     ams::Result GetCompletionEvent(ams::sf::OutCopyHandle out);
-    ams::Result OpenConnectedUdpFlow(
+    ams::Result OpenConnectedFlow(
         ams::sf::Out<wgnx::tunnel::OpenConnectedFlowResult> out, const wgnx::tunnel::OpenConnectedFlowRequest& request
     );
     ams::Result SendUdpDatagramBatch(
         const ams::sf::InMapAliasArray<wgnx::tunnel::PayloadRange>& descriptors,
         const ams::sf::InMapAliasBuffer& payload,
         const ams::sf::OutMapAliasArray<wgnx::tunnel::PayloadResult>& dispositions
-    );
-    ams::Result OpenConnectedTcpFlow(
-        ams::sf::Out<wgnx::tunnel::OpenConnectedFlowResult> out, const wgnx::tunnel::OpenConnectedFlowRequest& request
     );
     ams::Result WriteTcpStream(
         ams::sf::Out<wgnx::tunnel::PayloadResult> out, const wgnx::tunnel::PayloadRange& range, const ams::sf::InMapAliasBuffer& payload

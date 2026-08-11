@@ -23,7 +23,7 @@ enum class TunnelFlowKind : std::uint8_t {
     Tcp,
 };
 
-struct TunnelTcpOpenResult {
+struct TunnelFlowOpenResult {
     TunnelFlowResult result{TunnelFlowResult::SocketError};
     TunnelFlowEndpoint local{};
 };
@@ -79,8 +79,8 @@ class TunnelFlowWorker {
     // They never carry caller-owned storage into the asynchronous work loop.
     void RequestDiscoveryAttempt();
     void RequestTunnelInvalidation();
-    TunnelFlowResult OpenConnectedUdp(std::uint64_t owner, s32 descriptor, const TunnelFlowEndpoint& remote);
-    TunnelTcpOpenResult OpenConnectedTcp(std::uint64_t owner, s32 descriptor, const TunnelFlowEndpoint& remote);
+    TunnelFlowOpenResult OpenConnectedUdp(std::uint64_t owner, s32 descriptor, const TunnelFlowEndpoint& remote);
+    TunnelFlowOpenResult OpenConnectedTcp(std::uint64_t owner, s32 descriptor, const TunnelFlowEndpoint& remote);
     TunnelFlowResult Send(std::uint64_t owner, s32 descriptor, const void* payload, std::size_t payload_size);
     TunnelReceiveResult Receive(std::uint64_t owner, s32 descriptor, void* payload, std::size_t payload_size);
     TunnelPollResult Poll(std::uint64_t owner, s32 descriptor, short events, std::int32_t timeout_milliseconds);

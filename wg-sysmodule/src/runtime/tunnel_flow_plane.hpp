@@ -110,7 +110,7 @@ class TunnelFlowPlane {
     [[nodiscard]] wgnx::tunnel::Capabilities GetCapabilities() const;
     [[nodiscard]] wgnx::tunnel::RoutingPolicySnapshot CopyRoutingPolicy(std::span<wgnx::tunnel::RouteRecord> out) const;
 
-    [[nodiscard]] wgnx::tunnel::OpenConnectedFlowResult OpenConnectedUdpFlow(
+    [[nodiscard]] wgnx::tunnel::OpenConnectedFlowResult OpenConnectedFlow(
         TunnelClientId client,
         const wgnx::tunnel::OpenConnectedFlowRequest& request,
         wgnx::platform::ktime_t now,
@@ -119,13 +119,7 @@ class TunnelFlowPlane {
             .staging_available = true,
         }
     );
-    [[nodiscard]] TunnelFlowReservation ReserveConnectedUdpFlow(
-        TunnelClientId client,
-        const wgnx::tunnel::OpenConnectedFlowRequest& request,
-        wgnx::platform::ktime_t now,
-        TunnelTransportAvailability availability
-    );
-    [[nodiscard]] TunnelFlowReservation ReserveConnectedTcpFlow(
+    [[nodiscard]] TunnelFlowReservation ReserveConnectedFlow(
         TunnelClientId client,
         const wgnx::tunnel::OpenConnectedFlowRequest& request,
         wgnx::platform::ktime_t now,
@@ -271,13 +265,6 @@ class TunnelFlowPlane {
 
     void ClearExpiredTombstones(wgnx::platform::ktime_t now);
     [[nodiscard]] bool HasTombstoneReservation(wgnx::platform::ktime_t now);
-    [[nodiscard]] TunnelFlowReservation ReserveConnectedFlow(
-        TunnelClientId client,
-        const wgnx::tunnel::OpenConnectedFlowRequest& request,
-        wgnx::platform::ktime_t now,
-        TunnelTransportAvailability availability,
-        wgnx::tunnel::FlowKind kind
-    );
     [[nodiscard]] std::uint32_t AllocateFlowGeneration();
     [[nodiscard]] bool AllocateVirtualTuple(const wgnx::tunnel::Ipv4Endpoint& remote, std::uint16_t* out_port, wgnx::platform::ktime_t now);
     void QuarantineTuple(const FlowSlot& flow, wgnx::platform::ktime_t now);

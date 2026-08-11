@@ -12,7 +12,7 @@ It still validates all inputs, maintains fixed resource limits, and returns defi
 
 ## Scope And Non-Goals
 
-The version 4 contract supports connected IPv4 UDP flows and defines the bounded connected IPv4 TCP stream surface that the WireGuard-owned lwIP adapter will enable.
+The version 5 contract supports connected IPv4 UDP flows and defines the bounded connected IPv4 TCP stream surface that the WireGuard-owned lwIP adapter enables.
 A client opens a logical flow for one remote IPv4 endpoint, submits transport-specific payloads, and receives matching payload completions with their remote source endpoint.
 The WireGuard sysmodule selects the active peer, owns virtual local endpoints, constructs and parses inner IP packets, and retains all tunnel-facing flow mappings.
 The current implementation performs that work in its bounded UDP flow plane, while the planned fragmentation milestone replaces the manual transport and IP adapter with a WireGuard-owned userspace IP stack behind the same client-facing ownership boundary.
@@ -44,7 +44,7 @@ TCP must introduce stream-specific operations and lifecycle semantics rather tha
 ## Service And Versioning
 
 The service name is `wgnx:tun`.
-Its current contract version is `TunApiVersion = 4` and is independent from the existing `wgnx:ctl` development API version.
+Its current contract version is `TunApiVersion = 5` and is independent from the existing `wgnx:ctl` development API version.
 An incompatible change to command shapes, result semantics, handle lifetime, or delivery behavior increments `TunApiVersion`.
 Additive optional behavior may be introduced only when its absence is observable through an explicit capability or version query.
 
@@ -56,9 +56,8 @@ The first command set is conceptually:
 | `OpenTunnelClient`         | Creates a logical client context and returns its private object interface.                                   |
 | `GetRoutingPolicySnapshot` | Returns a read-only, generation-tagged view of effective active `AllowedIPs` routes for a client context.    |
 | `GetCompletionEvent`       | Returns the one manual-clear readiness event owned by a client context.                                      |
-| `OpenConnectedUdpFlow`     | Atomically selects a peer for a remote IPv4 UDP endpoint and allocates an opaque flow in the client context. |
+| `OpenConnectedFlow`        | Atomically selects a peer for a requested IPv4 transport endpoint and allocates an opaque flow in the client context. |
 | `SendUdpDatagramBatch`     | Submits a bounded UDP payload-range array and payload buffer with a result for every entry.                  |
-| `OpenConnectedTcpFlow`     | Reserves a connected IPv4 TCP flow that becomes `Open` only after asynchronous connection success.           |
 | `WriteTcpStream`           | Admits one bounded TCP stream chunk and reports the accepted byte count.                                     |
 | `ShutdownTcpWrite`         | Idempotently queues the TCP local-write half-close after accepted stream data.                                |
 | `ReceiveCompletions`       | Drains bounded datagram, flow-state, policy, and writable-transition records for the client context.         |
@@ -69,15 +68,15 @@ Command IDs, exact CMIF buffer attributes, result codes, and fixed capacity valu
 They must not be inferred by clients from struct layout or service implementation details.
 The version response must advertise effective inner MTU, maximum payload size, flow and queue limits, batch limits, supported completion types, and optional capabilities so clients do not infer resource limits.
 
-### Version 4 ABI Record
+### Version 5 ABI Record
 
-The version 4 declarations live in `common/include/wgnx/tunnel_protocol.hpp`.
+The version 5 declarations live in `common/include/wgnx/tunnel_protocol.hpp`.
 They are intentionally separate from `wgnx/protocol.hpp` so the raw diagnostic API remains unchanged.
 `wgnx:tun` is registered with the bounded flow data plane supplied by implementation step 3.
 Clients must validate `Capabilities.api_version` and the advertised limits before opening flows.
-Version 4 intentionally replaces the version 3 command IDs and wire record layouts without compatibility aliases.
+Version 5 intentionally replaces the version 4 command and record layouts without compatibility aliases.
 It retains `TunnelBlockedByPolicy` as an immediate route result while capability bits now represent only independently available transports.
-Every version 4 client receives completion events, routing snapshots, lifecycle queries, leak protection, and UDP batching as mandatory contract behavior.
+Every version 5 client receives completion events, routing snapshots, lifecycle queries, leak protection, and UDP batching as mandatory contract behavior.
 
 All scalar IPC fields use the Switch little-endian ABI.
 IPv4 addresses are four network-order octets.
@@ -86,7 +85,7 @@ Every request and response structure is trivially copyable and has compile-time 
 
 | Root command ID | Operation          | Input | Output                                 |
 |----------------:|--------------------|-------|----------------------------------------|
-|               0 | `GetCapabilities` | None  | `Capabilities` with `api_version = 4`. |
+|               0 | `GetCapabilities` | None  | `Capabilities` with `api_version = 5`. |
 |               1 | `OpenTunnelClient` | None  | A shared `ITunnelClient` CMIF object.  |
 
 | Client command ID | Operation                  | Input                                                                              | Output                                                                 |
@@ -94,12 +93,11 @@ Every request and response structure is trivially copyable and has compile-time 
 |                 0 | `GetCapabilities`          | None                                                                               | `Capabilities`.                                                        |
 |                 1 | `GetRoutingPolicySnapshot` | An output `RouteRecord` map-alias array.                                           | `RoutingPolicySnapshot` and copied route count.                        |
 |                 2 | `GetCompletionEvent`       | None.                                                                              | One copy handle for the context-owned manual-clear event.              |
-|                 3 | `OpenConnectedUdpFlow`     | `OpenConnectedFlowRequest`.                                                          | `OpenConnectedFlowResult`.                                               |
+|                 3 | `OpenConnectedFlow`        | `OpenConnectedFlowRequest` with `FlowKind`.                                          | `OpenConnectedFlowResult` with virtual local endpoint.                   |
 |                 4 | `SendUdpDatagramBatch`     | Input `PayloadRange` array and one input map-alias payload buffer.                  | One `PayloadResult` map-alias entry per range.                           |
 |                 5 | `ReceiveCompletions`       | Output `CompletionRecord` array and one output map-alias payload buffer.            | Copied completion count and `ProtocolStatus`.                            |
 |                 6 | `GetFlowState`             | `FlowHandle`.                                                                         | `FlowStateResult`.                                                       |
 |                 7 | `CloseFlow`                | `FlowHandle`.                                                                         | `ProtocolStatus`.                                                        |
-|                 8 | `OpenConnectedTcpFlow`     | `OpenConnectedFlowRequest`.                                                          | `OpenConnectedFlowResult`.                                               |
 |                 9 | `WriteTcpStream`           | `PayloadRange` and one input map-alias payload buffer.                               | `PayloadResult` with accepted byte count.                                |
 |                10 | `ShutdownTcpWrite`         | `FlowHandle`.                                                                         | `ProtocolStatus`.                                                        |
 
@@ -134,7 +132,7 @@ The implementation validates the encoded client context, allocation generation, 
 ## Routing Authority And Policy Visibility
 
 The WireGuard sysmodule is the authoritative owner of cryptokey route selection.
-`OpenConnectedUdpFlow(remote)` atomically evaluates the active effective `AllowedIPs` policy and either selects a live peer or returns a defined result.
+`OpenConnectedFlow(remote, kind)` atomically evaluates the active effective `AllowedIPs` policy and either selects a live peer or returns a defined result.
 The MITM must not reproduce CIDR precedence or peer selection as a second routing implementation.
 The first implementation must parse configured `AllowedIPs` into normalized CIDR entries and perform deterministic longest-prefix selection.
 The currently active single-peer runtime may be the only selectable peer in v1, but the route result must still be produced by the normalized route engine rather than a string or nonempty-policy check.
@@ -144,7 +142,7 @@ Each snapshot contains a monotonically changing policy generation and a read-onl
 The snapshot is advisory because it can become stale before a flow is opened.
 Policy transitions enqueue a `PolicyChanged` completion so a client can refresh the snapshot without polling.
 
-`OpenConnectedUdpFlow` returns `RouteNotCovered` when no active tunnel route covers the remote endpoint.
+`OpenConnectedFlow` returns `RouteNotCovered` when no active tunnel route covers the remote endpoint.
 It returns `PeerUnavailable` when no selected peer exposes an effective policy and `TransportUnavailable` when a matching selected route has no local tunnel transport yet.
 With the optional profile-owned `[Interface] LeakProtection = true` setting, the latter case returns `TunnelBlockedByPolicy` instead.
 The setting defaults to `false` when absent.
@@ -158,7 +156,7 @@ If a policy or peer transition makes that selection invalid, the flow reaches an
 
 ## Client Context, Flow Identity, And Ownership
 
-`OpenConnectedUdpFlow` returns an opaque generation-tagged `FlowHandle`.
+`OpenConnectedFlow` returns an opaque generation-tagged `FlowHandle` and the nonzero WireGuard-allocated virtual local endpoint.
 The handle identifies no tunnel table address, virtual source port, or peer configuration.
 The sysmodule rejects malformed, closed, unknown, stale-generation, and cross-client handles.
 
@@ -234,7 +232,8 @@ The client header provides a one-range convenience helper over this sole UDP wir
 
 ## TCP Stream Foundation
 
-`OpenConnectedTcpFlow` uses the same endpoint and diagnostic-tag request layout as UDP, but its command ID selects TCP without a caller-controlled protocol field.
+`OpenConnectedFlow` takes an explicit `FlowKind`, which is validated as UDP or TCP before resource allocation.
+The returned virtual endpoint is valid as soon as a flow is reserved, including while TCP remains in `Connecting`.
 It returns a valid flow in `Connecting` after reservation and publishes `Open` only from the serialized lwIP connected callback.
 `FlowStateResult` and every flow completion carry `FlowKind`, while stream flags separately identify local and remote write availability.
 `WriteTcpStream` either accepts its complete bounded chunk or reports zero accepted bytes with `QueueFull`, so a client can retain byte order across retries.
@@ -303,7 +302,7 @@ The implemented tunneled surface is connected IPv4 UDP through `Socket`, `Connec
 `Socket` always forwards to the original `bsd:s` service and the returned descriptor remains the Horizon lifecycle anchor.
 An uncovered destination, an inactive selected peer, or a selected route with transport unavailable and leak protection disabled forwards its `Connect` and all later operations to upstream BSD.
 `TunnelBlockedByPolicy` fails the `Connect` with `ENETUNREACH` and leaves the descriptor without a route decision so a later application-issued `Connect` can be evaluated again.
-Once `OpenConnectedUdpFlow` and retained-descriptor endpoint capture succeed, `Send`, `Recv`, `RecvFrom`, and `POLLIN` are served from the matching private flow and a later tunnel failure never changes that socket back to upstream BSD.
+Once `OpenConnectedFlow` and retained-descriptor endpoint capture succeed, `Send`, `Recv`, `RecvFrom`, and `POLLIN` are served from the matching private flow and a later tunnel failure never changes that socket back to upstream BSD.
 
 The V1 tunneled socket is always nonblocking.
 The requester reads its existing flags with `F_GETFL` and then enables the Horizon BSD:S nonblocking wire flag with `F_SETFL` after `Connect`.

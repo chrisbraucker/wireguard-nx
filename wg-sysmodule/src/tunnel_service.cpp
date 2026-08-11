@@ -57,10 +57,10 @@ ams::Result TunnelClientService::GetCompletionEvent(ams::sf::OutCopyHandle out) 
     R_SUCCEED();
 }
 
-ams::Result TunnelClientService::OpenConnectedUdpFlow(
+ams::Result TunnelClientService::OpenConnectedFlow(
     ams::sf::Out<wgnx::tunnel::OpenConnectedFlowResult> out, const wgnx::tunnel::OpenConnectedFlowRequest& request
 ) {
-    out.SetValue(runtime::OpenTunnelConnectedUdpFlow(m_client, request));
+    out.SetValue(runtime::OpenTunnelConnectedFlow(m_client, request));
     R_SUCCEED();
 }
 
@@ -81,13 +81,6 @@ ams::Result TunnelClientService::SendUdpDatagramBatch(
             return runtime::SendTunnelUdpDatagram(m_client, descriptor, datagram);
         }
     );
-    R_SUCCEED();
-}
-
-ams::Result TunnelClientService::OpenConnectedTcpFlow(
-    ams::sf::Out<wgnx::tunnel::OpenConnectedFlowResult> out, const wgnx::tunnel::OpenConnectedFlowRequest& request
-) {
-    out.SetValue(runtime::OpenTunnelConnectedTcpFlow(m_client, request));
     R_SUCCEED();
 }
 

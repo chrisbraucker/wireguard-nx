@@ -54,13 +54,11 @@ BSD request handlers never use either worker session directly.
 
 The implemented routed surface is connected IPv4 UDP through socket creation, connect, send, receive, receive-from, readable polling, endpoint queries, and close.
 The Toolbox-only TCP surface is `socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)`, `connect`, `send`, `recv`, `poll`, `getsockname`, `getpeername`, `shutdown(SHUT_WR)`, and `close`.
-The original BSD descriptor is retained as the lifecycle and application-visible local-endpoint anchor.
-After a WGNX flow opens, the MITM forwards the initial UDP `Connect` only to establish the native local IPv4 address and ephemeral port on that retained descriptor.
-It captures the endpoint immediately and returns it from `GetSockName` while all payload traffic stays on `wgnx:tun`.
-The WireGuard interface address and tunnel source port are never exposed through the BSD-facing socket.
-Failure to establish or capture that endpoint closes the flow and leaves the socket terminal rather than permitting payload fallback to upstream BSD.
-For TCP, the worker opens the API v4 flow and waits within a bounded six-second guard for `FlowState::Open` and its advertised virtual local endpoint.
-The MITM never forwards a successfully tunneled TCP `connect` to BSD:S, so it cannot create a direct TCP anchor connection outside the tunnel.
+The original BSD descriptor is retained as the lifecycle and descriptor-namespace anchor.
+After a WGNX flow opens, the MITM obtains its WireGuard-allocated virtual local endpoint and returns it from `GetSockName` while all payload traffic stays on `wgnx:tun`.
+The MITM never forwards a successfully tunneled UDP or TCP `Connect` to BSD:S.
+Failure to obtain that endpoint closes the flow and leaves the socket terminal rather than permitting payload fallback to upstream BSD.
+For TCP, the worker opens the API v5 flow and waits within a bounded six-second guard for `FlowState::Open` and its advertised virtual local endpoint.
 TCP stream reads preserve unread bytes across short `recv` calls, return zero at orderly remote EOF, and report `POLLHUP` only after buffered bytes are drained.
 `shutdown(SHUT_WR)` maps to the v4 TCP local-write shutdown command, while all other virtual shutdown directions remain unsupported.
 Every tracked descriptor has an explicit `Created`, `OpeningTunnel`, `Direct`, `Tunneled`, `Failed`, or `Closed` route state.

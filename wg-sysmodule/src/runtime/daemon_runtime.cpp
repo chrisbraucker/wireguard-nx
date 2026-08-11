@@ -60,6 +60,9 @@ class DaemonRuntime {
     std::uint32_t SignalTunnelClientShutdown();
     wgnx::tunnel::Capabilities GetTunnelCapabilities();
     wgnx::tunnel::RoutingPolicySnapshot CopyTunnelRoutingPolicy(std::span<wgnx::tunnel::RouteRecord> out);
+    wgnx::tunnel::OpenConnectedFlowResult OpenTunnelConnectedFlow(
+        runtime::TunnelClientId client, const wgnx::tunnel::OpenConnectedFlowRequest& request
+    );
     wgnx::tunnel::OpenConnectedFlowResult OpenTunnelConnectedUdpFlow(
         runtime::TunnelClientId client, const wgnx::tunnel::OpenConnectedFlowRequest& request
     );
@@ -1070,6 +1073,18 @@ wgnx::tunnel::RoutingPolicySnapshot DaemonRuntime::CopyTunnelRoutingPolicy(std::
     return m_tunnel_flow_plane.CopyRoutingPolicy(out);
 }
 
+wgnx::tunnel::OpenConnectedFlowResult DaemonRuntime::OpenTunnelConnectedFlow(
+    runtime::TunnelClientId client, const wgnx::tunnel::OpenConnectedFlowRequest& request
+) {
+    if (request.kind == wgnx::tunnel::FlowKind::Tcp) {
+        return OpenTunnelConnectedTcpFlow(client, request);
+    }
+    if (request.kind != wgnx::tunnel::FlowKind::Udp) {
+        return {.status = wgnx::tunnel::ProtocolStatus::MalformedInput};
+    }
+    return OpenTunnelConnectedUdpFlow(client, request);
+}
+
 wgnx::tunnel::OpenConnectedFlowResult DaemonRuntime::OpenTunnelConnectedUdpFlow(
     runtime::TunnelClientId client, const wgnx::tunnel::OpenConnectedFlowRequest& request
 ) {
@@ -1081,7 +1096,7 @@ wgnx::tunnel::OpenConnectedFlowResult DaemonRuntime::OpenTunnelConnectedUdpFlow(
         RefreshTunnelPolicyLocked();
         runtime::PeerPacketStateSnapshot peer{};
         const bool packet_state_available = m_runtime_coordinator.SnapshotPacketState(peer);
-        reservation = m_tunnel_flow_plane.ReserveConnectedUdpFlow(
+        reservation = m_tunnel_flow_plane.ReserveConnectedFlow(
             client,
             request,
             GetRuntimeNowNs(),
@@ -1178,7 +1193,7 @@ wgnx::tunnel::OpenConnectedFlowResult DaemonRuntime::OpenTunnelConnectedTcpFlow(
         }
         runtime::PeerPacketStateSnapshot peer{};
         const bool packet_state_available = m_runtime_coordinator.SnapshotPacketState(peer);
-        reservation = m_tunnel_flow_plane.ReserveConnectedTcpFlow(
+        reservation = m_tunnel_flow_plane.ReserveConnectedFlow(
             client,
             request,
             GetRuntimeNowNs(),
@@ -1545,16 +1560,10 @@ wgnx::tunnel::RoutingPolicySnapshot CopyTunnelRoutingPolicy(std::span<wgnx::tunn
     return g_daemon_runtime.CopyTunnelRoutingPolicy(out);
 }
 
-wgnx::tunnel::OpenConnectedFlowResult OpenTunnelConnectedUdpFlow(
+wgnx::tunnel::OpenConnectedFlowResult OpenTunnelConnectedFlow(
     TunnelClientId client, const wgnx::tunnel::OpenConnectedFlowRequest& request
 ) {
-    return g_daemon_runtime.OpenTunnelConnectedUdpFlow(client, request);
-}
-
-wgnx::tunnel::OpenConnectedFlowResult OpenTunnelConnectedTcpFlow(
-    TunnelClientId client, const wgnx::tunnel::OpenConnectedFlowRequest& request
-) {
-    return g_daemon_runtime.OpenTunnelConnectedTcpFlow(client, request);
+    return g_daemon_runtime.OpenTunnelConnectedFlow(client, request);
 }
 
 wgnx::tunnel::ProtocolStatus SendTunnelUdpDatagram(

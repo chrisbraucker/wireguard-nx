@@ -81,7 +81,7 @@ This keeps Horizon BSD dispatch from sharing raw WireGuard IPC handles or lwIP s
 
 The TCP translation begins only for `socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)` or its protocol-zero equivalent.
 Socket options applied before route selection still use the retained BSD descriptor.
-Once the MITM selects the tunnel, it opens `OpenConnectedTcpFlow` and waits on that flow's completion event for the flow-state transition.
+Once the MITM selects the tunnel, it opens `OpenConnectedFlow` with TCP kind and waits on that flow's completion event for the flow-state transition.
 
 The worker accepts `FlowState::Open` only after a successful `GetFlowState` response identifies the flow as TCP and supplies a nonzero advertised virtual local tuple.
 The wait has a six-second MITM guard in addition to the WireGuard-owned connection lifecycle timeout.
@@ -93,7 +93,7 @@ This prevents a second native TCP handshake and a direct connection outside the 
 
 | BSD:S operation | Narrow tunneled TCP behavior |
 | --- | --- |
-| `connect` | Opens and waits for `OpenConnectedTcpFlow`, then records virtual endpoints without native BSD:S connect. |
+| `connect` | Opens and waits for TCP `OpenConnectedFlow`, then records virtual endpoints without native BSD:S connect. |
 | `getsockname` | Returns the WireGuard flow's advertised virtual local tuple. |
 | `getpeername` | Returns the original requested remote tuple. |
 | `send` | Submits one bounded `WriteTcpStream` request and reports all-or-`EAGAIN` admission. |
@@ -105,14 +105,12 @@ This prevents a second native TCP handshake and a direct connection outside the 
 The initial path rejects mixed direct and virtual polls, `recvfrom` on TCP, `sendto` on any tunneled connected flow, unsupported message flags, virtual `bind`, post-connect socket options, and shutdown directions other than `SHUT_WR`.
 `POLLERR` remains intentionally unused because the private flow API has no per-flow asynchronous-error contract.
 
-## UDP Difference and Cleanup Direction
+## Virtual Endpoint Ownership
 
-The existing UDP path follows the same route-selection and payload-delegation structure.
-It still forwards a successful BSD:S UDP `connect()` to establish a native local address and ephemeral port, then returns that captured endpoint from `getsockname` while payloads remain tunneled.
-
-API v4 already exposes the WireGuard-allocated virtual UDP tuple through `GetFlowState`.
-Replacing the UDP anchor with that tuple would remove unrelated native BSD routing state and make UDP and TCP resource ownership symmetric.
-That changes visible UDP endpoint semantics, so it is tracked as the deferred regression-tested cleanup in `docs/task-7-tcp-flow-foundation.md`.
+UDP follows the same route-selection, endpoint, and payload-delegation structure as TCP.
+After UDP `OpenConnectedFlow`, the MITM worker takes the WireGuard-allocated virtual UDP tuple from the successful open result and returns it from `getsockname`.
+The retained BSD descriptor remains unconnected for every successfully tunneled flow and exists only for Horizon descriptor lifecycle and close.
+This removes unrelated native BSD routing state and makes UDP and TCP resource ownership symmetric.
 
 ## Scope Limits
 

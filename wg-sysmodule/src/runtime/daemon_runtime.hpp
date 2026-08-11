@@ -27,12 +27,7 @@ void DestroyTunnelClient(TunnelClientId client);
 std::uint32_t SignalTunnelClientShutdown();
 wgnx::tunnel::Capabilities GetTunnelCapabilities();
 wgnx::tunnel::RoutingPolicySnapshot CopyTunnelRoutingPolicy(std::span<wgnx::tunnel::RouteRecord> out);
-wgnx::tunnel::OpenConnectedFlowResult OpenTunnelConnectedUdpFlow(
-    TunnelClientId client, const wgnx::tunnel::OpenConnectedFlowRequest& request
-);
-wgnx::tunnel::OpenConnectedFlowResult OpenTunnelConnectedTcpFlow(
-    TunnelClientId client, const wgnx::tunnel::OpenConnectedFlowRequest& request
-);
+wgnx::tunnel::OpenConnectedFlowResult OpenTunnelConnectedFlow(TunnelClientId client, const wgnx::tunnel::OpenConnectedFlowRequest& request);
 wgnx::tunnel::ProtocolStatus SendTunnelUdpDatagram(
     TunnelClientId client, const wgnx::tunnel::PayloadRange& descriptor, std::span<const std::uint8_t> payload
 );

@@ -617,7 +617,7 @@ bool TunnelFlowWorker::EnqueueAndWait(Operation& operation) {
     return true;
 }
 
-TunnelFlowResult TunnelFlowWorker::OpenConnectedUdp(std::uint64_t owner, s32 descriptor, const TunnelFlowEndpoint& remote) {
+TunnelFlowOpenResult TunnelFlowWorker::OpenConnectedUdp(std::uint64_t owner, s32 descriptor, const TunnelFlowEndpoint& remote) {
     Operation operation{OperationType::Open};
     operation.owner = owner;
     operation.descriptor = descriptor;
@@ -629,12 +629,12 @@ TunnelFlowResult TunnelFlowWorker::OpenConnectedUdp(std::uint64_t owner, s32 des
             static_cast<unsigned long long>(owner),
             descriptor
         );
-        return TunnelFlowResult::TunnelUnavailable;
+        return {.result = TunnelFlowResult::TunnelUnavailable};
     }
-    return operation.result;
+    return {.result = operation.result, .local = operation.local};
 }
 
-TunnelTcpOpenResult TunnelFlowWorker::OpenConnectedTcp(std::uint64_t owner, s32 descriptor, const TunnelFlowEndpoint& remote) {
+TunnelFlowOpenResult TunnelFlowWorker::OpenConnectedTcp(std::uint64_t owner, s32 descriptor, const TunnelFlowEndpoint& remote) {
     Operation operation{OperationType::Open};
     operation.owner = owner;
     operation.descriptor = descriptor;
@@ -1148,12 +1148,12 @@ bool TunnelFlowWorker::Dispatch(Operation& operation) {
                      {operation.remote.address[0], operation.remote.address[1], operation.remote.address[2], operation.remote.address[3]},
                  .port = operation.remote.port,
                  .reserved = 0},
+            .kind = ToWireFlowKind(operation.kind),
+            .reserved = 0,
             .diagnostic_tag = (operation.owner << 16U) ^ static_cast<std::uint32_t>(operation.descriptor),
         };
         wgnx::tunnel::OpenConnectedFlowResult opened{};
-        const Result open_rc = operation.kind == TunnelFlowKind::Tcp
-                                   ? wgnx::tunnel::client::OpenConnectedTcpFlow(flow->client, request, std::addressof(opened))
-                                   : wgnx::tunnel::client::OpenConnectedUdpFlow(flow->client, request, std::addressof(opened));
+        const Result open_rc = wgnx::tunnel::client::OpenConnectedFlow(flow->client, request, std::addressof(opened));
         if (R_FAILED(open_rc)) {
             logger::Log(
                 "tunnel flow open bypass owner=%llu fd=%d reason=open_cmif rc=0x%08X",
@@ -1181,6 +1181,17 @@ bool TunnelFlowWorker::Dispatch(Operation& operation) {
         flow->flow = opened.flow;
         flow->kind = operation.kind;
         flow->remote = operation.remote;
+        if (opened.advertised_local.port == 0) {
+            logger::Log(
+                "tunnel flow open rejected owner=%llu fd=%d reason=missing_local_endpoint",
+                static_cast<unsigned long long>(operation.owner),
+                operation.descriptor
+            );
+            ResetFlow(*flow);
+            operation.result = TunnelFlowResult::SocketError;
+            return true;
+        }
+        flow->local = ToEndpoint(opened.advertised_local);
         const Result event_rc = wgnx::tunnel::client::GetCompletionEvent(flow->client, std::addressof(flow->completion_handle));
         if (R_FAILED(event_rc)) {
             CloseFlow(*flow, m_metrics);
@@ -1190,12 +1201,18 @@ bool TunnelFlowWorker::Dispatch(Operation& operation) {
         }
         if (flow->kind == TunnelFlowKind::Tcp) {
             operation.result = WaitForTcpConnection(*flow, m_metrics);
-            if (operation.result != TunnelFlowResult::Opened) {
-                CloseFlow(*flow, m_metrics);
-                return true;
-            }
-            operation.local = flow->local;
+        } else {
+            operation.result = TunnelFlowResult::Opened;
         }
+        if (operation.result != TunnelFlowResult::Opened) {
+            const bool udp_flow = flow->kind == TunnelFlowKind::Udp;
+            CloseFlow(*flow, m_metrics);
+            if (udp_flow) {
+                GetTunnelDiscoveryService().ReportTunnelClientFailure();
+            }
+            return true;
+        }
+        operation.local = flow->local;
         logger::Log(
             "tunnel flow opened owner=%llu fd=%d kind=%u remote=%u.%u.%u.%u:%u",
             static_cast<unsigned long long>(flow->owner),

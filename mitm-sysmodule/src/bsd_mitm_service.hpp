@@ -82,7 +82,6 @@ class BsdMitmService : public ams::sf::MitmServiceImplBase {
 
     [[nodiscard]] SocketState* FindSocket(s32 descriptor);
     [[nodiscard]] static const char* SocketRouteName(const SocketState* socket);
-    [[nodiscard]] bool CaptureVisibleLocalEndpoint(SocketState& socket);
     void ForgetSocket(s32 descriptor);
 
     std::uint64_t m_owner{};

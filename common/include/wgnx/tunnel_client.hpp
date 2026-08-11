@@ -191,13 +191,13 @@ class ScopedClient {
     );
 }
 
-[[nodiscard]] inline Result OpenConnectedUdpFlow(
+[[nodiscard]] inline Result OpenConnectedFlow(
     ScopedClient& client, const OpenConnectedFlowRequest& request, OpenConnectedFlowResult* out_result
 ) {
     if (!client.IsOpen() || out_result == nullptr) {
         return MAKERESULT(Module_Libnx, LibnxError_NotInitialized);
     }
-    return serviceDispatchInOut(client.Get(), static_cast<std::uint32_t>(ClientCommandId::OpenConnectedUdpFlow), request, *out_result);
+    return serviceDispatchInOut(client.Get(), static_cast<std::uint32_t>(ClientCommandId::OpenConnectedFlow), request, *out_result);
 }
 
 [[nodiscard]] inline Result SendUdpDatagramBatch(
@@ -232,15 +232,6 @@ class ScopedClient {
     ScopedClient& client, const PayloadRange& range, const void* payload, std::size_t payload_size, PayloadResult* out_result
 ) {
     return SendUdpDatagramBatch(client, std::addressof(range), 1, payload, payload_size, out_result, 1);
-}
-
-[[nodiscard]] inline Result OpenConnectedTcpFlow(
-    ScopedClient& client, const OpenConnectedFlowRequest& request, OpenConnectedFlowResult* out_result
-) {
-    if (!client.IsOpen() || out_result == nullptr) {
-        return MAKERESULT(Module_Libnx, LibnxError_NotInitialized);
-    }
-    return serviceDispatchInOut(client.Get(), static_cast<std::uint32_t>(ClientCommandId::OpenConnectedTcpFlow), request, *out_result);
 }
 
 [[nodiscard]] inline Result WriteTcpStream(

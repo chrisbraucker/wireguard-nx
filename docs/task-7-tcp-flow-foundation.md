@@ -63,14 +63,14 @@ complete IPv4 packets through PacketDataPlane
 peer-owned WireGuard staging, encryption, and outer UDP transport
 ```
 
-## Version 4 Contract Direction
+## Version 5 Contract Direction
 
 The API should combine only concepts whose semantics are genuinely shared.
 Client contexts, policy snapshots, flow handles, completion events, generation fields, local and remote endpoints, lifecycle queries, closure, and terminal invalidation remain common.
 UDP datagram submission and TCP stream writing remain separate commands because datagram atomicity and byte-stream progress are different contracts.
 
-Use separate `OpenConnectedUdpFlow` and `OpenConnectedTcpFlow` commands with one shared `OpenConnectedFlowRequest` and one shared `OpenFlowResult` layout.
-The command ID, rather than a caller-provided protocol switch, selects the transport and prevents an invalid or ambiguous flow kind.
+Use one `OpenConnectedFlow` command with a validated `FlowKind` in the shared request.
+The shared result publishes the WireGuard-allocated virtual local endpoint on successful reservation, including TCP while it is still connecting.
 Add `FlowKind` to flow-state and completion records so a drained mixed-flow completion batch is self-describing.
 
 Replace `DatagramDescriptor` and `DatagramDisposition` with transport-neutral payload range and result records that can be used by transport-specific commands.
@@ -285,7 +285,7 @@ It does not validate general BSD TCP compatibility, additional program IDs, or t
 
 ### Shared Setup
 
-1. Build and deploy the current `wg-sysmodule` and Toolbox from the same version 4 headers.
+1. Build and deploy the current `wg-sysmodule` and Toolbox from the same version 5 headers.
    Start the WireGuard sysmodule, activate the configured peer, and wait until the tunnel has an endpoint and an established session.
    Disable the MITM sysmodule for the direct-path phases so `wgnx:tun` is the only tested tunnel client.
 
@@ -333,7 +333,7 @@ It does not validate general BSD TCP compatibility, additional program IDs, or t
    Require a bounded terminal connection failure before the configured deadline and record its terminal reason from the Toolbox and WireGuard logs.
    Restore port `28080` and require one further successful direct TCP exchange to prove that the failure did not poison later flow creation.
 
-5. Mark Item 14 complete only when all five runs have matching raw logs and all direct runs show API version 4, the expected exact bytes, orderly EOF and close, zero unexplained drops, and released resources.
+5. Mark Item 14 complete only when all five runs have matching raw logs and all direct runs show API version 5, the expected exact bytes, orderly EOF and close, zero unexplained drops, and released resources.
    The current Toolbox TCP scenario does not emit a monotonic latency metric, so record latency as `not measured by this scenario` rather than inventing one.
    Add a dedicated timestamped TCP measurement only when latency is needed as a decision metric, then rerun the accepted direct case.
 
@@ -387,7 +387,7 @@ It must pass through the production adapter owner, packet plane, WireGuard peer,
 
 ## Task 7 BSD TCP MITM Continuation
 
-The MITM continuation adds the smallest BSD:S TCP translation needed for the controlled Toolbox process to use the completed version 4 `wgnx:tun` TCP contract.
+The MITM continuation adds the smallest BSD:S TCP translation needed for the controlled Toolbox process to use the current version 5 `wgnx:tun` TCP contract.
 The MITM remains a BSD operation translator and never parses TCP, retransmits, maintains congestion state, or opens a native TCP anchor connection.
 The WireGuard sysmodule remains the sole owner of TCP state, virtual local tuples, IPv4 packets, fragmentation, and transport recovery.
 
@@ -412,8 +412,8 @@ Unsupported stream options, mixed direct and virtual polling, non-IPv4 sockets, 
 
 - [x] **3. Add the bounded TCP open and endpoint path.**
 
-  TCP opens use `OpenConnectedTcpFlow`, the existing per-client completion event, and a six-second worker-side guard.
-  A successful flow-state query supplies the nonzero virtual tuple returned by `getsockname`.
+  TCP opens use `OpenConnectedFlow`, the existing per-client completion event, and a six-second worker-side guard.
+  Its successful admission result supplies the nonzero virtual tuple returned by `getsockname`.
   The BSD descriptor remains unconnected and exists only for descriptor lifecycle and close.
 
 - [x] **4. Translate Toolbox stream operations through `wgnx:tun`.**
@@ -425,7 +425,7 @@ Unsupported stream options, mixed direct and virtual polling, non-IPv4 sockets, 
 - [x] **5. Keep virtual socket metadata coherent.**
 
   TCP `getsockname` uses the advertised tuple and `getpeername` uses the original request destination.
-  `recvfrom` is explicitly rejected for TCP and the UDP anchor behavior is unchanged.
+  `recvfrom` is explicitly rejected for TCP, and both transports use their WireGuard-advertised virtual local endpoint.
   Virtual `bind`, post-connect `setsockopt`, and unsupported shutdown directions retain the existing explicit errno policy.
 
 - [x] **6. Add deterministic host coverage and run the aggregate gate.**
@@ -439,11 +439,11 @@ The authoritative on-device routine is the back-to-back direct and BSD MITM TCP 
 It requires the exact request and ACK through the peer, a nonzero virtual local endpoint, orderly EOF and close, matching Toolbox, harness, MITM, and WireGuard evidence, and no direct TCP connect or TCP anchor attempt in the MITM logs.
 The general BSD TCP compatibility matrix, additional program IDs, nonblocking connect, and transparent OS-wide routing remain later work.
 
-### Deferred UDP Anchor Cleanup
+### UDP Virtual Endpoint Ownership
 
-- [ ] Replace the UDP BSD:S connection anchor with the existing `wgnx:tun` virtual tuple.
+- [x] Replace the UDP BSD:S connection anchor with the existing `wgnx:tun` virtual tuple.
 
-  API v4 already exposes the WireGuard-allocated virtual UDP address and port through `GetFlowState`.
-  The MITM should obtain that tuple after `OpenConnectedUdpFlow`, return it from `getsockname`, and stop forwarding the successful UDP `connect` to BSD:S solely to capture a physical-interface endpoint.
+  API v5 returns the WireGuard-allocated virtual UDP address and port from `OpenConnectedFlow`.
+  The MITM returns that tuple from `getsockname` and does not forward a successful tunneled UDP `connect` to BSD:S.
   This removes unrelated native BSD routing and descriptor state, makes UDP and TCP ownership symmetric, and leaves the WireGuard sysmodule as the sole owner of tunneled endpoint allocation.
-  It changes visible UDP metadata from the physical BSD endpoint to the tunnel-owned virtual endpoint, so it requires the existing UDP device acceptance matrix plus endpoint-query regression coverage before adoption.
+  On-device acceptance requires the existing UDP matrix plus endpoint-query regression coverage with the virtual tuple, including fallback, terminal closure, and restart rows.

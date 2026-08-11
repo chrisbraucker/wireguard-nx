@@ -51,7 +51,7 @@ void TestTunnelFlowPlane(TestContext& context) {
         .remote = {.address = {10, 251, 0, 2}, .port = 29000, .reserved = 0},
         .diagnostic_tag = 0x4D5455,
     };
-    const auto mtu_flow = mtu_plane.OpenConnectedUdpFlow(mtu_client, mtu_open, 91);
+    const auto mtu_flow = mtu_plane.OpenConnectedFlow(mtu_client, mtu_open, 91);
     std::array<std::uint8_t, 1392> default_mtu_payload{};
     std::array<std::uint8_t, MaximumUdpPayloadStorageBytes> fragmented_payload{};
     std::array<std::uint8_t, MaximumUdpPayloadStorageBytes + 1> oversized_payload{};
@@ -129,11 +129,24 @@ void TestTunnelFlowPlane(TestContext& context) {
         .remote = {.address = {10, 251, 0, 2}, .port = 29000, .reserved = 0},
         .diagnostic_tag = 0xA5A5,
     };
-    const auto uncovered_result = plane.OpenConnectedUdpFlow(client, uncovered, 110);
-    const auto opened = plane.OpenConnectedUdpFlow(client, open, 120);
-    const auto unavailable_result = plane.OpenConnectedUdpFlow(client, open, 125, TransportUnavailable);
+    const OpenConnectedFlowRequest tcp_open{
+        .remote = open.remote,
+        .kind = FlowKind::Tcp,
+        .reserved = 0,
+        .diagnostic_tag = open.diagnostic_tag,
+    };
+    const OpenConnectedFlowRequest invalid_kind{
+        .remote = open.remote,
+        .kind = static_cast<FlowKind>(2),
+        .reserved = 0,
+        .diagnostic_tag = open.diagnostic_tag,
+    };
+    const auto uncovered_result = plane.OpenConnectedFlow(client, uncovered, 110);
+    const auto opened = plane.OpenConnectedFlow(client, open, 120);
+    const auto unavailable_result = plane.OpenConnectedFlow(client, open, 125, TransportUnavailable);
+    const auto invalid_kind_result = plane.OpenConnectedFlow(client, invalid_kind, 126, TransportReady);
     const auto opened_state = plane.GetFlowState(client, opened.flow);
-    const auto tcp_reservation = plane.ReserveConnectedTcpFlow(client, open, 121, TransportReady);
+    const auto tcp_reservation = plane.ReserveConnectedFlow(client, tcp_open, 121, TransportReady);
     const auto unresolved_tcp_route = plane.ResolveTcpOutput(tcp_reservation.local, tcp_reservation.remote);
     const bool tcp_committed = plane.CommitFlowReservation(tcp_reservation);
     const auto resolved_tcp_route = plane.ResolveTcpOutput(tcp_reservation.local, tcp_reservation.remote);
@@ -141,14 +154,14 @@ void TestTunnelFlowPlane(TestContext& context) {
     TunnelFlowPlane reservation_plane{};
     const TunnelClientId reservation_client = reservation_plane.CreateClient(nullptr, nullptr);
     reservation_plane.RefreshPolicy({.configuration = &config, .peer = first_peer, .selected = true}, 121);
-    const auto reservation = reservation_plane.ReserveConnectedUdpFlow(reservation_client, open, 122, TransportReady);
+    const auto reservation = reservation_plane.ReserveConnectedFlow(reservation_client, open, 122, TransportReady);
     std::uint64_t adapter_token = 0;
     const bool hidden_before_commit =
         reservation.IsReserved() && !reservation_plane.GetFlowAdapterToken(reservation_client, reservation.result.flow, &adapter_token);
     const bool committed = reservation_plane.CommitFlowReservation(reservation) &&
                            reservation_plane.GetFlowAdapterToken(reservation_client, reservation.result.flow, &adapter_token) &&
                            adapter_token == reservation.result.flow.value;
-    const auto stale_reservation = reservation_plane.ReserveConnectedUdpFlow(reservation_client, open, 123, TransportReady);
+    const auto stale_reservation = reservation_plane.ReserveConnectedFlow(reservation_client, open, 123, TransportReady);
     reservation_plane.RefreshPolicy(
         {.configuration = &config,
          .peer = {.peer_index = PeerIndex{0}, .activation_generation = ActivationGeneration{8}},
@@ -166,6 +179,7 @@ void TestTunnelFlowPlane(TestContext& context) {
     WGNX_TEST_REQUIRE(
         context,
         uncovered_result.status == ProtocolStatus::RouteNotCovered && opened.status == ProtocolStatus::Success &&
+            opened.advertised_local.port != 0 && invalid_kind_result.status == ProtocolStatus::MalformedInput &&
             tcp_reservation.IsReserved() && !unresolved_tcp_route.IsResolved() && tcp_committed && resolved_tcp_route.IsResolved() &&
             resolved_tcp_route.flow.value == tcp_reservation.result.flow.value && resolved_tcp_route.peer == first_peer &&
             tcp_state.flow_kind == FlowKind::Tcp && tcp_state.state == FlowState::Connecting && hidden_before_commit && committed &&
@@ -182,7 +196,7 @@ void TestTunnelFlowPlane(TestContext& context) {
     const TunnelClientId timeout_client = timeout_plane.CreateClient(nullptr, nullptr);
     timeout_plane.RefreshPolicy({.configuration = &config, .peer = first_peer, .selected = true}, 1000);
     static_cast<void>(timeout_plane.ReceiveCompletions(timeout_client, completions, received_payload));
-    const auto timeout_reservation = timeout_plane.ReserveConnectedTcpFlow(timeout_client, open, 1001, TransportReady);
+    const auto timeout_reservation = timeout_plane.ReserveConnectedFlow(timeout_client, tcp_open, 1001, TransportReady);
     const bool timeout_committed = timeout_plane.CommitFlowReservation(timeout_reservation);
     std::array<std::uint64_t, MaximumFlows> expired_tcp_tokens{};
     const std::uint32_t premature_expiration =
@@ -206,7 +220,7 @@ void TestTunnelFlowPlane(TestContext& context) {
     const TunnelClientId tcp_open_client = tcp_open_plane.CreateClient(nullptr, nullptr);
     tcp_open_plane.RefreshPolicy({.configuration = &config, .peer = first_peer, .selected = true}, 1100);
     static_cast<void>(tcp_open_plane.ReceiveCompletions(tcp_open_client, completions, received_payload));
-    const auto tcp_open_reservation = tcp_open_plane.ReserveConnectedTcpFlow(tcp_open_client, open, 1101, TransportReady);
+    const auto tcp_open_reservation = tcp_open_plane.ReserveConnectedFlow(tcp_open_client, tcp_open, 1101, TransportReady);
     const auto connecting_state = tcp_open_plane.GetFlowState(tcp_open_client, tcp_open_reservation.result.flow);
     const bool tcp_open_committed = tcp_open_plane.CommitFlowReservation(tcp_open_reservation);
     const bool tcp_connected = tcp_open_plane.MarkTcpConnected(tcp_open_reservation.adapter_token, 1102);
@@ -265,7 +279,7 @@ void TestTunnelFlowPlane(TestContext& context) {
     const TunnelClientId tcp_receive_client = tcp_receive_plane.CreateClient(nullptr, nullptr);
     tcp_receive_plane.RefreshPolicy({.configuration = &config, .peer = first_peer, .selected = true}, 1120);
     static_cast<void>(tcp_receive_plane.ReceiveCompletions(tcp_receive_client, completions, received_payload));
-    const auto tcp_receive_reservation = tcp_receive_plane.ReserveConnectedTcpFlow(tcp_receive_client, open, 1121, TransportReady);
+    const auto tcp_receive_reservation = tcp_receive_plane.ReserveConnectedFlow(tcp_receive_client, tcp_open, 1121, TransportReady);
     const bool tcp_receive_committed = tcp_receive_plane.CommitFlowReservation(tcp_receive_reservation);
     const bool tcp_receive_connected = tcp_receive_plane.MarkTcpConnected(tcp_receive_reservation.adapter_token, 1122);
     static_cast<void>(tcp_receive_plane.ReceiveCompletions(tcp_receive_client, completions, received_payload));
@@ -316,7 +330,7 @@ void TestTunnelFlowPlane(TestContext& context) {
     NotificationCounter protected_notifications{};
     const TunnelClientId protected_client = protected_plane.CreateClient(Notify, &protected_notifications);
     protected_plane.RefreshPolicy({.configuration = &config, .peer = first_peer, .selected = true}, 126);
-    const auto blocked_result = protected_plane.OpenConnectedUdpFlow(protected_client, open, 127, TransportUnavailable);
+    const auto blocked_result = protected_plane.OpenConnectedFlow(protected_client, open, 127, TransportUnavailable);
     WGNX_TEST_REQUIRE(
         context,
         blocked_result.status == ProtocolStatus::TunnelBlockedByPolicy,
@@ -392,7 +406,7 @@ void TestTunnelFlowPlane(TestContext& context) {
     const auto close_status = plane.CloseFlow(client, opened.flow, 180);
     const auto delayed =
         plane.DeliverInboundUdpDatagram(first_peer, plane.PolicyGeneration(), opened.flow.value, open.remote, Payload, 181);
-    const auto replacement = plane.OpenConnectedUdpFlow(client, open, 182);
+    const auto replacement = plane.OpenConnectedFlow(client, open, 182);
     WGNX_TEST_REQUIRE(
         context,
         close_status == ProtocolStatus::Success && delayed.disposition == TunnelInboundDisposition::DroppedStale &&
@@ -419,7 +433,7 @@ void TestTunnelFlowPlane(TestContext& context) {
     client_reuse_plane.RefreshPolicy({.configuration = &config, .peer = first_peer, .selected = true}, 200);
     static_cast<void>(client_reuse_plane.ReceiveCompletions(first_reuse_client, completions, received_payload));
     static_cast<void>(client_reuse_plane.ReceiveCompletions(second_reuse_client, completions, received_payload));
-    const auto first_reuse_flow = client_reuse_plane.OpenConnectedUdpFlow(first_reuse_client, open, 201);
+    const auto first_reuse_flow = client_reuse_plane.OpenConnectedFlow(first_reuse_client, open, 201);
     const PayloadRange first_reuse_descriptor{
         .flow = first_reuse_flow.flow,
         .payload_offset = 0,
@@ -429,7 +443,7 @@ void TestTunnelFlowPlane(TestContext& context) {
     const auto first_reuse_send = client_reuse_plane.PrepareSend(first_reuse_client, first_reuse_descriptor, Payload, TransportReady, 202);
     const std::uint16_t first_reuse_port = client_reuse_plane.GetFlowState(first_reuse_client, first_reuse_flow.flow).advertised_local.port;
     const auto first_reuse_close = client_reuse_plane.CloseFlow(first_reuse_client, first_reuse_flow.flow, 203);
-    const auto second_reuse_flow = client_reuse_plane.OpenConnectedUdpFlow(second_reuse_client, open, 204);
+    const auto second_reuse_flow = client_reuse_plane.OpenConnectedFlow(second_reuse_client, open, 204);
     const PayloadRange second_reuse_descriptor{
         .flow = second_reuse_flow.flow,
         .payload_offset = 0,
@@ -507,7 +521,7 @@ void TestTunnelFlowPlane(TestContext& context) {
         .remote = {.address = {10, 251, 0, 2}, .port = 0, .reserved = 0},
         .diagnostic_tag = 0,
     };
-    const auto invalid_port_result = bounded_plane.OpenConnectedUdpFlow(bounded_client, invalid_port, 201);
+    const auto invalid_port_result = bounded_plane.OpenConnectedFlow(bounded_client, invalid_port, 201);
 
     std::array<FlowHandle, MaximumFlowsPerClient> bounded_flows{};
     bool all_bounded_flows_opened = true;
@@ -515,7 +529,7 @@ void TestTunnelFlowPlane(TestContext& context) {
         auto flow_request = open;
         flow_request.diagnostic_tag = index;
         const auto opened_flow =
-            bounded_plane.OpenConnectedUdpFlow(bounded_client, flow_request, 202 + static_cast<wgnx::platform::ktime_t>(index));
+            bounded_plane.OpenConnectedFlow(bounded_client, flow_request, 202 + static_cast<wgnx::platform::ktime_t>(index));
         bounded_flows[index] = opened_flow.flow;
         all_bounded_flows_opened = all_bounded_flows_opened && opened_flow.status == ProtocolStatus::Success;
     }
@@ -569,7 +583,7 @@ void TestTunnelFlowPlane(TestContext& context) {
     bool all_tuples_opened = true;
     std::array<FlowHandle, MaximumFlows> quarantine_flows{};
     for (std::size_t index = 0; index < quarantine_flows.size(); ++index) {
-        const auto opened_flow = quarantine_plane.OpenConnectedUdpFlow(
+        const auto opened_flow = quarantine_plane.OpenConnectedFlow(
             quarantine_clients[index / MaximumFlowsPerClient],
             open,
             301 + static_cast<wgnx::platform::ktime_t>(index)
@@ -584,9 +598,9 @@ void TestTunnelFlowPlane(TestContext& context) {
             400 + static_cast<wgnx::platform::ktime_t>(index)
         ));
     }
-    const auto exhausted = quarantine_plane.OpenConnectedUdpFlow(quarantine_clients[0], open, 500);
+    const auto exhausted = quarantine_plane.OpenConnectedFlow(quarantine_clients[0], open, 500);
     const auto after_expiry =
-        quarantine_plane.OpenConnectedUdpFlow(quarantine_clients[0], open, 500 + TunnelFlowPlane::ReverseTupleQuarantineNs + 1);
+        quarantine_plane.OpenConnectedFlow(quarantine_clients[0], open, 500 + TunnelFlowPlane::ReverseTupleQuarantineNs + 1);
     WGNX_TEST_REQUIRE(
         context,
         all_tuples_opened && exhausted.status == ProtocolStatus::ReverseTupleExhausted && after_expiry.status == ProtocolStatus::Success,

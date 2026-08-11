@@ -9,7 +9,7 @@
 namespace wgnx::tunnel {
 
 constexpr inline char ServiceName[] = "wgnx:tun";
-constexpr inline std::uint32_t TunApiVersion = 4;
+constexpr inline std::uint32_t TunApiVersion = 5;
 
 constexpr inline std::size_t MaximumClientContexts = 4;
 constexpr inline std::size_t MaximumFlowsPerClient = 4;
@@ -54,12 +54,11 @@ enum class ClientCommandId : std::uint32_t {
     GetCapabilities = 0,
     GetRoutingPolicySnapshot = 1,
     GetCompletionEvent = 2,
-    OpenConnectedUdpFlow = 3,
+    OpenConnectedFlow = 3,
     SendUdpDatagramBatch = 4,
     ReceiveCompletions = 5,
     GetFlowState = 6,
     CloseFlow = 7,
-    OpenConnectedTcpFlow = 8,
     WriteTcpStream = 9,
     ShutdownTcpWrite = 10,
 };
@@ -166,6 +165,8 @@ struct Capabilities {
 
 struct OpenConnectedFlowRequest {
     Ipv4Endpoint remote;
+    FlowKind kind{FlowKind::Udp};
+    std::uint32_t reserved{0};
     std::uint64_t diagnostic_tag;
 };
 
@@ -174,6 +175,7 @@ struct OpenConnectedFlowResult {
     FlowHandle flow;
     std::uint32_t peer_activation_generation;
     std::uint32_t routing_policy_generation;
+    Ipv4Endpoint advertised_local{};
 };
 
 struct PayloadRange {
@@ -249,8 +251,8 @@ static_assert(std::is_trivially_copyable_v<RouteRecord>);
 static_assert(sizeof(FlowHandle) == 8);
 static_assert(sizeof(Ipv4Endpoint) == 8);
 static_assert(sizeof(Capabilities) == 48);
-static_assert(sizeof(OpenConnectedFlowRequest) == 16);
-static_assert(sizeof(OpenConnectedFlowResult) == 24);
+static_assert(sizeof(OpenConnectedFlowRequest) == 24);
+static_assert(sizeof(OpenConnectedFlowResult) == 32);
 static_assert(sizeof(PayloadRange) == 24);
 static_assert(sizeof(PayloadResult) == 16);
 static_assert(sizeof(CompletionRecord) == 56);

@@ -236,7 +236,7 @@ The expected `RegisterClient` session remains the descriptor-table owner used by
 `RegisterClient` remains on Atmosphere's generic MITM forward path, which tags the original PID for Mesosphere restoration and closes the MITM-owned duplicate of its transfer-memory copy handle after forwarding.
 The generic forward service uses a bounded explicit allocator because Stratosphere system modules intentionally do not provide a newlib heap for `std::shared_ptr` or `new`.
 The first routed surface is connected IPv4 UDP using `Socket`, `Connect`, `Send`, `Recv`, `RecvFrom`, `Poll`, `GetPeerName`, `GetSockName`, and `Close`.
-The original `bsd:s` descriptor remains the lifecycle and visible-local-endpoint anchor.
+The original `bsd:s` descriptor remains the lifecycle and Horizon descriptor-namespace anchor.
 The worker owns all raw `wgnx:tun` root and child-client CMIF calls outside the BSD dispatch stack.
 The current BSD handlers synchronously wait for a bounded worker operation to complete, but they never issue raw service-manager or WGNX CMIF themselves.
 Unavailable, inactive, incompatible, or route-uncovered tunnel state leaves the socket on upstream BSD.
@@ -267,10 +267,11 @@ Start with the narrowest viable `bsd:s` operation subset: UDP socket creation, d
 `bsd:u` observations remain useful for BSD semantic research, but `bsd:u` is not the production target for this plan.
 Do not begin with TCP emulation.
 
-The MITM forwards each `Socket` creation to the original `bsd:s` service and retains the returned real descriptor as the Horizon descriptor-namespace, lifecycle, and local-endpoint anchor.
-For a connected destination covered by WireGuard policy, it opens one private WGNX flow, forwards the initial UDP `Connect` only to let Horizon select the ordinary device-facing local address and ephemeral port, then services subsequent payload and virtual endpoint operations through `wgnx:tun`.
-The MITM captures that local endpoint and returns it from `GetSockName`, while the WireGuard source tuple remains private to the tunnel sysmodule.
-If endpoint capture fails, the MITM closes the new flow and returns a terminal socket error rather than risking direct payload fallback.
+The MITM forwards each `Socket` creation to the original `bsd:s` service and retains the returned real descriptor as the Horizon descriptor-namespace and lifecycle anchor.
+For a connected destination covered by WireGuard policy, it opens one private WGNX flow and services payload and endpoint operations through `wgnx:tun`.
+The WireGuard sysmodule allocates the virtual local tuple and the MITM returns it from `GetSockName`.
+It never forwards a successfully tunneled UDP or TCP `Connect` to BSD:S.
+If virtual endpoint publication fails, the MITM closes the new flow and returns a terminal socket error rather than risking direct payload fallback.
 For an explicitly uncovered destination, it retains the original BSD path.
 For a matching route whose tunnel transport is unavailable, the WireGuard-owned leak-protection result determines whether a new socket retains the direct BSD path or fails with `ENETUNREACH`.
 Once a socket enters tunneled state, transport or peer failure must surface as a socket error and must never silently switch that socket to the original BSD path.
@@ -323,8 +324,8 @@ Definition of done:
 - nonblocking send and receive, readable and writable polling, timeout, terminal closure, and queue-pressure outcomes match the documented narrow BSD subset
 - the WireGuard outer transport and MITM-owned BSD client are proven to bypass interception under the broadest configured tunnel route
 - unsupported BSD operations are traceable and fail predictably without destabilizing subsequent clients
-- `GetSockName` on a tunneled socket returns the captured ordinary device-facing IPv4 endpoint rather than the WireGuard tunnel tuple
-- the initial upstream UDP `Connect` used for endpoint capture produces no direct payload visible at the controlled harness
+- `GetSockName` on a tunneled socket returns the WireGuard-allocated virtual IPv4 endpoint
+- successfully tunneled UDP and TCP `Connect` operations produce no native BSD:S connection or direct payload visible at the controlled harness
 - the established requester and direct-flow tests remain passing while the MITM is active
 - the controlled requester workload is transparently intercepted and rerouted through the tunnel, with accounting agreement across requester, remote harness, MITM, and WireGuard for baseline, paced, and bounded-burst runs
 - the first measured throughput ceiling, resource limit reached, and resulting drop or backpressure behavior are recorded before TCP implementation starts
@@ -361,7 +362,7 @@ It creates child clients only when a routed BSD socket needs one.
 - [x] **Writable queue pressure:** Coalesced WGNX `Writable` completions now map to tunneled `POLLOUT`, and the requester retries the same datagram only after that readiness signal rather than treating `EAGAIN` as a terminal workload failure.
 - [x] **Quiet controlled harness:** The controlled UDP harness has a quiet aggregate mode and uses a non-threaded UDP server handler, preserving source and workload accounting without a host thread or flushed line per datagram.
 - [x] **Narrow BSD semantics:** The nonblocking requester-only operation and error contract is implemented and host-tested, including zero-flag send and receive, `F_GETFL` and `F_SETFL` with the BSD:S `O_NONBLOCK` wire value `0x800`, one-descriptor `POLLIN` and `POLLOUT`, queue pressure, and rejected unsupported operation classes.
-  The 2026-08-01 device matrix passed normal paced echo with the requester-recorded device-facing `GetSockName` endpoint, no-reply poll timeout, terminal `POLLHUP` after peer teardown and WGNX shutdown, queue-pressure writable recovery, rejected post-route operation behavior, and a clean later requester launch.
+  Before the virtual-endpoint migration, the 2026-08-01 device matrix passed normal paced echo with the requester-recorded device-facing `GetSockName` endpoint, no-reply poll timeout, terminal `POLLHUP` after peer teardown and WGNX shutdown, queue-pressure writable recovery, rejected post-route operation behavior, and a clean later requester launch.
 - [x] **Four-mode baseline:** The 2026-08-01 identical 32-datagram, 1200-byte workload passed through native BSD, passive MITM forwarding, direct `wgnx:tun`, and BSD MITM to WireGuard.
 - [ ] **Attribution and ceiling:** The local-admission and downstream-pressure accounting contract is reconciled and checked by the Task 4 summary helper, while the first throughput or resource ceiling and its explicit backpressure or drop disposition remain to be measured.
 - [x] **Client-context and batching decision:** Preserve one WGNX child client per BSD socket for independent descriptor teardown and completion ownership, while batching up to four FIFO-ordered payloads only within that flow's client context.
@@ -420,7 +421,7 @@ Task 6 item 15 separately exercises larger replies that force two and three inne
 
    For every run, retain requester, MITM, WireGuard, and harness summaries.
    The controlled harness must receive exactly the configured sequence set without duplicates or malformed workload records.
-   In the full BSD MITM mode, verify the requester log records a non-any device-facing `GetSockName` endpoint and the MITM logs `connect tunneled` with that same visible endpoint.
+   In the full BSD MITM mode, verify the requester log records a non-any WireGuard virtual `GetSockName` endpoint and the MITM logs `connect tunneled transport=udp` with that same visible endpoint.
 4. With the MITM and peer active, run the new no-reply timeout mode against the no-echo harness.
    Confirm the requester records the expected zero-result `POLLIN` timeout, then exits and a fresh ordinary BSD MITM echo requester launch succeeds.
 5. With the MITM and peer active, run the new terminal-flow mode against the echo harness.

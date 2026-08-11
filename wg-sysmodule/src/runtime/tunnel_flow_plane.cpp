@@ -177,36 +177,18 @@ wgnx::tunnel::RoutingPolicySnapshot TunnelFlowPlane::CopyRoutingPolicy(std::span
     };
 }
 
-TunnelFlowReservation TunnelFlowPlane::ReserveConnectedUdpFlow(
-    TunnelClientId client,
-    const wgnx::tunnel::OpenConnectedFlowRequest& request,
-    wgnx::platform::ktime_t now,
-    TunnelTransportAvailability availability
-) {
-    return ReserveConnectedFlow(client, request, now, availability, wgnx::tunnel::FlowKind::Udp);
-}
-
-TunnelFlowReservation TunnelFlowPlane::ReserveConnectedTcpFlow(
-    TunnelClientId client,
-    const wgnx::tunnel::OpenConnectedFlowRequest& request,
-    wgnx::platform::ktime_t now,
-    TunnelTransportAvailability availability
-) {
-    return ReserveConnectedFlow(client, request, now, availability, wgnx::tunnel::FlowKind::Tcp);
-}
-
 TunnelFlowReservation TunnelFlowPlane::ReserveConnectedFlow(
     TunnelClientId client,
     const wgnx::tunnel::OpenConnectedFlowRequest& request,
     wgnx::platform::ktime_t now,
-    TunnelTransportAvailability availability,
-    wgnx::tunnel::FlowKind kind
+    TunnelTransportAvailability availability
 ) {
     TunnelFlowReservation reservation{};
     wgnx::tunnel::OpenConnectedFlowResult& result = reservation.result;
     result.routing_policy_generation = m_policy_generation;
     ClientSlot* client_slot = FindClient(client);
-    if (client_slot == nullptr || request.remote.reserved != 0 || request.remote.port == 0 || IsZeroEndpoint(request.remote)) {
+    if (client_slot == nullptr || request.remote.reserved != 0 || request.remote.port == 0 || IsZeroEndpoint(request.remote) ||
+        request.reserved != 0 || (request.kind != wgnx::tunnel::FlowKind::Udp && request.kind != wgnx::tunnel::FlowKind::Tcp)) {
         return reservation;
     }
     if (!m_policy_available || m_policy_peer.activation_generation.IsZero()) {
@@ -256,7 +238,7 @@ TunnelFlowReservation TunnelFlowPlane::ReserveConnectedFlow(
         .closed = false,
         .pending = true,
         .state = wgnx::tunnel::FlowState::Connecting,
-        .stream_flags = kind == wgnx::tunnel::FlowKind::Tcp
+        .stream_flags = request.kind == wgnx::tunnel::FlowKind::Tcp
                             ? wgnx::tunnel::FlowStreamFlagLocalWriteOpen | wgnx::tunnel::FlowStreamFlagRemoteWriteOpen
                             : wgnx::tunnel::FlowStreamFlagNone,
         .client_slot = client.slot,
@@ -264,7 +246,7 @@ TunnelFlowReservation TunnelFlowPlane::ReserveConnectedFlow(
         .allocation_generation = AllocateFlowGeneration(),
         .peer = m_policy_peer,
         .policy_generation = m_policy_generation,
-        .kind = kind,
+        .kind = request.kind,
         .remote = request.remote,
         .tunnel_source = m_tunnel_source,
         .virtual_source_port = source_port,
@@ -280,6 +262,7 @@ TunnelFlowReservation TunnelFlowPlane::ReserveConnectedFlow(
         .port = flow.virtual_source_port,
         .reserved = 0,
     };
+    result.advertised_local = reservation.local;
     reservation.remote = flow.remote;
     reservation.client = client;
     reservation.peer = flow.peer;
@@ -295,7 +278,7 @@ TunnelFlowReservation TunnelFlowPlane::ReserveConnectedFlow(
     logger::Log(
         "Opened tunnel %s flow=%llu slot=%zu client=%u/%u peer=%u activation=%u policy=%u remote=%s:%u "
         "tunnel_source=%s virtual_source_port=%u tag=%llu",
-        kind == wgnx::tunnel::FlowKind::Tcp ? "TCP" : "UDP",
+        request.kind == wgnx::tunnel::FlowKind::Tcp ? "TCP" : "UDP",
         static_cast<unsigned long long>(result.flow.value),
         slot,
         static_cast<unsigned int>(flow.client_slot),
@@ -312,13 +295,13 @@ TunnelFlowReservation TunnelFlowPlane::ReserveConnectedFlow(
     return reservation;
 }
 
-wgnx::tunnel::OpenConnectedFlowResult TunnelFlowPlane::OpenConnectedUdpFlow(
+wgnx::tunnel::OpenConnectedFlowResult TunnelFlowPlane::OpenConnectedFlow(
     TunnelClientId client,
     const wgnx::tunnel::OpenConnectedFlowRequest& request,
     wgnx::platform::ktime_t now,
     TunnelTransportAvailability availability
 ) {
-    const TunnelFlowReservation reservation = ReserveConnectedUdpFlow(client, request, now, availability);
+    const TunnelFlowReservation reservation = ReserveConnectedFlow(client, request, now, availability);
     if (!reservation.IsReserved()) {
         return reservation.result;
     }

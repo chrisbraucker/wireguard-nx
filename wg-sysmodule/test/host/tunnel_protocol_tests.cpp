@@ -20,7 +20,7 @@ void TestTunnelProtocolContract(TestContext& context) {
 
     WGNX_TEST_REQUIRE(
         context,
-        TunApiVersion == 4 && wgnx::tunnel::ServiceName[0] == 'w' && wgnx::tunnel::ServiceName[4] == ':' &&
+        TunApiVersion == 5 && wgnx::tunnel::ServiceName[0] == 'w' && wgnx::tunnel::ServiceName[4] == ':' &&
             wgnx::tunnel::ServiceName[7] == 'n' && wgnx::tunnel::ServiceName[8] == '\0',
         "tunnel root identity changed"
     );
@@ -46,11 +46,10 @@ void TestTunnelProtocolContract(TestContext& context) {
             static_cast<std::uint32_t>(ClientCommandId::GetCapabilities) == 0 &&
             static_cast<std::uint32_t>(ClientCommandId::GetRoutingPolicySnapshot) == 1 &&
             static_cast<std::uint32_t>(ClientCommandId::GetCompletionEvent) == 2 &&
-            static_cast<std::uint32_t>(ClientCommandId::OpenConnectedUdpFlow) == 3 &&
+            static_cast<std::uint32_t>(ClientCommandId::OpenConnectedFlow) == 3 &&
             static_cast<std::uint32_t>(ClientCommandId::SendUdpDatagramBatch) == 4 &&
             static_cast<std::uint32_t>(ClientCommandId::ReceiveCompletions) == 5 &&
             static_cast<std::uint32_t>(ClientCommandId::GetFlowState) == 6 && static_cast<std::uint32_t>(ClientCommandId::CloseFlow) == 7 &&
-            static_cast<std::uint32_t>(ClientCommandId::OpenConnectedTcpFlow) == 8 &&
             static_cast<std::uint32_t>(ClientCommandId::WriteTcpStream) == 9 &&
             static_cast<std::uint32_t>(ClientCommandId::ShutdownTcpWrite) == 10,
         "tunnel command identifiers changed"
@@ -103,8 +102,8 @@ void TestTunnelProtocolContract(TestContext& context) {
     );
     WGNX_TEST_REQUIRE(
         context,
-        sizeof(FlowHandle) == 8 && sizeof(Ipv4Endpoint) == 8 && sizeof(Capabilities) == 48 && sizeof(OpenConnectedFlowRequest) == 16 &&
-            sizeof(OpenConnectedFlowResult) == 24 && sizeof(PayloadRange) == 24 && sizeof(PayloadResult) == 16 &&
+        sizeof(FlowHandle) == 8 && sizeof(Ipv4Endpoint) == 8 && sizeof(Capabilities) == 48 && sizeof(OpenConnectedFlowRequest) == 24 &&
+            sizeof(OpenConnectedFlowResult) == 32 && sizeof(PayloadRange) == 24 && sizeof(PayloadResult) == 16 &&
             sizeof(CompletionRecord) == 56 && sizeof(CompletionDrainResult) == 8 && sizeof(FlowStateResult) == 48 &&
             sizeof(RoutingPolicySnapshot) == 8 && sizeof(RouteRecord) == 32,
         "tunnel binary record layout changed"
