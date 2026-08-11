@@ -2,5 +2,6 @@ build/
 out/
 
 /reports/
+mitm-sysmodule/local.mk
 
 __pycache__

@@ -15,6 +15,24 @@ enum class BsdSocketRouteState : std::uint8_t {
     Closed,
 };
 
+enum class BsdSocketTransport : std::uint8_t {
+    None,
+    Udp,
+    Tcp,
+};
+
+[[nodiscard]] constexpr const char* BsdSocketTransportName(const BsdSocketTransport transport) {
+    switch (transport) {
+    case BsdSocketTransport::None:
+        return "none";
+    case BsdSocketTransport::Udp:
+        return "udp";
+    case BsdSocketTransport::Tcp:
+        return "tcp";
+    }
+    return "unknown";
+}
+
 enum class BsdSocketRouteEvent : std::uint8_t {
     BeginTunnelOpen,
     TunnelOpened,

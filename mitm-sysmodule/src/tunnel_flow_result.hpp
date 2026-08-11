@@ -13,6 +13,7 @@ enum class TunnelFlowResult : std::uint8_t {
     MessageTooLarge,
     QueueFull,
     WouldBlock,
+    EndOfFile,
     Closed,
 };
 

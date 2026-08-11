@@ -52,5 +52,7 @@ bool RunBsdSocketStateTests() {
                AdvanceBsdSocketRoute(BsdSocketRouteState::Tunneled, BsdSocketRouteEvent::Close) == BsdSocketRouteState::Closed,
                "close did not terminate tunneled socket"
            ) &&
-           Check(std::strcmp(BsdSocketRouteStateName(BsdSocketRouteState::Tunneled), "tunneled") == 0, "tunneled state name changed");
+           Check(std::strcmp(BsdSocketRouteStateName(BsdSocketRouteState::Tunneled), "tunneled") == 0, "tunneled state name changed") &&
+           Check(std::strcmp(BsdSocketTransportName(BsdSocketTransport::Udp), "udp") == 0, "UDP transport name changed") &&
+           Check(std::strcmp(BsdSocketTransportName(BsdSocketTransport::Tcp), "tcp") == 0, "TCP transport name changed");
 }

@@ -36,9 +36,19 @@ bool RunTunnelCompletionValidationTests() {
     const bool invalid_datagram_size =
         !ValidateTunnelCompletionDrain(1, records.size(), records, wgnx::tunnel::MaximumUdpPayloadStorageBytes + 1);
 
+    records[0] = {};
+    records[0].type = wgnx::tunnel::CompletionType::InboundTcpStream;
+    records[0].payload_size = 8;
+    const bool valid_stream = ValidateTunnelCompletionDrain(1, records.size(), records, PayloadCapacity);
+    records[0].payload_size = static_cast<std::uint32_t>(wgnx::tunnel::MaximumTcpWriteStorageBytes + 1);
+    const bool invalid_stream_size =
+        !ValidateTunnelCompletionDrain(1, records.size(), records, wgnx::tunnel::MaximumTcpWriteStorageBytes + 1);
+
     return Check(valid, "valid tunnel completion response was rejected") &&
            Check(invalid_count, "oversized tunnel completion count was accepted") &&
            Check(invalid_offset, "out-of-range tunnel completion offset was accepted") &&
            Check(invalid_range, "out-of-range tunnel completion payload was accepted") &&
-           Check(invalid_datagram_size, "oversized tunnel completion datagram was accepted");
+           Check(invalid_datagram_size, "oversized tunnel completion datagram was accepted") &&
+           Check(valid_stream, "valid tunnel completion stream was rejected") &&
+           Check(invalid_stream_size, "oversized tunnel completion stream was accepted");
 }

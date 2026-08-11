@@ -2,7 +2,7 @@
 
 namespace wgnx::mitm {
 
-// Registers the narrow requester-only bsd:s MITM and starts its server loop.
+// Registers the narrow Toolbox-only bsd:s MITM and starts its server loop.
 bool StartBsdMitmServer();
 void StopBsdMitmServer();
 

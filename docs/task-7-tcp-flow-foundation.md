@@ -2,10 +2,9 @@
 
 ## Goal
 
-This guide covers the first three Task 7 slices as one coordinated repository cutover.
-It reshapes the private `wgnx:tun` contract for explicit connected IPv4 TCP streams, adds a direct Toolbox client for that contract, and implements TCP in the WireGuard-owned lwIP adapter.
-The result is a bounded direct `wgnx:tun` TCP request and response through a real WireGuard peer without BSD interception.
-The BSD MITM TCP translation is the next slice and is deliberately outside this guide.
+This guide covers the Task 7 TCP foundation and its narrow Toolbox-only BSD:S MITM continuation as one coordinated repository cutover.
+It reshapes the private `wgnx:tun` contract for explicit connected IPv4 TCP streams, adds a direct Toolbox client for that contract, implements TCP in the WireGuard-owned lwIP adapter, and translates the first BSD:S stream-operation subset.
+The result is a bounded direct or Toolbox-intercepted TCP request and response through a real WireGuard peer without a native TCP anchor connection.
 
 `wgnx:tun` remains a private active-development API.
 No compatibility shim, deprecated command, dual-version handler, or migration path is required.
@@ -17,7 +16,8 @@ The 2026-08-10 controlled Toolbox trace admitted both `bsd:s` root sessions and 
 The observed command sequence was `RegisterClient`, `StartMonitoring`, `Socket`, two `SetSockOpt` calls, `Connect`, `GetSockName`, `Send`, `Poll`, `Recv`, and `Close`.
 The client opened `AF_INET`, `SOCK_STREAM`, `IPPROTO_TCP`, connected to the configured IPv4 endpoint, sent `NXRV TCP <workload-id>\r\n`, received `NXRV TCP ACK\r\n`, and closed cleanly.
 This is enough evidence for the first connected-client stream contract and direct WGNX scenario.
-It does not yet characterize nonblocking connect, `Shutdown`, partial writes, remote refusal, reset, or timeout behavior at the BSD boundary, so those translations remain MITM acceptance work rather than assumptions in this slice.
+The trace does not characterize nonblocking connect, `Shutdown`, partial writes, remote refusal, reset, or timeout behavior at the BSD boundary.
+The MITM continuation therefore implements only its explicit narrow contract and leaves those untraced behaviors to the focused acceptance and later compatibility work.
 
 ## Version 3 Baseline
 
@@ -274,7 +274,95 @@ Advertise connected IPv4 UDP and connected IPv4 TCP independently.
   Require a successful connection, exact request and ACK bytes, a nonzero virtual local endpoint, ordered stream accounting, orderly closure, zero unexplained drops, and complete resource cleanup.
   Repeat after one peer deactivate and reactivate cycle, then test one closed remote port to confirm a bounded terminal connection failure and a successful subsequent connection.
   Archive Toolbox, harness, and WireGuard logs and record the target footprint and first latency result.
-  Stop before BSD TCP interception and use the completed version 4 stream contract as the sole transport boundary for that next slice.
+  The completed follow-on MITM implementation uses the version 4 stream contract as its sole transport boundary.
+  Its focused acceptance routine is included below and remains separate from Item 14's direct-path evidence.
+
+## On-Device Acceptance Guide
+
+This guide first validates the production direct path with the MITM sysmodule disabled.
+It then validates the narrow Toolbox-only BSD TCP translation against that direct baseline.
+It does not validate general BSD TCP compatibility, additional program IDs, or transparent application routing.
+
+### Shared Setup
+
+1. Build and deploy the current `wg-sysmodule` and Toolbox from the same version 4 headers.
+   Start the WireGuard sysmodule, activate the configured peer, and wait until the tunnel has an endpoint and an established session.
+   Disable the MITM sysmodule for the direct-path phases so `wgnx:tun` is the only tested tunnel client.
+
+2. On the controlled remote host, start the existing harness on an address reachable through the peer's tunnel routing.
+
+   ```sh
+   python3 nx-reversing.git/tools/requester_harness.py --listen-host 0.0.0.0 --tcp-ack-port 28080 --tcp-stall-port 28082
+   ```
+
+   The harness must show that TCP port `28080` is listening before any device run starts.
+   Choose a distinct unused remote TCP port, such as `28081`, for the refusal test and do not start a listener there.
+
+3. In Toolbox, create or select one profile with `tunnel_destination_ipv4` set to the remote tunnel IPv4 address and `tcp_destination_port=28080`.
+   Set `tcp.receive_deadline_ms=5000` unless the Wi-Fi path needs a longer, explicitly recorded deadline.
+   Record the active profile, peer endpoint, Toolbox build, WireGuard build, and the workload ID shown immediately before each run.
+   Toolbox reserves and persists that ID before starting, so never reuse an ID after a failed or interrupted run.
+
+4. Start a fresh log capture for each run and retain the Toolbox log, harness log, and WireGuard sysmodule log together under one run directory in `workspace/reports/`.
+   Preserve the unedited raw logs and record the current target footprint from the most recent `make -C wireguard-nx.git/wg-sysmodule resource-report` output beside them.
+
+### Item 7 Focused Adapter Acceptance
+
+1. Select `Direct tunnel TCP exchange` on Toolbox's Main page and run it once against the active profile.
+   The expected Toolbox result is `[OK] wgnx_tunnel_tcp_exchange` with `api=4`, a nonzero `virtual_local_port`, `accepted=` equal to the request length, `reply=validated`, `eof=observed`, and `close=ok`.
+
+2. Confirm that the harness received exactly `NXRV TCP <workload-id>\r\n` and replied with exactly `NXRV TCP ACK\r\n`.
+   Confirm in the WireGuard log that the flow opened, connected, emitted tunnel IPv4 TCP packets, accepted the reply, observed remote EOF, and retired its PCB without an input rejection, collector overflow, or unexplained drop.
+
+3. Repeat the same direct run once after stopping and restarting the WireGuard sysmodule.
+   Both runs must succeed with separate workload IDs, and the second run must establish a new virtual local endpoint rather than using stale client, flow, or adapter state.
+
+### Item 14 Direct Real-Peer Acceptance
+
+1. Establish the native control first.
+   Change only the scenario to `BSD system TCP exchange` and set `bsd_destination_ipv4` to the remote host address that is reachable through the normal native route, while retaining TCP port `28080`.
+   Run once with the MITM disabled and require the same exact request and ACK bytes plus a clean native socket close.
+
+2. Restore `Direct tunnel TCP exchange` and the remote tunnel IPv4 destination, then run it once through the active peer.
+   Require the complete Item 7 success string, exact harness request and reply, one nonzero virtual local endpoint, ordered stream delivery before EOF, and no unexplained WireGuard, adapter, or packet-plane drops.
+
+3. Deactivate the peer after the successful direct run, reactivate it, wait for a new tunnel session, and run the same direct scenario again.
+   Require a new successful round trip with a new workload ID and complete cleanup of the earlier flow before accepting the recovery path.
+
+4. Change only the active profile's TCP port to the known closed remote port and run the direct scenario once.
+   Require a bounded terminal connection failure before the configured deadline and record its terminal reason from the Toolbox and WireGuard logs.
+   Restore port `28080` and require one further successful direct TCP exchange to prove that the failure did not poison later flow creation.
+
+5. Mark Item 14 complete only when all five runs have matching raw logs and all direct runs show API version 4, the expected exact bytes, orderly EOF and close, zero unexplained drops, and released resources.
+   The current Toolbox TCP scenario does not emit a monotonic latency metric, so record latency as `not measured by this scenario` rather than inventing one.
+   Add a dedicated timestamped TCP measurement only when latency is needed as a decision metric, then rerun the accepted direct case.
+
+### Toolbox BSD TCP MITM Acceptance
+
+Run this sequence immediately after one accepted direct Item 14 exchange so both paths use the same peer, harness, profile, build set, and network conditions.
+
+1. Keep the active peer and harness listener on TCP port `28080` unchanged.
+   Confirm the direct baseline used `tunnel_destination_ipv4` set to the remote tunnel IPv4 address and completed with the exact expected request and reply.
+
+2. Deploy and start the MITM sysmodule built with `TOOLBOX_FORWARDER_PROGRAM_ID` set to the installed Toolbox forwarder program ID.
+   Retain a new MITM log beside the Toolbox, harness, and WireGuard logs.
+   Confirm its startup log reports the Toolbox-only BSD:S interceptor before starting the run.
+
+3. In the same Toolbox profile, set `bsd_destination_ipv4` to that same remote tunnel IPv4 address and keep `tcp_destination_port=28080`.
+   Select `BSD system TCP exchange` and run it once with a new workload ID.
+
+4. Require Toolbox to report `[OK] bsd_system_tcp_exchange` with a nonzero local endpoint, the exact `NXRV TCP <workload-id>\r\n` request, the exact `NXRV TCP ACK\r\n` reply, and clean close.
+   Require the harness to record exactly one corresponding request and ACK.
+   Require the MITM log to show Toolbox admission, a TCP `wgnx:tun` flow open, a successful tunneled TCP connect, and flow retirement on close.
+   Reject the run if the MITM log shows a direct TCP connect or a TCP anchor attempt.
+   Require the WireGuard log to show one TCP flow with the same remote tuple, virtual local tuple, ordered reply delivery, EOF, and release without an adapter, packet-plane, or completion rejection.
+
+5. Stop or disable the MITM sysmodule, then repeat `Direct tunnel TCP exchange` once using a third workload ID.
+   The post-MITM direct run must succeed with the same exact bytes and a new virtual local endpoint.
+   This confirms that the MITM's retained BSD descriptor and flow cleanup did not contaminate a later direct client flow.
+
+6. Archive the three grouped runs as `tcp_direct_baseline`, `tcp_bsd_mitm`, and `tcp_direct_after_mitm`.
+   Mark the MITM acceptance complete only when all three have matching Toolbox, harness, and WireGuard accounting and the MITM run has the expected MITM lifecycle evidence.
 
 ## Verification Gates
 
@@ -297,8 +385,65 @@ The version 4 cutover is not complete while any in-tree module advertises versio
 The TCP implementation is not accepted merely because lwIP completes a handshake in an isolated test.
 It must pass through the production adapter owner, packet plane, WireGuard peer, direct `wgnx:tun` client, and controlled real peer with bounded resource accounting.
 
-## Scope After This Guide
+## Task 7 BSD TCP MITM Continuation
 
-The next Task 7 slice adds TCP handling to the MITM sysmodule.
-That work maps the traced Horizon `bsd:s` stream operations, blocking and nonblocking behavior, readiness, errno values, endpoint queries, half-close, and close semantics onto the completed private TCP flow contract.
-It must not add TCP packet parsing, retransmission, congestion control, native TCP anchor connections, or another userspace stack to the MITM.
+The MITM continuation adds the smallest BSD:S TCP translation needed for the controlled Toolbox process to use the completed version 4 `wgnx:tun` TCP contract.
+The MITM remains a BSD operation translator and never parses TCP, retransmits, maintains congestion state, or opens a native TCP anchor connection.
+The WireGuard sysmodule remains the sole owner of TCP state, virtual local tuples, IPv4 packets, fragmentation, and transport recovery.
+
+Only the build-configured Toolbox forwarder program ID is admitted to the BSD:S MITM.
+All other program IDs, including Horizon system clients, continue to use the original BSD:S service.
+The initial translated subset is `socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)`, `connect`, `getsockname`, `getpeername`, `send`, `recv`, `poll`, `shutdown(SHUT_WR)`, and `close`.
+Unsupported stream options, mixed direct and virtual polling, non-IPv4 sockets, UDP `sendto` semantics, and non-Toolbox processes remain outside this slice.
+
+### Implementation Checklist
+
+- [x] **1. Make the build-time Toolbox allowlist explicit.**
+
+  `mitm-sysmodule/local.mk.example` documents the ignored local override and target builds reject a missing `TOOLBOX_FORWARDER_PROGRAM_ID`.
+  Horizon builds use `ams::ncm::ProgramId` for the configured Toolbox, WireGuard, and MITM identities, while host policy tests use a layout-compatible test-only value type.
+  Requester-forwarder naming is now Toolbox-forwarder naming and host policy tests prove that only the configured ID is admitted while the WireGuard and MITM IDs remain excluded.
+
+- [x] **2. Generalize the worker's API v4 boundary by flow kind.**
+
+  The current UDP batching path remains unchanged.
+  `TunnelFlowWorker` records UDP or TCP flow kind per fixed flow slot, tracks the advertised TCP capability separately, validates bounded `InboundTcpStream` records, and closes a flow on a completion flow-kind mismatch.
+  The worker retains its four-flow, one-thread, fixed-buffer limits and closes every client and event handle on terminal results.
+
+- [x] **3. Add the bounded TCP open and endpoint path.**
+
+  TCP opens use `OpenConnectedTcpFlow`, the existing per-client completion event, and a six-second worker-side guard.
+  A successful flow-state query supplies the nonzero virtual tuple returned by `getsockname`.
+  The BSD descriptor remains unconnected and exists only for descriptor lifecycle and close.
+
+- [x] **4. Translate Toolbox stream operations through `wgnx:tun`.**
+
+  TCP writes are one bounded `WriteTcpStream` submission and retain the API's complete-or-`EAGAIN` admission contract.
+  Stream records support ordered partial `recv` copies, remote orderly close returns BSD EOF, and `shutdown(SHUT_WR)` maps to `ShutdownTcpWrite`.
+  `close` retires the private flow before the retained BSD descriptor is closed.
+
+- [x] **5. Keep virtual socket metadata coherent.**
+
+  TCP `getsockname` uses the advertised tuple and `getpeername` uses the original request destination.
+  `recvfrom` is explicitly rejected for TCP and the UDP anchor behavior is unchanged.
+  Virtual `bind`, post-connect `setsockopt`, and unsupported shutdown directions retain the existing explicit errno policy.
+
+- [x] **6. Add deterministic host coverage and run the aggregate gate.**
+
+  Host coverage checks Toolbox policy allowlisting, TCP completion bounds, partial ordered stream reads, EOF errno mapping, and named TCP transport state.
+  `make -C mitm-sysmodule verify` passes with the configured Toolbox forwarder ID.
+
+### Acceptance and Limits
+
+The authoritative on-device routine is the back-to-back direct and BSD MITM TCP acceptance sequence above.
+It requires the exact request and ACK through the peer, a nonzero virtual local endpoint, orderly EOF and close, matching Toolbox, harness, MITM, and WireGuard evidence, and no direct TCP connect or TCP anchor attempt in the MITM logs.
+The general BSD TCP compatibility matrix, additional program IDs, nonblocking connect, and transparent OS-wide routing remain later work.
+
+### Deferred UDP Anchor Cleanup
+
+- [ ] Replace the UDP BSD:S connection anchor with the existing `wgnx:tun` virtual tuple.
+
+  API v4 already exposes the WireGuard-allocated virtual UDP address and port through `GetFlowState`.
+  The MITM should obtain that tuple after `OpenConnectedUdpFlow`, return it from `getsockname`, and stop forwarding the successful UDP `connect` to BSD:S solely to capture a physical-interface endpoint.
+  This removes unrelated native BSD routing and descriptor state, makes UDP and TCP ownership symmetric, and leaves the WireGuard sysmodule as the sole owner of tunneled endpoint allocation.
+  It changes visible UDP metadata from the physical BSD endpoint to the tunnel-owned virtual endpoint, so it requires the existing UDP device acceptance matrix plus endpoint-query regression coverage before adoption.

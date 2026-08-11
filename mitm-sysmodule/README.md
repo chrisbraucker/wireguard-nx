@@ -1,8 +1,10 @@
 # WireGuard-NX MITM Sysmodule
 
-This is the separate Horizon-facing process implementing the first narrow `bsd:s` UDP MITM proof.
+This is the separate Horizon-facing process implementing the narrow Toolbox-only `bsd:s` UDP and TCP MITM path.
 It registers `wgm:ctl` and one Atmosphere `bsd:s` MITM server.
-The active interceptor admits every `bsd:s` service session from requester forwarder title ID `0x0515C00B3A04A000`.
+The active interceptor admits every `bsd:s` service session from the build-configured Toolbox forwarder program ID.
+Target builds require `TOOLBOX_FORWARDER_PROGRAM_ID` through `mitm-sysmodule/local.mk` or the make command line.
+`local.mk.example` records the expected local-only form.
 SM requests this decision before the first CMIF command is available, so `RegisterClient` and `StartMonitoring` cannot safely select a session at admission time.
 The expected `RegisterClient` session owns the descriptor table used by later socket operations.
 Observed `StartMonitoring` side sessions are short-lived and use the generic forward path after admission.
@@ -19,7 +21,7 @@ They do not share a project-owned runtime library, mutable process state, or an 
 The WireGuard and MITM program IDs are unconditional exclusions even when a future tunnel policy covers `0.0.0.0/0`.
 The known fragile system clients have individual disabled-by-default policy flags.
 The `wgm:ctl` control service exposes the development policy controls and reports whether the `bsd:s` server registered.
-Requester-only title admission is compile-time scoped while runtime policy toggles control whether future requester sessions are intercepted.
+Toolbox-only title admission is compile-time scoped while runtime policy toggles control whether future Toolbox sessions are intercepted.
 
 ## Graceful shutdown
 
@@ -44,17 +46,23 @@ The local discovery controller performs one startup probe for diagnostics.
 Later attempts are requested only by intercepted traffic or a reported tunnel CMIF failure, never by the BSD dispatch path itself.
 The dispatch path will only schedule worker work and pass the current request to upstream BSD while the tunnel client is unavailable.
 Failures double from 250 ms to a four-second cap.
-The flow worker validates the private tunnel API version and required UDP, routing-policy, and completion-event capabilities before publishing a ready state.
+The flow worker validates the private tunnel API version, required UDP capability, routing-policy, and completion-event capabilities before publishing a ready state.
+It records the API's TCP capability separately and rejects a TCP flow attempt when that capability is absent.
 The flow worker is the sole owner of every WGNX-related service-manager request, root session, and child client session.
 The discovery controller owns only local backoff state and never opens a service or holds a CMIF handle.
 BSD request handlers never use either worker session directly.
 
 The implemented routed surface is connected IPv4 UDP through socket creation, connect, send, receive, receive-from, readable polling, endpoint queries, and close.
+The Toolbox-only TCP surface is `socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)`, `connect`, `send`, `recv`, `poll`, `getsockname`, `getpeername`, `shutdown(SHUT_WR)`, and `close`.
 The original BSD descriptor is retained as the lifecycle and application-visible local-endpoint anchor.
 After a WGNX flow opens, the MITM forwards the initial UDP `Connect` only to establish the native local IPv4 address and ephemeral port on that retained descriptor.
 It captures the endpoint immediately and returns it from `GetSockName` while all payload traffic stays on `wgnx:tun`.
 The WireGuard interface address and tunnel source port are never exposed through the BSD-facing socket.
 Failure to establish or capture that endpoint closes the flow and leaves the socket terminal rather than permitting payload fallback to upstream BSD.
+For TCP, the worker opens the API v4 flow and waits within a bounded six-second guard for `FlowState::Open` and its advertised virtual local endpoint.
+The MITM never forwards a successfully tunneled TCP `connect` to BSD:S, so it cannot create a direct TCP anchor connection outside the tunnel.
+TCP stream reads preserve unread bytes across short `recv` calls, return zero at orderly remote EOF, and report `POLLHUP` only after buffered bytes are drained.
+`shutdown(SHUT_WR)` maps to the v4 TCP local-write shutdown command, while all other virtual shutdown directions remain unsupported.
 Every tracked descriptor has an explicit `Created`, `OpeningTunnel`, `Direct`, `Tunneled`, `Failed`, or `Closed` route state.
 Only `Created` can choose a path, and neither a direct nor a tunneled socket migrates later because tunnel availability changes.
 Uncovered or unavailable traffic continues through upstream BSD.
@@ -77,4 +85,4 @@ make -C mitm-sysmodule dist
 ```
 
 Deploy it independently with `python3 tools/ftp_sync.py <host> <port> -i`.
-The current module is safe to autoboot because it only admits the requester forwarder title ID and passes the requester through while `wgnx:tun` is unavailable or does not cover the destination.
+The current module is safe to autoboot because it only admits the configured Toolbox forwarder and passes the Toolbox through while `wgnx:tun` is unavailable or does not cover the destination.

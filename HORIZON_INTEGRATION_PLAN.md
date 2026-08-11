@@ -523,7 +523,7 @@ Definition of done:
 
 Urgency: required for useful general application coverage after UDP feasibility is established.
 
-The actionable contract, direct Toolbox, and WireGuard-owned lwIP TCP foundation sequence is documented in [Task 7 TCP Flow Foundation Implementation Guide](docs/task-7-tcp-flow-foundation.md).
+The actionable contract, direct Toolbox, WireGuard-owned lwIP TCP foundation, and narrow BSD:S TCP MITM continuation are documented in [Task 7 TCP Flow Foundation Implementation Guide](docs/task-7-tcp-flow-foundation.md).
 
 Use the stable UDP flow and BSD MITM path as the lifecycle baseline before attempting TCP.
 TCP must not be represented as a sequence of UDP-like datagram submissions because its Horizon-visible socket semantics require ordered byte-stream delivery, connection establishment and failure reporting, half-close behavior, backpressure, and transport-specific teardown.

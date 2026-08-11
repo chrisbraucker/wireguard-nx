@@ -1,0 +1,5 @@
+# Copy this file to local.mk.
+# local.mk is ignored so device-specific forwarder identities stay outside Git history.
+
+# Program ID of the installed Toolbox forwarder that may use the BSD:S MITM.
+TOOLBOX_FORWARDER_PROGRAM_ID := 0x0593336457159000

@@ -32,6 +32,7 @@ bool RunBsdTunneledContractTests() {
            Check(TunneledPollErrno(TunnelFlowResult::QueueFull) == BsdErrnoAgain, "poll queue rejection did not return EAGAIN") &&
            Check(TunneledPollErrno(TunnelFlowResult::SocketError) == BsdErrnoIo, "poll worker failure did not return EIO") &&
            Check(ErrnoForResult(TunnelFlowResult::Opened) == 0, "successful tunnel result returned an errno") &&
+           Check(ErrnoForResult(TunnelFlowResult::EndOfFile) == 0, "stream EOF returned an errno") &&
            Check(ErrnoForResult(TunnelFlowResult::RouteNotCovered) == 0, "uncovered route returned an errno") &&
            Check(ErrnoForResult(TunnelFlowResult::TunnelUnavailable) == 0, "unavailable tunnel returned an errno") &&
            Check(

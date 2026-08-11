@@ -72,7 +72,7 @@ class BsdMitmService : public ams::sf::MitmServiceImplBase {
   private:
     struct SocketState {
         bool occupied{};
-        bool udp_ipv4{};
+        BsdSocketTransport transport{BsdSocketTransport::None};
         BsdSocketRouteState route{BsdSocketRouteState::Created};
         s32 descriptor{};
         BsdIpv4Endpoint remote{};

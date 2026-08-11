@@ -3,12 +3,18 @@
 #---------------------------------------------------------------------------------
 
 TOPDIR ?= $(CURDIR)
+LOCAL_MK ?= $(TOPDIR)/local.mk
+-include $(LOCAL_MK)
 ATMOSPHERE_LIBS_DIR := $(abspath $(TOPDIR)/../common/lib/Atmosphere-libs)
 ATMOSPHERE_LIBS_INCLUDE_DIR := ../common/lib/Atmosphere-libs
 HOST_ONLY_GOALS := test test-sanitize format-check static-check tidy-check diff-check verify
 HOST_ONLY_BUILD := $(strip $(filter $(HOST_ONLY_GOALS),$(MAKECMDGOALS)))
 
 ifeq ($(HOST_ONLY_BUILD),)
+ifeq ($(strip $(TOOLBOX_FORWARDER_PROGRAM_ID)),)
+$(error Set TOOLBOX_FORWARDER_PROGRAM_ID in $(LOCAL_MK) or on the make command line)
+endif
+
 ifeq ($(strip $(DEVKITPRO)),)
 $(error "Please set DEVKITPRO in your environment. export DEVKITPRO=<path to>/devkitpro")
 endif
@@ -70,6 +76,7 @@ MITM_PACKET_DIAGNOSTICS ?= 0
 # options for code generation
 #---------------------------------------------------------------------------------
 DEFINES += -DDISABLE_IPC -D__SWITCH__ \
+	-DWGNX_MITM_TOOLBOX_FORWARDER_PROGRAM_ID=$(TOOLBOX_FORWARDER_PROGRAM_ID) \
 	-DWGNX_MITM_PACKET_DIAGNOSTICS=$(MITM_PACKET_DIAGNOSTICS) \
 	-DTARGET="\"$(TARGET)\"" \
 	-DWGNX_VERSION="\"$(APP_VERSION)\"" \
@@ -161,11 +168,11 @@ verify:
 	@$(MAKE) --no-print-directory diff-check
 	@echo "verification passed"
 
-$(HOST_TEST_TARGET): Makefile $(HOST_TEST_SOURCES) src/bsd_endpoint.hpp src/bsd_response.hpp src/bsd_socket_state.hpp src/bsd_tunneled_contract.hpp src/mitm_policy.hpp src/terminal_server_lifecycle.hpp src/tunnel_completion_validation.hpp src/tunnel_datagram_receive.hpp src/tunnel_discovery_state.hpp src/tunnel_flow_readiness.hpp src/tunnel_flow_result.hpp src/tunnel_flow_submission_state.hpp src/tunnel_open_disposition.hpp test/bsd_socket_state_tests.hpp test/bsd_tunneled_contract_tests.hpp test/tunnel_completion_validation_tests.hpp test/tunnel_datagram_receive_tests.hpp test/tunnel_discovery_tests.hpp test/tunnel_flow_readiness_tests.hpp test/tunnel_flow_submission_state_tests.hpp
+$(HOST_TEST_TARGET): Makefile $(HOST_TEST_SOURCES) src/bsd_endpoint.hpp src/bsd_response.hpp src/bsd_socket_state.hpp src/bsd_tunneled_contract.hpp src/build_config.hpp src/mitm_policy.hpp src/terminal_server_lifecycle.hpp src/tunnel_completion_validation.hpp src/tunnel_datagram_receive.hpp src/tunnel_discovery_state.hpp src/tunnel_flow_readiness.hpp src/tunnel_flow_result.hpp src/tunnel_flow_submission_state.hpp src/tunnel_open_disposition.hpp test/bsd_socket_state_tests.hpp test/bsd_tunneled_contract_tests.hpp test/tunnel_completion_validation_tests.hpp test/tunnel_datagram_receive_tests.hpp test/tunnel_discovery_tests.hpp test/tunnel_flow_readiness_tests.hpp test/tunnel_flow_submission_state_tests.hpp
 	@[ -d $(HOST_TEST_DIR) ] || mkdir -p $(HOST_TEST_DIR)
 	@$(HOST_CXX) $(HOST_TEST_CXXFLAGS) $(HOST_TEST_INCLUDES) $(addprefix $(CURDIR)/,$(HOST_TEST_SOURCES)) -o $(HOST_TEST_TARGET)
 
-$(HOST_SANITIZE_TARGET): Makefile $(HOST_TEST_SOURCES) src/bsd_endpoint.hpp src/bsd_response.hpp src/bsd_socket_state.hpp src/bsd_tunneled_contract.hpp src/mitm_policy.hpp src/terminal_server_lifecycle.hpp src/tunnel_completion_validation.hpp src/tunnel_datagram_receive.hpp src/tunnel_discovery_state.hpp src/tunnel_flow_readiness.hpp src/tunnel_flow_result.hpp src/tunnel_flow_submission_state.hpp src/tunnel_open_disposition.hpp test/bsd_socket_state_tests.hpp test/bsd_tunneled_contract_tests.hpp test/tunnel_completion_validation_tests.hpp test/tunnel_datagram_receive_tests.hpp test/tunnel_discovery_tests.hpp test/tunnel_flow_readiness_tests.hpp test/tunnel_flow_submission_state_tests.hpp
+$(HOST_SANITIZE_TARGET): Makefile $(HOST_TEST_SOURCES) src/bsd_endpoint.hpp src/bsd_response.hpp src/bsd_socket_state.hpp src/bsd_tunneled_contract.hpp src/build_config.hpp src/mitm_policy.hpp src/terminal_server_lifecycle.hpp src/tunnel_completion_validation.hpp src/tunnel_datagram_receive.hpp src/tunnel_discovery_state.hpp src/tunnel_flow_readiness.hpp src/tunnel_flow_result.hpp src/tunnel_flow_submission_state.hpp src/tunnel_open_disposition.hpp test/bsd_socket_state_tests.hpp test/bsd_tunneled_contract_tests.hpp test/tunnel_completion_validation_tests.hpp test/tunnel_datagram_receive_tests.hpp test/tunnel_discovery_tests.hpp test/tunnel_flow_readiness_tests.hpp test/tunnel_flow_submission_state_tests.hpp
 	@[ -d $(HOST_SANITIZE_DIR) ] || mkdir -p $(HOST_SANITIZE_DIR)
 	@$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -fsanitize=address,undefined -fno-omit-frame-pointer $(HOST_TEST_INCLUDES) $(addprefix $(CURDIR)/,$(HOST_TEST_SOURCES)) -o $(HOST_SANITIZE_TARGET)
 

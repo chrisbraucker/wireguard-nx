@@ -20,6 +20,7 @@ constexpr std::int32_t BsdErrnoNetworkUnreachable = 101;
 constexpr std::int32_t BsdErrnoConnectionAborted = 103;
 constexpr std::int32_t BsdErrnoIsConnected = 106;
 constexpr std::int32_t BsdErrnoAlready = 114;
+constexpr std::int32_t BsdShutdownWrite = 1;
 // Horizon BSD:S encodes O_NONBLOCK as 0x800 on the CMIF wire.
 // Do not substitute the sysmodule toolchain's O_NONBLOCK macro here because its ABI value differs.
 constexpr std::int32_t BsdFcntlNonBlock = 0x800;
@@ -32,6 +33,8 @@ constexpr short BsdTunneledPollEvents = POLLIN | POLLOUT;
         return BsdErrnoAgain;
     case TunnelFlowResult::Closed:
         return BsdErrnoConnectionAborted;
+    case TunnelFlowResult::EndOfFile:
+        return 0;
     case TunnelFlowResult::SocketError:
         return BsdErrnoIo;
     case TunnelFlowResult::MessageTooLarge:
@@ -51,6 +54,7 @@ constexpr short BsdTunneledPollEvents = POLLIN | POLLOUT;
     case TunnelFlowResult::Opened:
     case TunnelFlowResult::WouldBlock:
     case TunnelFlowResult::Closed:
+    case TunnelFlowResult::EndOfFile:
         return 0;
     case TunnelFlowResult::QueueFull:
         return BsdErrnoAgain;

@@ -1,12 +1,28 @@
 #pragma once
 
+#include "build_config.hpp"
+
 #include <cstdint>
+
+#if defined(__SWITCH__)
+#include <stratosphere.hpp>
+#endif
 
 namespace wgnx::mitm {
 
-constexpr inline std::uint64_t WireGuardProgramId = 0x010000000000EAD0ULL;
-constexpr inline std::uint64_t MitmProgramId = 0x010000000000EAD3ULL;
-constexpr inline std::uint64_t RequesterForwarderProgramId = 0x0593336457159000;
+#if defined(__SWITCH__)
+using ProgramId = ams::ncm::ProgramId;
+#else
+struct ProgramId {
+    std::uint64_t value{};
+
+    constexpr auto operator<=>(const ProgramId&) const = default;
+};
+#endif
+
+constexpr inline ProgramId WireGuardProgramId{0x010000000000EAD0ULL};
+constexpr inline ProgramId MitmProgramId{0x010000000000EAD3ULL};
+constexpr inline ProgramId ToolboxForwarderProgramId{build_config::ToolboxForwarderProgramId};
 
 enum class BsdSystemClient : std::uint8_t {
     Unknown,
@@ -17,7 +33,7 @@ enum class BsdSystemClient : std::uint8_t {
     Ssl,
     Nim,
     SphairaForwarder,
-    RequesterForwarder,
+    ToolboxForwarder,
 };
 
 constexpr std::uint32_t BsdSystemClientMask(BsdSystemClient client) {
@@ -29,7 +45,7 @@ constexpr std::uint32_t BsdSystemClientMask(BsdSystemClient client) {
     case BsdSystemClient::Ssl:
     case BsdSystemClient::Nim:
     case BsdSystemClient::SphairaForwarder:
-    case BsdSystemClient::RequesterForwarder:
+    case BsdSystemClient::ToolboxForwarder:
         return 1U << (static_cast<std::uint32_t>(client) - 1U);
     case BsdSystemClient::Unknown:
         return 0;
@@ -40,7 +56,7 @@ constexpr std::uint32_t BsdSystemClientMask(BsdSystemClient client) {
 
 constexpr bool IsConfigurableBsdSystemClient(std::uint32_t client) {
     return client >= static_cast<std::uint32_t>(BsdSystemClient::Npns) &&
-           client <= static_cast<std::uint32_t>(BsdSystemClient::RequesterForwarder);
+           client <= static_cast<std::uint32_t>(BsdSystemClient::ToolboxForwarder);
 }
 
 struct BsdSystemPolicy {
@@ -48,19 +64,19 @@ struct BsdSystemPolicy {
     std::uint32_t enabled_client_mask{0};
 };
 
-constexpr bool IsProgramExcludedFromBsdSystemMitm(std::uint64_t program_id) {
+constexpr bool IsProgramExcludedFromBsdSystemMitm(ProgramId program_id) {
     return program_id == WireGuardProgramId || program_id == MitmProgramId;
 }
 
-constexpr bool IsRequesterForwarderProgram(std::uint64_t program_id) {
-    return program_id == RequesterForwarderProgramId;
+constexpr bool IsToolboxForwarderProgram(ProgramId program_id) {
+    return program_id == ToolboxForwarderProgramId;
 }
 
 // SM asks whether to MITM a service acquisition before the first CMIF command
 // is available, so RegisterClient and StartMonitoring cannot safely select a
-// session here. The requester-only experiment admits every requester bsd:s
+// session here. The Toolbox-only experiment admits every Toolbox bsd:s
 // session and forwards lifecycle-only sessions through the generic path.
-constexpr bool ShouldInterceptRequesterBsdSession() {
+constexpr bool ShouldInterceptToolboxBsdSession() {
     return true;
 }
 
@@ -88,7 +104,7 @@ constexpr bool SetBsdSystemClientEnabled(BsdSystemPolicy& policy, BsdSystemClien
     return true;
 }
 
-constexpr bool ShouldInterceptBsdSystem(const BsdSystemPolicy& policy, std::uint64_t program_id, BsdSystemClient client) {
+constexpr bool ShouldInterceptBsdSystem(const BsdSystemPolicy& policy, ProgramId program_id, BsdSystemClient client) {
     return policy.enabled && !IsProgramExcludedFromBsdSystemMitm(program_id) && IsBsdSystemClientEnabled(policy, client);
 }
 

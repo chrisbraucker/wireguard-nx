@@ -148,7 +148,7 @@ bool StartBsdMitmServer() {
     AMS_ABORT_UNLESS(g_server_lifecycle.BeginServing());
     ams::os::StartThread(std::addressof(g_server_thread));
     g_server_thread_started = true;
-    logger::Log("bsd:s MITM registered requester-only server stack=%zu object_heap=%zu", ServerThreadStackBytes, ObjectHeapBytes);
+    logger::Log("bsd:s MITM registered toolbox-only server stack=%zu object_heap=%zu", ServerThreadStackBytes, ObjectHeapBytes);
     return true;
 }
 

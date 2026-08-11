@@ -27,6 +27,7 @@ constexpr std::size_t MaximumQueuedOutboundDatagrams = 8;
 constexpr std::size_t MaximumQueuedOutboundDatagramsPerSocket = 4;
 constexpr std::size_t MaximumBatchEntriesPerSubmission = 4;
 constexpr std::size_t MaximumQueuedOutboundPayloadBytes = wgnx::tunnel::MaximumUdpPayloadForInnerMtu(1500);
+constexpr std::int64_t TcpConnectGuardNanoseconds = 6'000'000'000LL;
 static_assert(MaximumQueuedOutboundDatagramsPerSocket <= MaximumQueuedOutboundDatagrams);
 static_assert(MaximumBatchEntriesPerSubmission <= wgnx::tunnel::MaximumBatchEntries);
 static_assert(MaximumQueuedOutboundPayloadBytes != 0);
@@ -35,6 +36,7 @@ constexpr std::uint32_t RequiredTunnelCapabilities = wgnx::tunnel::CapabilityMas
 struct InboundDatagram {
     bool occupied{};
     std::size_t size{};
+    std::size_t offset{};
     TunnelFlowEndpoint remote{};
     std::array<std::uint8_t, wgnx::tunnel::MaximumUdpPayloadStorageBytes> payload{};
 };
@@ -52,8 +54,14 @@ struct FlowEntry {
     wgnx::tunnel::client::ScopedClient client{};
     Handle completion_handle{INVALID_HANDLE};
     wgnx::tunnel::FlowHandle flow{};
+    TunnelFlowKind kind{TunnelFlowKind::Udp};
     TunnelFlowEndpoint remote{};
+    TunnelFlowEndpoint local{};
     TunnelFlowSubmissionState submission{};
+    bool tcp_connected{};
+    bool tcp_writable{};
+    bool tcp_local_write_closed{};
+    bool tcp_remote_write_closed{};
     std::array<InboundDatagram, MaximumInboundDatagramsPerSocket> inbound{};
     std::array<std::uint8_t, MaximumQueuedOutboundDatagramsPerSocket> outbound_slots{};
     std::uint64_t sends{};
@@ -78,6 +86,10 @@ std::array<wgnx::tunnel::PayloadRange, MaximumBatchEntriesPerSubmission> g_batch
 std::array<wgnx::tunnel::PayloadResult, MaximumBatchEntriesPerSubmission> g_batch_dispositions{};
 std::array<std::uint8_t, MaximumBatchEntriesPerSubmission * MaximumQueuedOutboundPayloadBytes> g_batch_payload{};
 std::size_t g_outbound_datagram_count{};
+
+[[nodiscard]] wgnx::tunnel::FlowKind ToWireFlowKind(const TunnelFlowKind kind) {
+    return kind == TunnelFlowKind::Tcp ? wgnx::tunnel::FlowKind::Tcp : wgnx::tunnel::FlowKind::Udp;
+}
 
 [[nodiscard]] bool SameEndpoint(const wgnx::tunnel::Ipv4Endpoint& endpoint, const TunnelFlowEndpoint& value) {
     return endpoint.port == value.port && std::memcmp(endpoint.address, value.address, sizeof(value.address)) == 0;
@@ -266,6 +278,23 @@ void RetireQueuedOutboundPrefix(FlowEntry& flow, const std::size_t count) {
     return nullptr;
 }
 
+[[nodiscard]] TunnelFlowReadiness ReadinessFor(FlowEntry& flow) {
+    const bool inbound_available = TakeInbound(flow) != nullptr;
+    if (flow.kind == TunnelFlowKind::Tcp) {
+        return {
+            .inbound_available = inbound_available,
+            .outbound_admission_available = flow.tcp_connected && flow.tcp_writable && !flow.tcp_local_write_closed,
+            .closed = flow.submission.closed || (flow.tcp_remote_write_closed && !inbound_available),
+        };
+    }
+    return {
+        .inbound_available = inbound_available,
+        .outbound_admission_available =
+            flow.submission.CanAccept(MaximumQueuedOutboundDatagramsPerSocket) && g_outbound_datagram_count < g_outbound_datagrams.size(),
+        .closed = flow.submission.closed,
+    };
+}
+
 void DrainCompletions(FlowEntry& flow, TunnelFlowWorkerMetrics& metrics) {
     if (!flow.client.IsOpen() || flow.submission.closed) {
         return;
@@ -338,7 +367,40 @@ void DrainCompletions(FlowEntry& flow, TunnelFlowWorkerMetrics& metrics) {
             if (flow.submission.closed) {
                 continue;
             }
+            if (completion.flow_kind != ToWireFlowKind(flow.kind)) {
+                logger::Log(
+                    "tunnel completion rejected flow-kind mismatch owner=%llu fd=%d expected=%u actual=%u",
+                    static_cast<unsigned long long>(flow.owner),
+                    flow.descriptor,
+                    static_cast<unsigned>(ToWireFlowKind(flow.kind)),
+                    static_cast<unsigned>(completion.flow_kind)
+                );
+                flow.submission.Close();
+                DiscardQueuedOutbound(flow, std::addressof(metrics));
+                continue;
+            }
             if (completion.type == wgnx::tunnel::CompletionType::FlowStateChanged) {
+                if (flow.kind == TunnelFlowKind::Tcp && completion.flow_state != wgnx::tunnel::FlowState::Connecting) {
+                    wgnx::tunnel::FlowStateResult state{};
+                    const Result state_rc = wgnx::tunnel::client::GetFlowState(flow.client, flow.flow, std::addressof(state));
+                    if (R_SUCCEEDED(state_rc) && state.status == wgnx::tunnel::ProtocolStatus::Success) {
+                        flow.tcp_connected =
+                            state.state == wgnx::tunnel::FlowState::Open || state.state == wgnx::tunnel::FlowState::Closing;
+                        flow.tcp_local_write_closed = (state.stream_flags & wgnx::tunnel::FlowStreamFlagLocalWriteOpen) == 0;
+                        flow.tcp_remote_write_closed = (state.stream_flags & wgnx::tunnel::FlowStreamFlagRemoteWriteOpen) == 0;
+                        flow.tcp_writable = flow.tcp_connected && !flow.tcp_local_write_closed;
+                        flow.local = ToEndpoint(state.advertised_local);
+                    } else {
+                        logger::Log(
+                            "tunnel TCP state query failed owner=%llu fd=%d rc=0x%08X status=%u",
+                            static_cast<unsigned long long>(flow.owner),
+                            flow.descriptor,
+                            static_cast<unsigned>(state_rc),
+                            static_cast<unsigned>(state.status)
+                        );
+                        flow.submission.Close();
+                    }
+                }
                 if (completion.flow_state == wgnx::tunnel::FlowState::Closed) {
                     flow.submission.Close();
                     DiscardQueuedOutbound(flow, std::addressof(metrics));
@@ -347,12 +409,19 @@ void DrainCompletions(FlowEntry& flow, TunnelFlowWorkerMetrics& metrics) {
                 continue;
             }
             if (completion.type == wgnx::tunnel::CompletionType::Writable) {
+                if (flow.kind == TunnelFlowKind::Tcp) {
+                    flow.tcp_writable = true;
+                }
                 flow.submission.NoteWritable();
                 ++flow.writable_notifications;
                 ++metrics.writable_notifications;
                 continue;
             }
-            if (completion.type != wgnx::tunnel::CompletionType::InboundUdpDatagram || !SameEndpoint(completion.remote, flow.remote)) {
+            const bool expected_udp = flow.kind == TunnelFlowKind::Udp &&
+                                      completion.type == wgnx::tunnel::CompletionType::InboundUdpDatagram &&
+                                      SameEndpoint(completion.remote, flow.remote);
+            const bool expected_tcp = flow.kind == TunnelFlowKind::Tcp && completion.type == wgnx::tunnel::CompletionType::InboundTcpStream;
+            if (!expected_udp && !expected_tcp) {
                 continue;
             }
             InboundDatagram* datagram = AllocateInbound(flow);
@@ -373,6 +442,39 @@ void DrainCompletions(FlowEntry& flow, TunnelFlowWorkerMetrics& metrics) {
             ++metrics.inbound_delivered;
         }
     }
+}
+
+[[nodiscard]] TunnelFlowResult WaitForTcpConnection(FlowEntry& flow, TunnelFlowWorkerMetrics& metrics) {
+    const std::int64_t deadline = ams::os::GetSystemTick().ToTimeSpan().GetNanoSeconds() + TcpConnectGuardNanoseconds;
+    while (!flow.tcp_connected && !flow.submission.closed) {
+        const std::int64_t now = ams::os::GetSystemTick().ToTimeSpan().GetNanoSeconds();
+        s32 signaled_index = 0;
+        const Result rc = svcWaitSynchronization(
+            std::addressof(signaled_index),
+            std::addressof(flow.completion_handle),
+            1,
+            std::max<std::int64_t>(0, deadline - now)
+        );
+        if (ams::svc::ResultTimedOut::Includes(rc)) {
+            logger::Log("tunnel TCP connect timed out owner=%llu fd=%d", static_cast<unsigned long long>(flow.owner), flow.descriptor);
+            return TunnelFlowResult::SocketError;
+        }
+        if (R_FAILED(rc)) {
+            logger::Log(
+                "tunnel TCP connect wait failed owner=%llu fd=%d rc=0x%08X",
+                static_cast<unsigned long long>(flow.owner),
+                flow.descriptor,
+                static_cast<unsigned>(rc)
+            );
+            return TunnelFlowResult::SocketError;
+        }
+        ++metrics.completion_event_waits;
+        DrainCompletions(flow, metrics);
+    }
+    if (flow.submission.closed || !flow.tcp_connected || flow.local.port == 0) {
+        return TunnelFlowResult::Closed;
+    }
+    return TunnelFlowResult::Opened;
 }
 
 [[nodiscard]] TunnelFlowResult MapOpenStatus(wgnx::tunnel::ProtocolStatus status) {
@@ -401,7 +503,9 @@ void TunnelFlowWorker::Start() {
     }
     m_stop_requested = false;
     m_metrics = {};
+    m_capability_mask = 0;
     m_maximum_udp_payload_bytes = 0;
+    m_maximum_tcp_write_bytes = 0;
     m_stop_event.Clear();
     m_started = true;
     R_ABORT_UNLESS(
@@ -518,6 +622,7 @@ TunnelFlowResult TunnelFlowWorker::OpenConnectedUdp(std::uint64_t owner, s32 des
     operation.owner = owner;
     operation.descriptor = descriptor;
     operation.remote = remote;
+    operation.kind = TunnelFlowKind::Udp;
     if (!EnqueueAndWait(operation)) {
         logger::Log(
             "tunnel flow open bypass owner=%llu fd=%d reason=worker_queue_unavailable",
@@ -527,6 +632,23 @@ TunnelFlowResult TunnelFlowWorker::OpenConnectedUdp(std::uint64_t owner, s32 des
         return TunnelFlowResult::TunnelUnavailable;
     }
     return operation.result;
+}
+
+TunnelTcpOpenResult TunnelFlowWorker::OpenConnectedTcp(std::uint64_t owner, s32 descriptor, const TunnelFlowEndpoint& remote) {
+    Operation operation{OperationType::Open};
+    operation.owner = owner;
+    operation.descriptor = descriptor;
+    operation.remote = remote;
+    operation.kind = TunnelFlowKind::Tcp;
+    if (!EnqueueAndWait(operation)) {
+        logger::Log(
+            "tunnel TCP flow open bypass owner=%llu fd=%d reason=worker_queue_unavailable",
+            static_cast<unsigned long long>(owner),
+            descriptor
+        );
+        return {.result = TunnelFlowResult::TunnelUnavailable};
+    }
+    return {.result = operation.result, .local = operation.local};
 }
 
 TunnelFlowResult TunnelFlowWorker::Send(std::uint64_t owner, s32 descriptor, const void* payload, std::size_t payload_size) {
@@ -559,6 +681,14 @@ TunnelPollResult TunnelFlowWorker::Poll(std::uint64_t owner, s32 descriptor, sho
     operation.timeout_milliseconds = timeout_milliseconds;
     static_cast<void>(EnqueueAndWait(operation));
     return {.result = operation.result, .revents = operation.revents};
+}
+
+TunnelFlowResult TunnelFlowWorker::ShutdownTcpWrite(std::uint64_t owner, s32 descriptor) {
+    Operation operation{OperationType::ShutdownTcpWrite};
+    operation.owner = owner;
+    operation.descriptor = descriptor;
+    static_cast<void>(EnqueueAndWait(operation));
+    return operation.result;
 }
 
 void TunnelFlowWorker::Close(std::uint64_t owner, s32 descriptor) {
@@ -813,12 +943,7 @@ void TunnelFlowWorker::CompletePendingPolls() {
             operation.complete.Signal();
             continue;
         }
-        const TunnelFlowReadiness readiness{
-            .inbound_available = TakeInbound(*flow) != nullptr,
-            .outbound_admission_available = flow->submission.CanAccept(MaximumQueuedOutboundDatagramsPerSocket) &&
-                                            g_outbound_datagram_count < g_outbound_datagrams.size(),
-            .closed = flow->submission.closed
-        };
+        const TunnelFlowReadiness readiness = ReadinessFor(*flow);
         operation.revents = readiness.Revents(operation.events);
         if (operation.revents != 0) {
             operation.result = TunnelFlowResult::Opened;
@@ -865,7 +990,9 @@ void TunnelFlowWorker::InvalidateTunnelState() {
         released_flows += flow.occupied ? 1U : 0U;
     }
     ResetAllFlows("invalidation", std::addressof(m_metrics));
+    m_capability_mask = 0;
     m_maximum_udp_payload_bytes = 0;
+    m_maximum_tcp_write_bytes = 0;
     const bool root_was_open = m_root.IsOpen();
     m_root.Close();
     logger::Log("tunnel worker invalidated root_open=%u released_flows=%zu", root_was_open ? 1U : 0U, released_flows);
@@ -914,12 +1041,15 @@ void TunnelFlowWorker::DiscoverTunnelService() {
     }
 
     GetTunnelDiscoveryService().CompleteDiscoverySuccess();
+    m_capability_mask = capabilities.capability_mask;
     m_maximum_udp_payload_bytes = std::min<std::size_t>(capabilities.maximum_udp_payload_bytes, MaximumQueuedOutboundPayloadBytes);
+    m_maximum_tcp_write_bytes = std::min<std::size_t>(capabilities.maximum_tcp_write_bytes, wgnx::tunnel::MaximumTcpWriteStorageBytes);
     logger::Log(
-        "tunnel root ready api=%u capabilities=0x%08X max_payload=%zu",
+        "tunnel root ready api=%u capabilities=0x%08X max_udp_payload=%zu max_tcp_write=%zu",
         capabilities.api_version,
         capabilities.capability_mask,
-        m_maximum_udp_payload_bytes
+        m_maximum_udp_payload_bytes,
+        m_maximum_tcp_write_bytes
     );
 }
 
@@ -946,7 +1076,9 @@ bool TunnelFlowWorker::Dispatch(Operation& operation) {
     FlowEntry* flow = FindFlow(operation.owner, operation.descriptor);
     if (operation.type == OperationType::Open) {
         if (flow != nullptr) {
-            operation.result = flow->submission.closed ? TunnelFlowResult::SocketError : TunnelFlowResult::Opened;
+            operation.result =
+                flow->submission.closed || flow->kind != operation.kind ? TunnelFlowResult::SocketError : TunnelFlowResult::Opened;
+            operation.local = flow->local;
             logger::Log(
                 "tunnel flow open reused owner=%llu fd=%d closed=%u",
                 static_cast<unsigned long long>(operation.owner),
@@ -972,6 +1104,18 @@ bool TunnelFlowWorker::Dispatch(Operation& operation) {
                 operation.descriptor
             );
             GetTunnelDiscoveryService().ReportTunnelClientFailure();
+            operation.result = TunnelFlowResult::TunnelUnavailable;
+            return true;
+        }
+        const wgnx::tunnel::Capability required_capability =
+            operation.kind == TunnelFlowKind::Tcp ? wgnx::tunnel::Capability::ConnectedIpv4Tcp : wgnx::tunnel::Capability::ConnectedIpv4Udp;
+        if ((m_capability_mask & wgnx::tunnel::CapabilityMask(required_capability)) == 0) {
+            logger::Log(
+                "tunnel flow open rejected owner=%llu fd=%d reason=unsupported_kind kind=%u",
+                static_cast<unsigned long long>(operation.owner),
+                operation.descriptor,
+                static_cast<unsigned>(operation.kind)
+            );
             operation.result = TunnelFlowResult::TunnelUnavailable;
             return true;
         }
@@ -1007,7 +1151,9 @@ bool TunnelFlowWorker::Dispatch(Operation& operation) {
             .diagnostic_tag = (operation.owner << 16U) ^ static_cast<std::uint32_t>(operation.descriptor),
         };
         wgnx::tunnel::OpenConnectedFlowResult opened{};
-        const Result open_rc = wgnx::tunnel::client::OpenConnectedUdpFlow(flow->client, request, std::addressof(opened));
+        const Result open_rc = operation.kind == TunnelFlowKind::Tcp
+                                   ? wgnx::tunnel::client::OpenConnectedTcpFlow(flow->client, request, std::addressof(opened))
+                                   : wgnx::tunnel::client::OpenConnectedUdpFlow(flow->client, request, std::addressof(opened));
         if (R_FAILED(open_rc)) {
             logger::Log(
                 "tunnel flow open bypass owner=%llu fd=%d reason=open_cmif rc=0x%08X",
@@ -1033,6 +1179,7 @@ bool TunnelFlowWorker::Dispatch(Operation& operation) {
             return true;
         }
         flow->flow = opened.flow;
+        flow->kind = operation.kind;
         flow->remote = operation.remote;
         const Result event_rc = wgnx::tunnel::client::GetCompletionEvent(flow->client, std::addressof(flow->completion_handle));
         if (R_FAILED(event_rc)) {
@@ -1041,10 +1188,19 @@ bool TunnelFlowWorker::Dispatch(Operation& operation) {
             operation.result = TunnelFlowResult::SocketError;
             return true;
         }
+        if (flow->kind == TunnelFlowKind::Tcp) {
+            operation.result = WaitForTcpConnection(*flow, m_metrics);
+            if (operation.result != TunnelFlowResult::Opened) {
+                CloseFlow(*flow, m_metrics);
+                return true;
+            }
+            operation.local = flow->local;
+        }
         logger::Log(
-            "tunnel flow opened owner=%llu fd=%d remote=%u.%u.%u.%u:%u",
+            "tunnel flow opened owner=%llu fd=%d kind=%u remote=%u.%u.%u.%u:%u",
             static_cast<unsigned long long>(flow->owner),
             flow->descriptor,
+            static_cast<unsigned>(flow->kind),
             flow->remote.address[0],
             flow->remote.address[1],
             flow->remote.address[2],
@@ -1064,6 +1220,74 @@ bool TunnelFlowWorker::Dispatch(Operation& operation) {
     if (operation.type == OperationType::Send) {
         ++flow->sends;
         ++m_metrics.send_attempts;
+        if (flow->kind == TunnelFlowKind::Tcp) {
+            if (!flow->tcp_connected || flow->tcp_local_write_closed) {
+                operation.result = TunnelFlowResult::Closed;
+                return true;
+            }
+            if (operation.input_size > m_maximum_tcp_write_bytes || operation.input_size > wgnx::tunnel::MaximumTcpWriteStorageBytes) {
+                operation.result = TunnelFlowResult::MessageTooLarge;
+                ++flow->send_too_large;
+                ++m_metrics.send_too_large;
+                return true;
+            }
+            const wgnx::tunnel::PayloadRange range{
+                .flow = flow->flow,
+                .payload_offset = 0,
+                .payload_size = static_cast<std::uint32_t>(operation.input_size),
+                .client_tag = static_cast<std::uint64_t>(flow->descriptor),
+            };
+            wgnx::tunnel::PayloadResult sent{};
+            const Result send_rc =
+                wgnx::tunnel::client::WriteTcpStream(flow->client, range, operation.input, operation.input_size, std::addressof(sent));
+            if (R_FAILED(send_rc)) {
+                logger::Log(
+                    "tunnel TCP write CMIF failure owner=%llu fd=%d rc=0x%08X",
+                    static_cast<unsigned long long>(flow->owner),
+                    flow->descriptor,
+                    static_cast<unsigned>(send_rc)
+                );
+                operation.result = TunnelFlowResult::SocketError;
+                ++m_metrics.send_failures;
+                GetTunnelDiscoveryService().ReportTunnelClientFailure();
+                return true;
+            }
+            if (sent.status == wgnx::tunnel::ProtocolStatus::Success && sent.accepted_bytes == operation.input_size) {
+                ++flow->send_accepted;
+                ++m_metrics.send_accepted;
+                operation.result = TunnelFlowResult::Opened;
+                return true;
+            }
+            if (sent.status == wgnx::tunnel::ProtocolStatus::QueueFull) {
+                flow->tcp_writable = false;
+                ++flow->send_queue_full;
+                ++m_metrics.send_queue_full;
+                operation.result = TunnelFlowResult::WouldBlock;
+                return true;
+            }
+            if (sent.status == wgnx::tunnel::ProtocolStatus::PayloadTooLarge) {
+                operation.result = TunnelFlowResult::MessageTooLarge;
+                ++flow->send_too_large;
+                ++m_metrics.send_too_large;
+                return true;
+            }
+            if (sent.status == wgnx::tunnel::ProtocolStatus::LocalWriteClosed || sent.status == wgnx::tunnel::ProtocolStatus::FlowClosed ||
+                sent.status == wgnx::tunnel::ProtocolStatus::NotConnected) {
+                flow->tcp_local_write_closed = true;
+                operation.result = TunnelFlowResult::Closed;
+                return true;
+            }
+            logger::Log(
+                "tunnel TCP write rejected owner=%llu fd=%d status=%u accepted=%u",
+                static_cast<unsigned long long>(flow->owner),
+                flow->descriptor,
+                static_cast<unsigned>(sent.status),
+                sent.accepted_bytes
+            );
+            operation.result = TunnelFlowResult::SocketError;
+            ++m_metrics.send_failures;
+            return true;
+        }
         if (operation.input_size > m_maximum_udp_payload_bytes || operation.input_size > MaximumQueuedOutboundPayloadBytes) {
             operation.result = TunnelFlowResult::MessageTooLarge;
             ++flow->send_too_large;
@@ -1083,12 +1307,7 @@ bool TunnelFlowWorker::Dispatch(Operation& operation) {
     }
 
     if (operation.type == OperationType::Poll) {
-        const TunnelFlowReadiness readiness{
-            .inbound_available = TakeInbound(*flow) != nullptr,
-            .outbound_admission_available = flow->submission.CanAccept(MaximumQueuedOutboundDatagramsPerSocket) &&
-                                            g_outbound_datagram_count < g_outbound_datagrams.size(),
-            .closed = flow->submission.closed
-        };
+        const TunnelFlowReadiness readiness = ReadinessFor(*flow);
         operation.revents = readiness.Revents(operation.events);
         if (operation.revents != 0) {
             operation.result = TunnelFlowResult::Opened;
@@ -1112,7 +1331,19 @@ bool TunnelFlowWorker::Dispatch(Operation& operation) {
     if (operation.type == OperationType::Receive) {
         InboundDatagram* datagram = TakeInbound(*flow);
         if (datagram == nullptr) {
-            operation.receive.result = flow->submission.closed ? TunnelFlowResult::Closed : TunnelFlowResult::WouldBlock;
+            operation.receive.result = flow->submission.closed         ? TunnelFlowResult::Closed
+                                       : flow->tcp_remote_write_closed ? TunnelFlowResult::EndOfFile
+                                                                       : TunnelFlowResult::WouldBlock;
+            return true;
+        }
+        if (flow->kind == TunnelFlowKind::Tcp) {
+            const auto received = ReceiveTunneledStream(
+                std::addressof(datagram->occupied),
+                std::addressof(datagram->offset),
+                {static_cast<std::uint8_t*>(operation.output), operation.output_size},
+                std::span<const std::uint8_t>(datagram->payload.data(), datagram->size)
+            );
+            operation.receive = {.result = TunnelFlowResult::Opened, .size = received.size, .remote = datagram->remote};
             return true;
         }
         const auto received = ReceiveTunneledDatagram(
@@ -1121,6 +1352,37 @@ bool TunnelFlowWorker::Dispatch(Operation& operation) {
             std::span<const std::uint8_t>(datagram->payload.data(), datagram->size)
         );
         operation.receive = {.result = TunnelFlowResult::Opened, .size = received.size, .remote = datagram->remote};
+        return true;
+    }
+
+    if (operation.type == OperationType::ShutdownTcpWrite) {
+        if (flow->kind != TunnelFlowKind::Tcp) {
+            operation.result = TunnelFlowResult::SocketError;
+            return true;
+        }
+        wgnx::tunnel::ProtocolStatus status{};
+        const Result shutdown_rc = wgnx::tunnel::client::ShutdownTcpWrite(flow->client, flow->flow, std::addressof(status));
+        if (R_FAILED(shutdown_rc)) {
+            logger::Log(
+                "tunnel TCP shutdown CMIF failure owner=%llu fd=%d rc=0x%08X",
+                static_cast<unsigned long long>(flow->owner),
+                flow->descriptor,
+                static_cast<unsigned>(shutdown_rc)
+            );
+            GetTunnelDiscoveryService().ReportTunnelClientFailure();
+            operation.result = TunnelFlowResult::SocketError;
+            return true;
+        }
+        if (status == wgnx::tunnel::ProtocolStatus::Success) {
+            flow->tcp_local_write_closed = true;
+            operation.result = TunnelFlowResult::Opened;
+        } else if (status == wgnx::tunnel::ProtocolStatus::QueueFull) {
+            operation.result = TunnelFlowResult::WouldBlock;
+        } else if (status == wgnx::tunnel::ProtocolStatus::FlowClosed || status == wgnx::tunnel::ProtocolStatus::NotConnected) {
+            operation.result = TunnelFlowResult::Closed;
+        } else {
+            operation.result = TunnelFlowResult::SocketError;
+        }
         return true;
     }
 

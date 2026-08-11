@@ -18,6 +18,16 @@ struct TunnelFlowEndpoint {
     std::uint16_t port{};
 };
 
+enum class TunnelFlowKind : std::uint8_t {
+    Udp,
+    Tcp,
+};
+
+struct TunnelTcpOpenResult {
+    TunnelFlowResult result{TunnelFlowResult::SocketError};
+    TunnelFlowEndpoint local{};
+};
+
 struct TunnelReceiveResult {
     TunnelFlowResult result{TunnelFlowResult::WouldBlock};
     std::size_t size{};
@@ -70,15 +80,18 @@ class TunnelFlowWorker {
     void RequestDiscoveryAttempt();
     void RequestTunnelInvalidation();
     TunnelFlowResult OpenConnectedUdp(std::uint64_t owner, s32 descriptor, const TunnelFlowEndpoint& remote);
+    TunnelTcpOpenResult OpenConnectedTcp(std::uint64_t owner, s32 descriptor, const TunnelFlowEndpoint& remote);
     TunnelFlowResult Send(std::uint64_t owner, s32 descriptor, const void* payload, std::size_t payload_size);
     TunnelReceiveResult Receive(std::uint64_t owner, s32 descriptor, void* payload, std::size_t payload_size);
     TunnelPollResult Poll(std::uint64_t owner, s32 descriptor, short events, std::int32_t timeout_milliseconds);
+    TunnelFlowResult ShutdownTcpWrite(std::uint64_t owner, s32 descriptor);
     void Close(std::uint64_t owner, s32 descriptor);
     void CloseOwner(std::uint64_t owner);
 
   private:
     enum class OperationType : std::uint8_t {
         Open,
+        ShutdownTcpWrite,
         Send,
         Receive,
         Poll,
@@ -93,6 +106,8 @@ class TunnelFlowWorker {
         std::uint64_t owner{};
         s32 descriptor{};
         TunnelFlowEndpoint remote{};
+        TunnelFlowEndpoint local{};
+        TunnelFlowKind kind{TunnelFlowKind::Udp};
         const void* input{};
         std::size_t input_size{};
         void* output{};
@@ -135,7 +150,9 @@ class TunnelFlowWorker {
     std::size_t m_operation_count{};
     Operation* m_pending_polls[MaximumSockets]{};
     std::size_t m_pending_poll_count{};
+    std::uint32_t m_capability_mask{};
     std::size_t m_maximum_udp_payload_bytes{};
+    std::size_t m_maximum_tcp_write_bytes{};
     bool m_started{};
     bool m_stop_requested{};
     TunnelFlowWorkerMetrics m_metrics{};

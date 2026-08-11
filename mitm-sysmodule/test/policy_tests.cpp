@@ -161,37 +161,46 @@ int main() {
     enabled.enabled = true;
 
     BsdSystemPolicy requester_only{.enabled = true};
-    const bool requester_enabled = SetBsdSystemClientEnabled(requester_only, BsdSystemClient::RequesterForwarder, true);
+    const bool toolbox_enabled = SetBsdSystemClientEnabled(requester_only, BsdSystemClient::ToolboxForwarder, true);
 
     BsdSystemPolicy configurable_clients{.enabled = true};
     bool all_configurable_clients_are_individually_toggleable = true;
     for (std::uint32_t client = static_cast<std::uint32_t>(BsdSystemClient::Npns);
-         client <= static_cast<std::uint32_t>(BsdSystemClient::RequesterForwarder);
+         client <= static_cast<std::uint32_t>(BsdSystemClient::ToolboxForwarder);
          ++client) {
         const auto system_client = static_cast<BsdSystemClient>(client);
         all_configurable_clients_are_individually_toggleable =
             all_configurable_clients_are_individually_toggleable && SetBsdSystemClientEnabled(configurable_clients, system_client, true) &&
-            ShouldInterceptBsdSystem(configurable_clients, 0x0100000000001234ULL, system_client) &&
+            ShouldInterceptBsdSystem(configurable_clients, ProgramId{0x0100000000001234ULL}, system_client) &&
             SetBsdSystemClientEnabled(configurable_clients, system_client, false) &&
-            !ShouldInterceptBsdSystem(configurable_clients, 0x0100000000001234ULL, system_client);
+            !ShouldInterceptBsdSystem(configurable_clients, ProgramId{0x0100000000001234ULL}, system_client);
     }
 
     const bool passed =
-        Check(!ShouldInterceptBsdSystem(disabled, 0x0100000000001234ULL, BsdSystemClient::Unknown), "disabled policy admitted a client") &&
+        Check(
+            !ShouldInterceptBsdSystem(disabled, ProgramId{0x0100000000001234ULL}, BsdSystemClient::Unknown),
+            "disabled policy admitted a client"
+        ) &&
         Check(!ShouldInterceptBsdSystem(enabled, WireGuardProgramId, BsdSystemClient::Unknown), "WireGuard process was not excluded") &&
         Check(!ShouldInterceptBsdSystem(enabled, MitmProgramId, BsdSystemClient::Unknown), "MITM process was not excluded") &&
-        Check(!ShouldInterceptBsdSystem(enabled, 0x0100000000001234ULL, BsdSystemClient::Nim), "denylisted system client was admitted") &&
-        Check(IsRequesterForwarderProgram(RequesterForwarderProgramId), "requester forwarder title ID was not recognized") &&
-        Check(!IsRequesterForwarderProgram(WireGuardProgramId), "WireGuard title ID was mistaken for requester") &&
-        Check(ShouldInterceptRequesterBsdSession(), "requester BSD session was rejected") &&
         Check(
-            requester_enabled && ShouldInterceptBsdSystem(requester_only, RequesterForwarderProgramId, BsdSystemClient::RequesterForwarder),
-            "enabled requester forwarder was rejected"
+            !ShouldInterceptBsdSystem(enabled, ProgramId{0x0100000000001234ULL}, BsdSystemClient::Nim),
+            "denylisted system client was admitted"
+        ) &&
+        Check(IsToolboxForwarderProgram(ToolboxForwarderProgramId), "Toolbox forwarder title ID was not recognized") &&
+        Check(!IsToolboxForwarderProgram(WireGuardProgramId), "WireGuard title ID was mistaken for Toolbox") &&
+        Check(ShouldInterceptToolboxBsdSession(), "Toolbox BSD session was rejected") &&
+        Check(
+            toolbox_enabled && ShouldInterceptBsdSystem(requester_only, ToolboxForwarderProgramId, BsdSystemClient::ToolboxForwarder),
+            "enabled Toolbox forwarder was rejected"
         ) &&
         Check(all_configurable_clients_are_individually_toggleable, "system-client policy flags were not independently toggleable") &&
         Check(!SetBsdSystemClientEnabled(requester_only, BsdSystemClient::Unknown, true), "unknown system client was configurable") &&
         Check(!IsConfigurableBsdSystemClient(99), "out-of-range system client was configurable") &&
-        Check(ShouldInterceptBsdSystem(enabled, 0x0100000000001234ULL, BsdSystemClient::Unknown), "ordinary client was rejected") &&
+        Check(
+            ShouldInterceptBsdSystem(enabled, ProgramId{0x0100000000001234ULL}, BsdSystemClient::Unknown),
+            "ordinary client was rejected"
+        ) &&
         Check(RunBsdEndpointTests(), "BSD IPv4 endpoint codec failed") &&
         Check(RunBsdResponseLayoutTests(), "BSD response layout failed") &&
         Check(RunBsdSocketStateTests(), "BSD socket route state contract failed") &&

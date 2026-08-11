@@ -116,4 +116,5 @@ Plutonium SDL2 GUI library: https://github.com/XorTroll/Plutonium
 
 - The selected first transparent path uses the separate BSD MITM sysmodule to choose once between retained Horizon BSD handling and delegation through the private WireGuard flow service.
 - The WireGuard sysmodule owns the userspace IP stack, Layer 3 packet processing, fragmentation, reassembly, and tunnel-facing transport state behind a boundary separate from the WireGuard protocol core.
+- [Horizon BSD:S interception and tunnel flow](docs/horizon-bsd-interception.md) records the observed service boundary and the narrow Toolbox TCP translation.
 - Native Horizon interface or routing integration remains a parallel reversing question rather than a dependency for the MITM path.

@@ -10,7 +10,7 @@ namespace wgnx::mitm {
 // Changes apply to future bsd:s session admission and do not disrupt a live flow.
 [[nodiscard]] bool IsBsdSystemPolicyEnabled();
 [[nodiscard]] std::uint32_t GetEnabledBsdSystemClientMask();
-[[nodiscard]] bool IsRequesterBsdSystemInterceptionEnabled();
+[[nodiscard]] bool IsToolboxBsdSystemInterceptionEnabled();
 void SetBsdSystemPolicyEnabledForRuntime(bool enabled);
 [[nodiscard]] bool SetBsdSystemClientEnabledForRuntime(BsdSystemClient client, bool enabled);
 
