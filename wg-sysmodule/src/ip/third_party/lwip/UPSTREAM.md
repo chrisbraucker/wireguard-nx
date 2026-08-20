@@ -26,7 +26,7 @@ The repository attributes exempt only this directory from trailing-whitespace ch
 
 ## Refresh Procedure
 
-1. Clone the requested release under `workspace/repos/` and verify that the release tag resolves to the recorded commit.
+1. Clone the requested release into a persistent local mirror and verify that the release tag resolves to the recorded commit.
 2. Download the release archive and record its SHA-256 value here.
 3. Replace `COPYING`, the complete `src/include/` tree, and only the selected core sources without local edits.
 4. Regenerate `SHA256SUMS` with `find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS`.

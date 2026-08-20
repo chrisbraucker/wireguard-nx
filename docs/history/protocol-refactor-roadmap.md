@@ -1,8 +1,11 @@
 # WireGuard-NX Implementation Roadmap
 
+This is a retained protocol-refactor roadmap rather than the current integration plan.
+Read [`../work/horizon-integration-plan.md`](../work/horizon-integration-plan.md) for current milestones and [`../architecture/system-overview.md`](../architecture/system-overview.md) for current ownership.
+
 This document guides the next development phase: bring the userspace WireGuard implementation to protocol and peer-lifecycle parity with upstream before expanding transparent Horizon integration.
 
-The completed proof-of-concept roadmap is retained in [POC_MILESTONES.md](POC_MILESTONES.md).
+The completed proof-of-concept roadmap is retained in [`poc-milestones.md`](poc-milestones.md).
 It records how the project reached its current state and is not the implementation plan for this phase.
 
 ## Refactor Approach

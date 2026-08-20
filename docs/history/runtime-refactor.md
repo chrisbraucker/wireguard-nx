@@ -1,5 +1,8 @@
 # Sysmodule Runtime Refactor Plan
 
+This is a retained runtime-refactor plan.
+The current runtime ownership and resource constraints are documented in [`../runtime/architecture.md`](../runtime/architecture.md) and [`../runtime/resource-budgets.md`](../runtime/resource-budgets.md).
+
 ## Purpose
 
 The first runtime extraction established a narrow CMIF adapter and moved resource ownership for Horizon dispatch, UDP bindings, and the development packet channel into dedicated types.
@@ -446,7 +449,7 @@ Ordered workqueues have per-lane pending capacities and expose queued, rerun, co
 Their admission policy has deterministic host coverage.
 
 All remaining manual runtime and work/timer backend lock pairs use scoped lock ownership.
-The lock hierarchy, lock-required methods, and worker contexts are specified in `docs/runtime-resource-budgets.md`.
+The lock hierarchy, lock-required methods, and worker contexts are specified in [`../runtime/resource-budgets.md`](../runtime/resource-budgets.md).
 Compiler stack-usage output is retained and `tools/check_stack_usage.py` checks every target frame plus four known cumulative callback chains. `tools/report_footprint.py` reports target image deltas against the named corrected Chunk 13 baseline and enforces absolute static-image, NSO, and NSP ceilings.
 Both checks are available through `make -C wg-sysmodule resource-report`.
 

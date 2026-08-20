@@ -1,10 +1,10 @@
-# Horizon BSD:S Interception and Tunnel Flow
+# BSD MITM Traffic Path
 
 ## Status and Evidence
 
 This document records the Horizon BSD:S behavior relevant to the project and the narrow TCP translation derived from it.
 The service-acquisition, session, descriptor, and BSD operation observations are implementation facts from the current MITM path and the companion Horizon probing work.
-The Toolbox-only TCP path passes host checks and a target build, but remains subject to the focused real-peer acceptance routine in `docs/task-7-tcp-flow-foundation.md`.
+The Toolbox-only TCP path passes host checks and a target build, but remains subject to the focused real-peer acceptance routine in [`../work/task-7-tcp-flow-foundation.md`](../work/task-7-tcp-flow-foundation.md).
 It is not evidence of general BSD TCP compatibility or system-wide routing.
 
 ## Relevant Horizon Boundary
@@ -21,6 +21,17 @@ After admission, the server acknowledges the MITM session and receives both the 
 The session implementation owns a small descriptor table and forwards unknown requests unchanged.
 `RegisterClient` remains on Atmosphere's generic forwarding path because it carries the original PID descriptor and a duplicated transfer-memory handle that must retain Horizon's normal tagging and cleanup behavior.
 The observed short-lived monitoring sessions also remain generic forwarded sessions.
+
+## Descriptor Lifecycle
+
+`socket()` is always forwarded to the retained BSD:S service first.
+The MITM records only successful IPv4 UDP and IPv4 TCP descriptors in its fixed per-session table.
+Untracked descriptors and unsupported socket shapes continue through the original BSD:S service.
+
+An eligible descriptor begins in `Created` state.
+Its first valid `connect()` may transition it through `OpeningTunnel` to `Tunneled`, or it may become `Direct` after the forwarded BSD:S connect succeeds.
+`Failed` and `Closed` descriptors are terminal.
+Only `Created` may choose a route, so later changes in tunnel availability or routing policy never silently migrate an existing descriptor.
 
 ## One-Time Route Selection
 
@@ -77,6 +88,36 @@ The MITM worker is the sole owner of `wgnx:tun` service-manager requests, root a
 BSD dispatch only submits fixed-capacity operations to that worker and waits according to each BSD operation contract.
 This keeps Horizon BSD dispatch from sharing raw WireGuard IPC handles or lwIP state.
 
+## Operation Translation
+
+The retained BSD descriptor is the client-visible descriptor namespace and lifecycle anchor even after the MITM selects the tunnel.
+The MITM does not modify client packet memory or build inner IP packets.
+It copies supported payload records into bounded MITM-owned storage before the worker submits them through `wgnx:tun`.
+
+| BSD:S operation       | Direct descriptor                                                         | Tunneled descriptor                                                                                             |
+|-----------------------|---------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------|
+| `socket`              | Forwarded and optionally recorded.                                        | The same forwarded descriptor becomes the virtual-flow anchor.                                                  |
+| `connect`             | Forwarded when the destination is uncovered or the tunnel is unavailable. | Opens one private connected flow and does not forward a successful tunnel connect.                              |
+| `send`                | Forwarded.                                                                | Copies one bounded payload into the MITM queue for the flow worker.                                             |
+| `recv` and `recvfrom` | Forwarded.                                                                | Consume validated private-flow completions and return their payload and source metadata.                        |
+| `poll`                | Forwarded unless mixed with a virtual descriptor.                         | Reports buffered read data, write capacity, timeout, or terminal hangup through the documented narrow contract. |
+| `getsockname`         | Forwarded.                                                                | Returns the WireGuard-owned virtual local endpoint.                                                             |
+| `getpeername`         | Forwarded.                                                                | Returns the original requested remote endpoint.                                                                 |
+| `close`               | Forwards after local bookkeeping.                                         | Retires the private flow, clears MITM state, then closes the retained BSD descriptor.                           |
+
+`sendto`, virtual `bind`, mixed direct and tunneled `poll`, unsupported flags, post-connect socket options, and unsupported shutdown directions fail explicitly on a tunneled descriptor.
+Unknown BSD requests remain generic forwarded requests.
+
+## Backpressure And Failure
+
+The worker owns every `wgnx:tun` service-manager request, root session, child session, and completion event.
+BSD dispatch never calls the private tunnel service or lwIP directly.
+The MITM and WireGuard flow plane each have bounded queues, so a full local adapter queue or downstream `QueueFull` becomes an observable BSD `EAGAIN` outcome rather than an unbounded wait.
+
+An uncovered route or temporarily unavailable tunnel leaves the descriptor on original BSD:S before a tunnel route is selected.
+After a flow becomes `Tunneled`, later tunnel failure reports a BSD error and never falls back to direct traffic.
+The self-exclusion policy for the WireGuard and MITM sysmodules prevents the outer WireGuard UDP socket from recursively entering the tunnel path.
+
 ## Confirmed Narrow TCP Translation
 
 The TCP translation begins only for `socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)` or its protocol-zero equivalent.
@@ -91,16 +132,16 @@ The successful TCP `connect()` is not forwarded to BSD:S.
 The retained BSD descriptor remains unconnected and exists solely to preserve the application-visible descriptor lifecycle until `close()`.
 This prevents a second native TCP handshake and a direct connection outside the tunnel.
 
-| BSD:S operation | Narrow tunneled TCP behavior |
-| --- | --- |
-| `connect` | Opens and waits for TCP `OpenConnectedFlow`, then records virtual endpoints without native BSD:S connect. |
-| `getsockname` | Returns the WireGuard flow's advertised virtual local tuple. |
-| `getpeername` | Returns the original requested remote tuple. |
-| `send` | Submits one bounded `WriteTcpStream` request and reports all-or-`EAGAIN` admission. |
-| `recv` | Copies ordered `InboundTcpStream` records and retains an unread suffix after a short application buffer. |
-| `poll` | Reports readable buffered bytes, write capacity, or `POLLHUP` after remote EOF and buffer drain. |
-| `shutdown(SHUT_WR)` | Calls `ShutdownTcpWrite`. |
-| `close` | Retires the private flow, clears MITM state, then closes the retained BSD descriptor. |
+| BSD:S operation     | Narrow tunneled TCP behavior                                                                              |
+|---------------------|-----------------------------------------------------------------------------------------------------------|
+| `connect`           | Opens and waits for TCP `OpenConnectedFlow`, then records virtual endpoints without native BSD:S connect. |
+| `getsockname`       | Returns the WireGuard flow's advertised virtual local tuple.                                              |
+| `getpeername`       | Returns the original requested remote tuple.                                                              |
+| `send`              | Submits one bounded `WriteTcpStream` request and reports all-or-`EAGAIN` admission.                       |
+| `recv`              | Copies ordered `InboundTcpStream` records and retains an unread suffix after a short application buffer.  |
+| `poll`              | Reports readable buffered bytes, write capacity, or `POLLHUP` after remote EOF and buffer drain.          |
+| `shutdown(SHUT_WR)` | Calls `ShutdownTcpWrite`.                                                                                 |
+| `close`             | Retires the private flow, clears MITM state, then closes the retained BSD descriptor.                     |
 
 The initial path rejects mixed direct and virtual polls, `recvfrom` on TCP, `sendto` on any tunneled connected flow, unsupported message flags, virtual `bind`, post-connect socket options, and shutdown directions other than `SHUT_WR`.
 `POLLERR` remains intentionally unused because the private flow API has no per-flow asynchronous-error contract.

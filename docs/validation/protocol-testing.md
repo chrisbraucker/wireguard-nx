@@ -173,7 +173,7 @@ Host tests are the fast protocol gate, not a replacement for interoperability te
 ## Milestone 7 Interoperability Gate
 
 The host suite establishes protocol invariants but does not make two independent WireGuard implementations interoperate.
-Milestone 7 uses it as the mandatory first gate, then compares behavior with the checked-out `wireguard-go` and BoringTun references under `workspace/repos/`.
+Milestone 7 uses it as the mandatory first gate, then compares behavior with checked-out public `wireguard-go` and BoringTun references.
 
 The deterministic `protocol.faulted-datagram-lifecycle` case uses serialized datagrams and verifies a loss/delay/reordering sequence, an authenticated-data tag failure, a truncated packet, and a replay.
 This specifically protects the upstream replay invariant that a rejected packet never advances receive state. `protocol.key-rotation-delayed-datagram` then retains an authenticated packet from the old session, completes an initiator rekey, promotes the responder replacement keypair through new traffic, and accepts the retained packet once through the initiator's previous-keypair slot.

@@ -24,7 +24,7 @@ The MITM continuation therefore implements only its explicit narrow contract and
 The version 3 baseline was verified locally on 2026-08-10 with `make -C wg-sysmodule verify`.
 The aggregate gate completed formatting, static analysis, clang-tidy, warnings, host tests, ASan/UBSan, fuzz, target, stack, and resource checks.
 The private wire contract has two root commands and nine client commands, a 64-byte capability record, 16-byte connected-open request, 24-byte open result, 24-byte datagram descriptor, 16-byte datagram disposition, 48-byte completion record, and 40-byte flow-state result.
-Its client-actionable behavioral baseline is four client contexts, four flows per client, 16 total flows, 1,472 bytes of UDP payload storage, a 16-record completion queue, eight batch entries, 16 policy routes, and the documented post-lwIP UDP latency and throughput results in `docs/PERF.md`.
+Its client-actionable behavioral baseline is four client contexts, four flows per client, 16 total flows, 1,472 bytes of UDP payload storage, a 16-record completion queue, eight batch entries, 16 policy routes, and the documented post-lwIP UDP latency and throughput results in [`../validation/performance.md`](../validation/performance.md).
 The Task 6 target footprint baseline is 1,401,026 static bytes, a 263,469-byte NSO, and a 264,529-byte NSP within the reviewed limits.
 
 ## Current Code Boundary
@@ -303,7 +303,7 @@ It does not validate general BSD TCP compatibility, additional program IDs, or t
    Record the active profile, peer endpoint, Toolbox build, WireGuard build, and the workload ID shown immediately before each run.
    Toolbox reserves and persists that ID before starting, so never reuse an ID after a failed or interrupted run.
 
-4. Start a fresh log capture for each run and retain the Toolbox log, harness log, and WireGuard sysmodule log together under one run directory in `workspace/reports/`.
+4. Start a fresh log capture for each run and retain the Toolbox log, harness log, and WireGuard sysmodule log together as one private run record.
    Preserve the unedited raw logs and record the current target footprint from the most recent `make -C wireguard-nx.git/wg-sysmodule resource-report` output beside them.
 
 ### Item 7 Focused Adapter Acceptance

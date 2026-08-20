@@ -102,7 +102,7 @@ Urgency: required before transparent interception code is introduced.
 
 Move the current `sysmodule/` directory to `wg-sysmodule/` without changing its current tunnel behavior.
 Create `mitm-sysmodule/` as a separate Atmosphere sysmodule project with its own build, deployment, logging, and test entry points.
-Update manager, overlay, requester, documentation, tooling, and workspace orchestration paths to use the renamed WireGuard sysmodule location.
+Update manager, overlay, requester, documentation, tooling, and repository orchestration paths to use the renamed WireGuard sysmodule location.
 
 The split must not introduce a shared mutable implementation library between the two sysmodules.
 The IPC contract is the initial boundary and is deliberately exercised as such.
@@ -404,11 +404,11 @@ Use a 1200-byte UDP payload for all echo and burst comparisons while the remote 
 Treat this as the unfragmented Task 4 control workload.
 Task 6 item 15 separately exercises larger replies that force two and three inner IPv4 fragments through lwIP.
 
-1. Start the controlled harness in quiet echo mode on a destination reachable both directly and through the peer, such as `192.168.203.24:29000` in the current topology.
+1. Start the controlled harness in quiet echo mode on a destination reachable both directly and through the peer, such as `192.168.0.24:29000` in a private test topology.
    Record the harness source tuple and its per-workload and per-flow summary when it stops.
    Start a second quiet no-echo harness only for the timeout case with `--udp-no-echo`.
 2. Establish the selected WireGuard peer with a route that covers the chosen destination and confirm one direct `wgnx:tun` echo before loading the MITM.
-   Confirm the remote harness sees `10.13.13.8` for that direct-flow control run.
+   Confirm the remote harness sees the configured tunnel source address for that direct-flow control run.
 3. Run one identical 1200-byte, single-flow, paced echo workload in each mode below, using a distinct workload ID for each mode.
    Keep the peer connected in native BSD mode so the physical network condition matches full interception.
 
@@ -491,7 +491,7 @@ Definition of done:
 
 Urgency: required before TCP or broader IP protocol work.
 
-The actionable implementation sequence is documented in [Task 6 Userspace IP Adapter Implementation Guide](docs/task-6-userspace-ip-adapter.md).
+The actionable implementation sequence is documented in [Task 6 Userspace IP Adapter Implementation Guide](task-6-userspace-ip-adapter.md).
 
 Keep the current UDP flow IPC and MITM socket contract as the behavioral baseline while lwIP provides the WireGuard-side UDP and IPv4 adapter.
 The NO_SYS lwIP implementation compiles only the IPv4, pbuf, timeout, netif, UDP, checksum, fragmentation, and reassembly components required by this path.
@@ -524,7 +524,7 @@ Definition of done:
 
 Urgency: required for useful general application coverage after UDP feasibility is established.
 
-The actionable contract, direct Toolbox, WireGuard-owned lwIP TCP foundation, and narrow BSD:S TCP MITM continuation are documented in [Task 7 TCP Flow Foundation Implementation Guide](docs/task-7-tcp-flow-foundation.md).
+The actionable contract, direct Toolbox, WireGuard-owned lwIP TCP foundation, and narrow BSD:S TCP MITM continuation are documented in [Task 7 TCP Flow Foundation Implementation Guide](task-7-tcp-flow-foundation.md).
 
 Use the stable UDP flow and BSD MITM path as the lifecycle baseline before attempting TCP.
 TCP must not be represented as a sequence of UDP-like datagram submissions because its Horizon-visible socket semantics require ordered byte-stream delivery, connection establishment and failure reporting, half-close behavior, backpressure, and transport-specific teardown.
@@ -646,13 +646,13 @@ Before advertising it as a supported third-party interface, specify caller expec
 
 ## External Implementation References
 
-The local reference clones under `workspace/repos/` inform implementation research, but neither is a replacement for the WireGuard sysmodule or the separate `bsd:s` MITM architecture in this document.
+The public reference implementations below inform implementation research, but neither is a replacement for the WireGuard sysmodule or the separate `bsd:s` MITM architecture in this document.
 
-[`netbird-switch`](../workspace/repos/netbird-switch/) provides a Switch-specific userland reference for bounded UDP proxying, lwIP integration, BSD socket shutdown ordering, and the restricted nonblocking flag behavior observed through Horizon BSD services.
+`netbird-switch` provides a Switch-specific userland reference for bounded UDP proxying, lwIP integration, BSD socket shutdown ordering, and the restricted nonblocking flag behavior observed through Horizon BSD services.
 Its own documented future direction is a `bsd:u` MITM, but this project must apply the relevant lifecycle and BSD-semantic findings to `bsd:s` instead.
 Its application-local TCP and UDP proxy and relay-oriented architecture must not be imported into the transparent system-service path.
 Its lwIP configuration, PCB lifecycle, static-pool, initialization, and shutdown lessons may inform the separate WireGuard-owned IP adapter after they are reproduced under this project's resource and lock-safety gates.
 
-[`wg-nx`](../workspace/repos/wg-nx/) provides an independent Switch WireGuard and lwIP relay reference, including optional NEON-oriented performance work and fixed-resource packet handling ideas.
+`wg-nx` provides an independent Switch WireGuard and lwIP relay reference, including optional NEON-oriented performance work and fixed-resource packet handling ideas.
 It does not provide Horizon service interception, NIFM-directed recovery policy, generation-safe private flow IPC, or flow ownership suitable for this project.
 Revisit it as a source-list, configuration, bounded packet storage, relay behavior, and performance reference without copying its global ownership model or merging lwIP into the WireGuard protocol core.

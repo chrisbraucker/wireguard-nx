@@ -11,7 +11,7 @@ TCP, DNS, DHCP, netconn, lwIP sockets, IPv6, and additional application-facing A
 
 The production import should pin the current stable lwIP release rather than an unversioned development branch.
 As of 2026-08-01, that release is lwIP 2.2.1 at tag `STABLE-2_2_1_RELEASE`, whose annotated tag resolves to commit `77dcd25a72509eb83f72b033d219b1d40cd8eb95`.
-The local `workspace/repos/wg-nx` reference pins newer development commit `8e75a40acfea6b05ee643099e41f3b2e11ee464d`, so its Switch port and build choices are useful references but should not silently replace the stable production pin.
+The locally retained `wg-nx` reference pins newer development commit `8e75a40acfea6b05ee643099e41f3b2e11ee464d`, so its Switch port and build choices are useful references but should not silently replace the stable production pin.
 
 ## Current Code Boundary
 
@@ -59,7 +59,7 @@ opaque WireGuard encryption and outer UDP transport
   Review the version 3 commands and records against the concrete lwIP ownership flow before implementation and change them where doing so removes translation or ambiguous ownership.
   Increment `TunApiVersion` whenever an incompatible Task 6 contract change lands.
   Update every in-tree producer and consumer in the same cutover and do not retain compatibility branches for older private API versions.
-  Preserve the MITM `EMSGSIZE` contract and record the direct-WGNX and full-MITM throughput and latency baselines from `docs/PERF.md`.
+  Preserve the MITM `EMSGSIZE` contract and record the direct-WGNX and full-MITM throughput and latency baselines from [`../validation/performance.md`](../validation/performance.md).
   Baseline verification on 2026-08-02 passes the 50-case host suite, warnings, ASan/UBSan, format, static analysis, clang-tidy, target build, stack checks, and footprint report.
   The target footprint is 1,300,874 static bytes, 251,859-byte NSO, and 252,919-byte NSP, all within the existing gate.
   The API remains at version 3 because lwIP can replace the codec without changing the private flow records or their semantics.
@@ -220,7 +220,7 @@ opaque WireGuard encryption and outer UDP transport
   Delete `BuildUdpPacket`, `ParseIpv4Endpoint`, local internet and UDP checksum helpers, `m_next_ipv4_identification`, and obsolete outbound packet storage after every production send and receive uses lwIP.
   Do not retain a runtime switch or fallback to the handmade path because two authoritative packet implementations would duplicate correctness and test ownership.
   Re-run the local aggregate gate after deletion so no test or target-only path still depends on the removed codec.
-  Update `docs/runtime-architecture.md`, `docs/runtime-resource-budgets.md`, `docs/packet-api.md`, `TASK_4_TODO.md`, and `HORIZON_INTEGRATION_PLAN.md` with the measured adapter ownership, capacities, lifecycle, fallback order, and diagnostics.
+  Update [`../runtime/architecture.md`](../runtime/architecture.md), [`../runtime/resource-budgets.md`](../runtime/resource-budgets.md), [`../contracts/packet-api.md`](../contracts/packet-api.md), [`../history/task-4-udp-mitm-acceptance.md`](../history/task-4-udp-mitm-acceptance.md), and [`horizon-integration-plan.md`](horizon-integration-plan.md) with the measured adapter ownership, capacities, lifecycle, fallback order, and diagnostics.
   `TunnelFlowPlane` now retains only project-owned flow, policy, tuple-quarantine, completion, and accounting state.
   The legacy inbound IPv4 parser, UDP checksum validation, checksum helpers, packet-identification state, and their test-only packet builders are removed.
   The host flow-plane test now reaches it only through the generation-tagged UDP callback contract, while the production lwIP adapter test remains authoritative for IPv4 validation, UDP checksum handling, fragmentation, and reassembly.
@@ -254,7 +254,7 @@ For every routed row, activate the peer, enable the MITM, and confirm that its p
 | ID  | Path and peer MTU                                            | Toolbox settings                                                                                               | Expected result                                                                                                                                                          |
 |-----|--------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | 150 | Direct WGNX, ordinary configured MTU                         | 1200 bytes, 32 datagrams, 5 ms pacing, echo                                                                    | 32 accepted and echoed datagrams with no timeout, duplicate, malformed, or unexpected harness record.                                                                    |
-| 151 | BSD MITM to WGNX, ordinary configured MTU                    | 1200 bytes, 32 datagrams, 5 ms pacing, echo                                                                    | The same 32 round trips, a non-any WireGuard virtual `GetSockName` endpoint, and a matching MITM `connect tunneled transport=udp` record.                               |
+| 151 | BSD MITM to WGNX, ordinary configured MTU                    | 1200 bytes, 32 datagrams, 5 ms pacing, echo                                                                    | The same 32 round trips, a non-any WireGuard virtual `GetSockName` endpoint, and a matching MITM `connect tunneled transport=udp` record.                                |
 | 152 | Direct WGNX, both peers at 1280-byte effective inner MTU     | 1472 bytes, 16 datagrams, 5 ms pacing, echo                                                                    | Every datagram completes after two-fragment outbound and inbound traversal.                                                                                              |
 | 153 | BSD MITM to WGNX, both peers at 576-byte effective inner MTU | 1472 bytes, 8 datagrams, 10 ms pacing, echo                                                                    | Every datagram completes after three-fragment outbound and inbound traversal while BSD still reports one datagram per send and receive.                                  |
 | 154 | BSD MITM to WGNX, ordinary configured MTU                    | Terminal-closure mode, 1200 bytes, one datagram, one flow, echo                                                | After one echo, deactivate the peer or shut down WGNX and observe `POLLHUP` plus post-closure `ECONNABORTED`, then restart the components and rerun ID 151 successfully. |

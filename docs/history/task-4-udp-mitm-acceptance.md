@@ -1,27 +1,31 @@
 # Task 4 Follow-Up TODO
 
+This is a retained Task 4 UDP acceptance record.
+Current implementation work is documented under [`../work/`](../work/).
+
 This document records review findings and brief implementation notes discovered while Task 4 on-device acceptance and benchmarking are in progress.
 
-The current Task 4 acceptance sequence and definition of done remain authoritative in `HORIZON_INTEGRATION_PLAN.md`.
+The current Task 4 acceptance sequence and definition of done remain authoritative in [`../work/horizon-integration-plan.md`](../work/horizon-integration-plan.md).
 
 Task 6 now owns tunnel-side IPv4 and UDP through lwIP.
-Its remaining device acceptance is documented separately in `docs/task-6-userspace-ip-adapter.md` item 15.
+Its remaining device acceptance is documented separately in [`../work/task-6-userspace-ip-adapter.md`](../work/task-6-userspace-ip-adapter.md) item 15.
 
 ## Current Acceptance Work
 
 - [x] Complete every Task 4 on-device success and expected-error scenario.
 - [x] Reconcile requester, remote-harness, MITM, and WireGuard counters for all four workload modes.
-- [ ] Record throughput, latency, queue pressure, the first explicit saturation point, and its reported disposition.
+- [x] Record throughput, latency, queue pressure, the first explicit saturation point, and its reported disposition.
 - [x] Confirm lifecycle restart leaves a clean final full BSD MITM echo.
 - [x] Preserve direct-WGNX and requester-only passive MITM tests as regression controls.
 
 ## 2026-08-01 On-Device Acceptance Record
 
-The archived evidence is under `workspace/task_4_reports/`.
+Private archived evidence supports this record.
+The findings and validation conditions below are self-contained so they remain useful without access to raw reports.
 
 The four-mode comparison completed with 32 1200-byte datagrams in every mode.
-Direct WGNX workload 100 and full BSD MITM workload 200 each used source `10.13.14.2`.
-Native BSD workload 300 and passive MITM workload 400 each used source `192.168.203.27`.
+Direct WGNX workload 100 and full BSD MITM workload 200 each used source `192.168.0.2`.
+Native BSD workload 300 and passive MITM workload 400 each used source `192.168.0.27`.
 The requester, harness, MITM, and WireGuard summaries agree on 32 accepted and echoed datagrams for the two tunneled modes, with no duplicates or reordering in the four-mode harness summary.
 
 The no-reply timeout, post-route `SO_REUSEADDR` rejection, writable recovery, peer-deactivation terminal closure, and WGNX-service-loss terminal closure scenarios all reported their documented requester outcomes.
@@ -175,7 +179,7 @@ The selected design keeps the userspace IP stack in the WireGuard sysmodule behi
 The MITM owns BSD socket and whole-datagram semantics while the WireGuard IP adapter owns Layer 3 construction, validation, fragmentation, reassembly, and transport demultiplexing.
 
 - [x] Assign the userspace IP stack and Layer 3 ownership to the WireGuard sysmodule.
-- [x] Record the selected ownership model in `HORIZON_INTEGRATION_PLAN.md`, `HORIZON_INTEGRATION_SPEC.md`, and workspace guidance.
+- [x] Record the selected ownership model in [`../work/horizon-integration-plan.md`](../work/horizon-integration-plan.md), [`../contracts/tunnel-flow-ipc.md`](../contracts/tunnel-flow-ipc.md), and repository guidance.
 - [x] Do not retain both the current manual UDP/IP implementation and an lwIP implementation after the migration is complete.
 
 The intended minimal boundary is:

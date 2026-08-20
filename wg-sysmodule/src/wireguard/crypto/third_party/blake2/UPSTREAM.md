@@ -36,8 +36,7 @@ the vendored files.
 
 ## Refresh Procedure
 
-1. Clone or update the upstream repository under the workspace-level external
-   source directory: `workspace/repos/BLAKE2`.
+1. Clone or update the upstream repository in a persistent local mirror.
 2. Record the exact upstream commit, then copy only `ref/blake2.h`,
    `ref/blake2-impl.h`, `ref/blake2s-ref.c`, and upstream `COPYING` into this
    directory without edits.

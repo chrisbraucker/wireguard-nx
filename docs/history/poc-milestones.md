@@ -1,5 +1,8 @@
 # WireGuard-NX Milestones
 
+This is a retained proof-of-concept roadmap.
+Current architecture and active work are documented in [`../architecture/system-overview.md`](../architecture/system-overview.md) and [`../work/horizon-integration-plan.md`](../work/horizon-integration-plan.md).
+
 This document defines the recommended order of progress for bringing up WireGuard functionality on Nintendo Switch homebrew.
 The goal is to create useful intermediate checkpoints instead of waiting for full system-wide VPN integration before validating anything.
 
@@ -116,7 +119,7 @@ Replace hardcoded peer state with a shared config-backed source of truth.
 
 Separate static peer configuration from live connection state.
 
-See [docs/runtime-state.md](docs/runtime-state.md) for the intended semantics of `active`, `inactive`, derived `established`, and local `error` conditions.
+See [`../runtime/state.md`](../runtime/state.md) for the intended semantics of `active`, `inactive`, derived `established`, and local `error` conditions.
 
 ### Scope
 

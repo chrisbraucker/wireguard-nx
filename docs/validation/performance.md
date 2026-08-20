@@ -2,7 +2,8 @@
 
 ## 2026-08-01 Initial Wi-Fi UDP Baseline
 
-This note records the first performance evidence from `workspace/task_4_reports/performance_wifi_latency` and `workspace/task_4_reports/performance_wifi_throughput`.
+This note records the first public aggregate performance evidence from controlled Wi-Fi latency and throughput runs.
+The measurements below retain their workload, acceptance, and accounting conditions without depending on a private report location.
 The Switch and the remote peer used the same Wi-Fi segment.
 The throughput workload sent 4,096 one-way UDP datagrams of 1,380 bytes in each run.
 Each run therefore offered 5,652,480 bytes, or 5.65 MB, and each path had six final runs.
@@ -48,7 +49,7 @@ The corrected build was deployed with `WGNX_PACKET_DIAGNOSTICS=0` and retained f
 
 ## Corrected Quiet-Build Throughput
 
-The coherent corrected evidence set is archived under `workspace/task_4_reports/perf_wifi_quiet`.
+The corrected evidence set is retained privately, while the reconciled result and its conditions are recorded here.
 It used WireGuard build `0.0.1-dev-21f1018-dirty`, MITM build `0.0.1-dev-689fa7f`, requester build `0.1.0-a70f22e-dirty`, and the same 4,096-datagram workload as the initial throughput run.
 Each direct and full BSD MITM path completed six runs.
 
@@ -130,7 +131,7 @@ head -c "$(( $i * 1024**2 ))" /dev/urandom > upload.bin
 # Upload
 curl -sS -o /dev/null \
     --noproxy '*' \
-    --resolve ctest-ul-lp1.cdn.nintendo.net:80:192.168.100.2 \
+    --resolve ctest-ul-lp1.cdn.nintendo.net:80:192.168.0.2 \
     --data-binary @upload.bin \
     -H 'Content-Type: application/octet-stream' \
     -H 'Expect:' \
@@ -140,7 +141,7 @@ curl -sS -o /dev/null \
 # Download
 curl -sS -o /dev/null \
     --noproxy '*' \
-    --resolve ctest-dl-lp1.cdn.nintendo.net:80:192.168.100.2 \
+    --resolve ctest-dl-lp1.cdn.nintendo.net:80:192.168.0.2 \
     -H 'Content-Type: application/octet-stream' \
     -w 'upload=%{speed_download} B/s total=%{time_total}s http=%{http_code}\n' \
     http://ctest-dl-lp1.cdn.nintendo.net/30m
@@ -157,15 +158,15 @@ A Switch-initiated 30 MiB upload to `ctest-ul-lp1.cdn.nintendo.net/1m`, measured
 
 ## 2026-08-10 Task 6 lwIP UDP Regression
 
-The Task 6 performance-regression evidence is archived under `workspace/reports_task6_perf`.
+The Task 6 performance-regression evidence is retained privately, while the public conclusions and measurement controls remain in this note.
 It used WireGuard build `0.0.1-dev-564407a-dirty`, MITM build `0.0.1-dev-1cfafdc-dirty`, requester build `0.1.0-dc2204b-dirty`, and the same Wi-Fi peer topology as the earlier measurements.
 Each path completed six 32-datagram, 1,200-byte echoed latency runs and six one-way 4,096-datagram, 1,380-byte throughput runs.
 Each throughput run therefore offered 5,652,480 bytes, or 5.65 MB.
 
 | Path                  | Median echo RTT from requester run means | Median sender rate | Median receiver goodput | Delivery |
-|-----------------------|------------------------------------------:|-------------------:|------------------------:|---------:|
-| Direct `wgnx:tun`     |                                  4.876 ms |         2.071 MB/s |              2.070 MB/s |     100% |
-| BSD MITM to WireGuard |                                  5.257 ms |         1.189 MB/s |              1.190 MB/s |     100% |
+|-----------------------|-----------------------------------------:|-------------------:|------------------------:|---------:|
+| Direct `wgnx:tun`     |                                 4.876 ms |         2.071 MB/s |              2.070 MB/s |     100% |
+| BSD MITM to WireGuard |                                 5.257 ms |         1.189 MB/s |              1.190 MB/s |     100% |
 
 Each latency path completed 192 echoed packets with no loss, duplication, reordering, admission failure, or queue pressure.
 The full BSD MITM path added 0.381 ms, or about 8 percent, to the median direct-path RTT.

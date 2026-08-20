@@ -12,12 +12,13 @@ Parts of this project were generated under supervision with AI, make of that wha
 WireGuard-NX has a real userspace WireGuard implementation for Atmosphère that establishes peer tunnels and exchanges encrypted inner IPv4 traffic on-device.
 The project has deterministic host and sanitizer coverage, target resource gates, and real-peer validation across handshake and rekeying, recovery, lifecycle, direct flow IPC, and a narrowly scoped BSD MITM UDP path.
 The MITM sysmodule retains Horizon BSD lifecycle and selects passthrough or the private WireGuard flow service with bounded queues and observable backpressure.
-The next major step is a WireGuard-owned userspace IP stack that replaces the current UDP-only adapter and provides correct Layer 3 handling, including fragmentation and reassembly, before TCP support.
+The WireGuard-owned lwIP adapter now provides IPv4, UDP, fragmentation, reassembly, and the bounded TCP foundation behind the private flow contract.
+The remaining focused acceptance work is the Toolbox-only BSD TCP path against a real peer.
 
 
 ## Outline
 
-The repo is split into four main source configurations:
+The repository is split into these main source areas:
 
 - `/common` for shared code
 - `/docs` for documentation on usage and internals
@@ -51,13 +52,14 @@ Build the target and report cumulative stack and image-footprint budgets with:
 ```bash
 make -C wg-sysmodule resource-report
 
-# Build and package the inert MITM sysmodule.
+# Build and package the MITM sysmodule.
 make -C mitm-sysmodule
 make -C mitm-sysmodule dist
 ```
 
-See [Protocol Testing](docs/protocol-testing.md) for the deterministic boundary, covered state transitions, and the final on-device interoperability gate.
-See [Runtime Resource And Concurrency Budgets](docs/runtime-resource-budgets.md) for fixed capacities, queue pressure, lock order, and worker contexts.
+See [the documentation index](docs/README.md) for architecture, contracts, runtime invariants, validation, active work, and retained history.
+See [Protocol Testing](docs/validation/protocol-testing.md) for the deterministic boundary, covered state transitions, and the final on-device interoperability gate.
+See [Runtime Resource And Concurrency Budgets](docs/runtime/resource-budgets.md) for fixed capacities, queue pressure, lock order, and worker contexts.
 
 
 ### Devcontainers
@@ -116,5 +118,5 @@ Plutonium SDL2 GUI library: https://github.com/XorTroll/Plutonium
 
 - The selected first transparent path uses the separate BSD MITM sysmodule to choose once between retained Horizon BSD handling and delegation through the private WireGuard flow service.
 - The WireGuard sysmodule owns the userspace IP stack, Layer 3 packet processing, fragmentation, reassembly, and tunnel-facing transport state behind a boundary separate from the WireGuard protocol core.
-- [Horizon BSD:S interception and tunnel flow](docs/horizon-bsd-interception.md) records the observed service boundary and the narrow Toolbox TCP translation.
+- [BSD MITM traffic path](docs/architecture/bsd-mitm-traffic.md) records the observed service boundary, the route-selection rule, and the narrow Toolbox TCP translation.
 - Native Horizon interface or routing integration remains a parallel reversing question rather than a dependency for the MITM path.

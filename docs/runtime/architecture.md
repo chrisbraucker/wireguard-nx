@@ -154,7 +154,7 @@ It also verifies initiation admission, malformed input, transport replay, unknow
 
 Horizon work-queue execution, synchronous platform timer cancellation, BSD socket lifetime, and real callback races remain on-device validation responsibilities.
 
-Fixed storage, queue pressure, lock order, lock-required methods, and worker execution contexts are specified in [Runtime Resource And Concurrency Budgets](runtime-resource-budgets.md).
+Fixed storage, queue pressure, lock order, lock-required methods, and worker execution contexts are specified in [Runtime Resource And Concurrency Budgets](resource-budgets.md).
 
 ## Stack Budget
 

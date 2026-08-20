@@ -1,6 +1,8 @@
 # WireGuard-NX MITM Sysmodule
 
 This is the separate Horizon-facing process implementing the narrow Toolbox-only `bsd:s` UDP and TCP MITM path.
+Read [`../docs/architecture/bsd-mitm-traffic.md`](../docs/architecture/bsd-mitm-traffic.md) for the canonical traffic path, descriptor lifecycle, operation translation, backpressure, and no-fallback rule.
+This README records module-specific configuration, worker ownership, shutdown, build, and deployment behavior.
 It registers `wgm:ctl` and one Atmosphere `bsd:s` MITM server.
 The active interceptor admits every `bsd:s` service session from the build-configured Toolbox forwarder program ID.
 Target builds require `TOOLBOX_FORWARDER_PROGRAM_ID` through `mitm-sysmodule/local.mk` or the make command line.
